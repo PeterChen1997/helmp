@@ -3,6 +3,7 @@
 mod apps;
 mod builtin;
 mod screenshot;
+mod clipboard;
 
 use std::sync::Arc;
 
@@ -13,5 +14,6 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(builtin::Builtin),
         Arc::new(apps::Apps::default()),
         Arc::new(screenshot::Screenshot),
+        Arc::new(clipboard::Clipboard::new()),
     ]
 }
