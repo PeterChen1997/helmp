@@ -2857,6 +2857,7 @@ dependencies = [
  "anyhow",
  "global-hotkey",
  "gpui-kit",
+ "libc",
  "notify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2867,6 +2868,7 @@ dependencies = [
  "plist",
  "raw-window-handle",
  "rusqlite",
+ "serde_json",
  "sha2 0.10.9",
 ]
 
