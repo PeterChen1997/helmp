@@ -2836,6 +2836,8 @@ dependencies = [
  "anyhow",
  "global-hotkey",
  "gpui-kit",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]
