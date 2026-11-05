@@ -21,6 +21,13 @@ cargo run
 HUAN_SELF_TEST=1 cargo run
 ```
 
+## 打包
+
+```bash
+script/bundle.sh          # 生成 target/debug/Huan.app（ad-hoc 签名，LSUIElement）
+script/bundle.sh release
+```
+
 ## 工具链
 
 `rust-toolchain.toml` 锁定 1.99.1（`gpui-pre-macos 0.3.11` 用到 `Option::map_or_default`，1.96 编译不过）。
