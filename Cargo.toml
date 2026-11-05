@@ -1,0 +1,21 @@
+[package]
+name = "huan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "唤 — a native macOS launcher with an agent switcher"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1"
+gpui-kit = "=0.9.0"
+global-hotkey = "0.9.0"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
