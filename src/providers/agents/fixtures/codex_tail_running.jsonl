@@ -1,0 +1,10 @@
+"type":"input_text","text":"truncated output of an earlier tool call"}]}}
+{"timestamp":"2026-11-05T07:00:00.100Z","ordinal":200,"type":"event_msg","payload":{"type":"task_complete","root_turn_id":"t1","turn_id":"t1","last_agent_message":"上一轮的回答","started_at":1793862000,"completed_at":1793862050,"duration_ms":50000}}
+{"timestamp":"2026-11-05T07:05:00.000Z","ordinal":201,"type":"event_msg","payload":{"type":"task_started","turn_attribution":{"turn_id":"t2","turn_trigger":"user","parent_turn_id":null,"initiating_agent_path":null,"root_turn_id":"t2"},"turn_id":"t2","root_turn_id":"t2","started_at":1793862300,"model_context_window":475000,"collaboration_mode_kind":"default"}}
+{"timestamp":"2026-11-05T07:05:00.010Z","ordinal":202,"type":"turn_context","payload":{"cwd":"/Users/me/code/game","model":"gpt-6"}}
+{"timestamp":"2026-11-05T07:05:00.020Z","ordinal":203,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"继续调研"}]}}
+{"timestamp":"2026-11-05T07:05:00.030Z","ordinal":204,"type":"event_msg","payload":{"type":"item_completed","thread_id":"th","turn_id":"t2","item":{"type":"UserMessage","id":"u2","content":[{"type":"text","text":"继续调研"}]}}}
+{"timestamp":"2026-11-05T07:05:09.000Z","ordinal":205,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc1","status":"completed","call_id":"call_1","name":"exec","input":"ls"}}
+{"timestamp":"2026-11-05T07:05:10.000Z","ordinal":206,"type":"event_msg","payload":{"type":"item_completed","thread_id":"th","turn_id":"t2","item":{"type":"CommandExecution","id":"c1","command":"ls","status":"completed","exit_code":0}}}
+{"timestamp":"2026-11-05T07:05:10.010Z","ordinal":207,"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"README.md"}]}}
+{"timestamp":"2026-11-05T07:05:10.020Z","ordinal":208,"type":"event_msg","payload":{"type":"token_count","info":null}}

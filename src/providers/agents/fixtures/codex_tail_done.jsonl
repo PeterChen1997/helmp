@@ -1,0 +1,6 @@
+rtial line","call_id":"call_0"}}
+{"timestamp":"2026-11-05T01:00:49.647Z","ordinal":300,"type":"event_msg","payload":{"type":"item_completed","thread_id":"th","turn_id":"t9","item":{"type":"UserMessage","id":"u9","content":[{"type":"text","text":"帮我检查下 vpc 接入问题"}]}}}
+{"timestamp":"2026-11-05T01:00:56.000Z","ordinal":301,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc9","status":"completed","call_id":"call_9","name":"exec","input":"ping"}}
+{"timestamp":"2026-11-05T01:01:09.054Z","ordinal":302,"type":"event_msg","payload":{"type":"item_completed","thread_id":"th","turn_id":"t9","item":{"type":"AgentMessage","id":"m9","content":[{"type":"Text","text":"已检查完毕。"}],"phase":"final_answer"}}}
+{"timestamp":"2026-11-05T01:01:09.100Z","ordinal":303,"type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"2026-11-05T01:01:09.263Z","ordinal":304,"type":"event_msg","payload":{"type":"task_complete","root_turn_id":"t9","turn_id":"t9","last_agent_message":"已检查完毕。","started_at":1793840445,"completed_at":1793840469,"duration_ms":23624,"time_to_first_token_ms":8118}}

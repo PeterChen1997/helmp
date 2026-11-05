@@ -1,6 +1,7 @@
 //! Provider 注册表。新增模块：在这里加 `mod xxx;`，并在 `all()` 里加一行。
 
 mod apps;
+mod agents;
 mod builtin;
 mod screenshot;
 mod clipboard;
@@ -17,5 +18,6 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(screenshot::Screenshot),
         Arc::new(clipboard::Clipboard::new()),
         Arc::new(scripts::Scripts::new()),
+        Arc::new(agents::Agents::default()),
     ]
 }
