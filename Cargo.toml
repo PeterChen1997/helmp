@@ -17,6 +17,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 raw-window-handle = "0.6.2"
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
 objc2-vision = { version = "0.3.2", default-features = false, features = ["std", "VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNObservation", "VNTypes", "objc2-core-foundation"] }
+notify = "8.2.1"
+pinyin = { version = "0.11.0", default-features = false, features = ["plain", "heteronym"] }
+plist = { version = "1.10.3", default-features = false }
 
 [profile.dev]
 opt-level = 1
