@@ -1,0 +1,4 @@
+er_text_truncated_by_tail_read_this_line_is_partial","sessionId":"cccccccc-1111-4222-8333-444444444444"}
+{"parentUuid":"p1","isSidechain":false,"type":"user","message":{"role":"user","content":"把首页截图换成视频第一帧，然后部署"},"uuid":"u1","timestamp":"2026-11-05T09:18:20.000Z","cwd":"/Users/me/code/home-page","sessionId":"cccccccc-1111-4222-8333-444444444444","version":"2.1.309","gitBranch":"master"}
+{"parentUuid":"u1","isSidechain":false,"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"已完成。"}]},"uuid":"a1","timestamp":"2026-11-05T09:20:00.000Z","cwd":"/Users/me/code/home-page","sessionId":"cccccccc-1111-4222-8333-444444444444","version":"2.1.309","gitBranch":"master"}
+{"type":"last-prompt","lastPrompt":"把首页截图换成视频第一帧，然后部署","leafUuid":"a1","sessionId":"cccccccc-1111-4222-8333-444444444444"}
