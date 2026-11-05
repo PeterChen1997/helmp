@@ -5,15 +5,47 @@
 //! `NSApp.activate` / `NSApp.hide`，只对这一个窗口 makeKeyAndOrderFront / orderOut，
 //! 唤起和收起都不打扰用户当前的前台 App（见 _research/launcher/04 §1）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use gpui_kit::*;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-pub fn show(window: &mut Window) {
-    // GPUI 在 mac 上的实现就是 makeKeyAndOrderFront:，不激活 App。
-    window.activate_window();
+/// 先用非激活方式让面板成为 key window；系统不允许时（后台 App 在没有用户输入事件时
+/// 被较新的 macOS 拒绝成为 key）退回到激活整个 App，保证键盘一定能输入。
+pub fn show(window: &mut Window, cx: &mut App) {
+    let Some(ns_window) = ns_window(window) else {
+        eprintln!("huan: 无法取得 NSWindow，退回 GPUI 激活");
+        cx.activate(true);
+        window.activate_window();
+        return;
+    };
+    crate::trace::log(format!("panel.show 前：is_key={}", ns_window.isKeyWindow()));
+    if let Some(view) = ns_window.contentView() {
+        // 隐藏期间 GPUI 不重绘，显示前标脏，避免闪出上一帧。
+        view.setNeedsDisplay(true);
+    }
+    ns_window.makeKeyAndOrderFront(None);
+    crate::trace::log(format!(
+        "panel.show 非激活方式后：is_key={}",
+        ns_window.isKeyWindow()
+    ));
+    if ns_window.isKeyWindow() {
+        return;
+    }
+    if !FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
+        eprintln!("huan: 面板未能以非激活方式成为 key window，改为激活 App");
+    }
+    cx.activate(true);
+    ns_window.makeKeyAndOrderFront(None);
+    crate::trace::log(format!(
+        "panel.show 激活 App 后：is_key={}",
+        ns_window.isKeyWindow()
+    ));
 }
+
+static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub fn hide(window: &mut Window) {
     match ns_window(window) {

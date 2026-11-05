@@ -13,6 +13,7 @@ mod panel;
 mod paths;
 mod provider;
 mod providers;
+mod trace;
 
 use gpui_kit::assets::Assets;
 use gpui_kit::*;
@@ -77,16 +78,20 @@ fn run_gui(engine: Engine) {
     });
 }
 
-/// 程序化走一遍 show → 输入查询 → hide，把状态打到 stdout 后退出。
-/// `HUAN_SELF_TEST` 的值作为查询词（`1` 表示只测显隐）。
-fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, query: String) {
-    use std::time::Duration;
+/// 图形界面自检：在真实窗口里走一遍 show → 逐个查询 → 执行 → hide，把状态打到 stdout 后退出。
+///
+/// - `HUAN_SELF_TEST`：用 `|` 分隔的查询词，`1` 表示只测显隐。
+/// - `HUAN_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
+fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
+    use std::time::{Duration, Instant};
 
+    let exec = std::env::var("HUAN_SELF_TEST_EXEC").ok();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let step = Duration::from_millis(800);
-        cx.background_executor().timer(step).await;
+        let settle = Duration::from_millis(1500);
+        // 等 provider 首次索引完成。
+        cx.background_executor().timer(Duration::from_secs(3)).await;
 
-        let report = |label: &'static str, cx: &mut AsyncApp| {
+        let report = |label: String, cx: &mut AsyncApp| {
             let launcher = launcher.clone();
             window
                 .update(cx, move |_, window, cx| {
@@ -98,36 +103,73 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         launcher.input_is_focused(window, cx),
                         launcher.items().len(),
                     );
-                    for item in launcher.items().iter().take(5) {
-                        println!("  {}\t{}\t{}", item.badge, item.title, item.id);
+                    for item in launcher.items().iter().take(3) {
+                        println!("  {}\t{}\t{}", item.badge, item.title, item.subtitle);
+                    }
+                    if let Some(message) = launcher.message() {
+                        println!("  message: {message}");
                     }
                 })
                 .expect("launcher window gone");
         };
-
-        report("initial", cx);
-        toggle(window, launcher.clone(), cx);
-        cx.background_executor().timer(step).await;
-        report("after-show", cx);
-
-        if query != "1" {
-            let launcher = launcher.clone();
+        let is_active = |cx: &mut AsyncApp| {
             window
-                .update(cx, move |_, window, cx| {
-                    launcher.update(cx, |launcher, cx| launcher.set_query(&query, window, cx));
-                })
-                .expect("launcher window gone");
-            cx.background_executor().timer(step).await;
-            report("after-query", cx);
+                .update(cx, |_, window, _| window.is_window_active())
+                .unwrap_or(false)
+        };
+
+        report("initial".into(), cx);
+
+        // 唤起延迟：从 toggle 到窗口成为 key window。
+        let started = Instant::now();
+        toggle(window, launcher.clone(), cx);
+        while !is_active(cx) && started.elapsed() < Duration::from_secs(2) {
+            cx.background_executor().timer(Duration::from_millis(2)).await;
+        }
+        println!("self-test show-latency: {} ms", started.elapsed().as_millis());
+        report("after-show".into(), cx);
+
+        if queries != "1" {
+            for query in queries.split('|') {
+                set_query(window, launcher.clone(), query, cx);
+                cx.background_executor().timer(settle).await;
+                report(format!("query {query:?}"), cx);
+            }
         }
 
+        if let Some(query) = exec {
+            set_query(window, launcher.clone(), &query, cx);
+            cx.background_executor().timer(settle).await;
+            let launcher_for_exec = launcher.clone();
+            window
+                .update(cx, move |_, window, cx| {
+                    launcher_for_exec.update(cx, |launcher, cx| launcher.execute_selected(window, cx));
+                })
+                .expect("launcher window gone");
+            cx.background_executor().timer(settle).await;
+            report(format!("exec {query:?}"), cx);
+        }
+
+        let started = Instant::now();
         toggle(window, launcher.clone(), cx);
-        cx.background_executor().timer(step).await;
-        report("after-hide", cx);
+        while is_active(cx) && started.elapsed() < Duration::from_secs(2) {
+            cx.background_executor().timer(Duration::from_millis(2)).await;
+        }
+        println!("self-test hide-latency: {} ms", started.elapsed().as_millis());
+        report("after-hide".into(), cx);
 
         cx.update(|cx| cx.quit());
     })
     .detach();
+}
+
+fn set_query(window: AnyWindowHandle, launcher: Entity<Launcher>, query: &str, cx: &mut AsyncApp) {
+    let query = query.to_string();
+    window
+        .update(cx, move |_, window, cx| {
+            launcher.update(cx, |launcher, cx| launcher.set_query(&query, window, cx));
+        })
+        .expect("launcher window gone");
 }
 
 fn toggle(window: AnyWindowHandle, launcher: Entity<Launcher>, cx: &mut AsyncApp) {

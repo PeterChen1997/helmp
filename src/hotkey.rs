@@ -39,6 +39,7 @@ pub fn register_toggle(
         loop {
             while let Ok(event) = receiver.try_recv() {
                 if event.id == hotkey_id && event.state == HotKeyState::Pressed {
+                    crate::trace::log("hotkey pressed");
                     let launcher = launcher.clone();
                     let _ = window.update(cx, |_, window, cx| {
                         launcher.update(cx, |launcher, cx| launcher.toggle(window, cx));

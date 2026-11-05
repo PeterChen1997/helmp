@@ -159,10 +159,11 @@ pub fn rank(sessions: &[Session], query: &str, home: Option<&Path>) -> Vec<(usiz
         .collect()
 }
 
-/// 标题任何匹配都算；目录与分支只认子串及以上（≥700），否则长路径的子序列匹配会到处误中。
+/// 标题、目录与分支都只认子串及以上（≥700，含拼音首字母从头命中）。
+/// 会话标题往往是一整句话，子序列和拼音中段匹配会让「wx」之类的短查询到处误中，挤掉真正想找的应用。
 fn match_score(session: &Session, query: &str, home: Option<&Path>) -> Option<u32> {
     let strict = |candidate: &str| matcher::score(query, candidate).filter(|&s| s >= 700);
-    let mut scores = vec![matcher::score(query, &session.title)];
+    let mut scores = vec![strict(&session.title)];
     if let Some(cwd) = &session.cwd {
         scores.push(strict(&display_path(cwd, home)));
         if let Some(name) = cwd.file_name() {
@@ -251,6 +252,25 @@ mod tests {
             .into_iter()
             .map(|(i, score)| (sessions[i].title.clone(), score))
             .collect()
+    }
+
+    #[test]
+    fn short_query_does_not_fuzzy_match_long_titles() {
+        // 「wx」是在找微信：会话标题是一整句话，拼音中段（位…巡）或子序列命中只会把无关会话塞到应用前面。
+        let sessions = vec![
+            session(
+                "投资人物仓位巡检",
+                Status::NeedsYou("等你确认".into()),
+                10,
+                Source::Claude,
+            ),
+            session("修复 wx 登录", Status::Idle, 10, Source::Claude),
+        ];
+        let titles: Vec<_> = ordered(&sessions, "wx")
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        assert_eq!(titles, ["修复 wx 登录"]);
     }
 
     #[test]

@@ -1,10 +1,10 @@
 //! Provider 注册表。新增模块：在这里加 `mod xxx;`，并在 `all()` 里加一行。
 
-mod apps;
 mod agents;
+mod apps;
 mod builtin;
-mod screenshot;
 mod clipboard;
+mod screenshot;
 mod scripts;
 
 use std::sync::Arc;

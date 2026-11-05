@@ -330,7 +330,8 @@ mod tests {
         // FSEvents 流是异步启动的，紧接着的改动可能早于流生效，等一下再装。
         std::thread::sleep(Duration::from_secs(1));
         std::fs::create_dir_all(root.join("Sub/Fresh.app")).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        // FSEvents 在全量并行测试的负载下可能延迟数秒，上限放宽到 30 秒，避免偶发失败。
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let found = loop {
             let apps = index.read().unwrap().clone();
             if apps.iter().any(|app| app.title == "Fresh") {

@@ -52,6 +52,10 @@ impl Launcher {
                 }
             }),
             cx.observe_window_activation(window, |this, window, cx| {
+                crate::trace::log(format!(
+                    "window activation：active={}",
+                    window.is_window_active()
+                ));
                 if this.visible && !window.is_window_active() {
                     this.hide(window, cx);
                 }
@@ -94,6 +98,10 @@ impl Launcher {
         self.input.read(cx).focus_handle(cx).is_focused(window)
     }
 
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items
     }
@@ -117,14 +125,16 @@ impl Launcher {
     }
 
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::trace::log("launcher.show");
         self.visible = true;
-        crate::panel::show(window);
+        crate::panel::show(window, cx);
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
         cx.notify();
     }
 
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::trace::log("launcher.hide");
         self.visible = false;
         crate::panel::hide(window);
         cx.notify();
@@ -146,6 +156,12 @@ impl Launcher {
                 }
                 // 后台刷新时尽量保持选中同一个结果。
                 let selected_id = this.items.get(this.selected).map(|item| item.id.clone());
+                crate::trace::log(format!(
+                    "results query={:?} count={} top={:?}",
+                    this.query,
+                    items.len(),
+                    items.first().map(|item| item.title.as_str())
+                ));
                 this.items = items;
                 this.selected = selected_id
                     .and_then(|id| this.items.iter().position(|item| item.id == id))
@@ -171,6 +187,7 @@ impl Launcher {
         let Some(item) = self.items.get(self.selected).cloned() else {
             return;
         };
+        crate::trace::log(format!("execute {} ({})", item.title, item.id));
         self.execute(item, window, cx);
     }
 
@@ -185,6 +202,7 @@ impl Launcher {
                 Ok(Outcome::Message(message)) => Some(message),
                 Err(err) => Some(format!("「{}」执行失败：{err:#}", item.title)),
             };
+            crate::trace::log(format!("outcome message={message:?}"));
             let Some(message) = message else {
                 return;
             };

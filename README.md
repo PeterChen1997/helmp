@@ -3,11 +3,17 @@
 macOS 原生启动器（Rust + GPUI），目标是 Spotlight 式应用启动、agent 会话切换、剪贴板与截图，插件机制。
 调研与决策见 `~/code_hub/_research/launcher/`。
 
-## 骨架阶段（当前）
+## 功能
 
-- `⌥Space` 唤起 / 隐藏面板（`global-hotkey`，Carbon，免辅助功能权限）
-- `WindowKind::PopUp` 非激活面板，`Esc` 或失去焦点即隐藏
-- 菜单栏工具型 App（`ActivationPolicy::Accessory`，不进 Dock）
+| 模块 | 用法 | 说明 |
+|---|---|---|
+| 应用搜索 | `wx` / `weixin` / `微信` | 中文名、全拼、首字母；目录变化自动重建索引 |
+| agent 切换器 | 空查询、`agent`、`claude`、`codex` | 列出本机 Claude Code / Codex 会话，「等你」的排最前，回车跳到会话 |
+| 剪贴板历史 | `cb ` 前缀 | 文本、图片、文件，不限条数；跳过密码管理器标记的内容 |
+| 截图与 OCR | `截图`、`ocr` | 区域截图、保存、识别文字（Vision，中英文）；需录屏权限 |
+| 脚本插件 | 标题前缀 + 参数 | 兼容 Raycast Script Commands；目录 `~/Library/Application Support/huan/scripts/` 或 `HUAN_SCRIPT_DIRS` |
+
+面板：`⌥Space` 唤起，↑↓ 选择，⏎ 执行，Esc 隐藏。
 
 ## 运行
 
@@ -15,10 +21,18 @@ macOS 原生启动器（Rust + GPUI），目标是 Spotlight 式应用启动、a
 cargo run
 ```
 
-无屏幕权限的环境（CI、远程 shell）可跑自检，程序化走一遍 show → hide 后退出：
+无头查询（不开窗口，测试和排查用）：
 
 ```bash
-HUAN_SELF_TEST=1 cargo run
+cargo run -- query wx
+HUAN_DRY_RUN=1 cargo run -- run <结果 id> agent   # agent 跳转只打印不执行
+```
+
+图形自检（真实窗口里走一遍显示、查询、执行、隐藏）与跟踪日志：
+
+```bash
+HUAN_SELF_TEST='wx|cb |截图' HUAN_SELF_TEST_EXEC=当前时间 cargo run
+HUAN_TRACE=1 cargo run
 ```
 
 ## 打包
