@@ -21,7 +21,8 @@ impl Engine {
 
     /// 每个 provider 一个后台线程跑 `start`；失败打印到 stderr，不拖垮其他模块。
     pub fn start_in_background(&self) {
-        for provider in self.providers.iter().cloned() {
+        for provider in self.providers.iter() {
+            let provider = Arc::clone(provider);
             std::thread::Builder::new()
                 .name(format!("huan-{}", provider.id()))
                 .spawn(move || {

@@ -53,7 +53,7 @@ impl Launcher {
             }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if this.visible && !window.is_window_active() {
-                    this.hide(cx);
+                    this.hide(window, cx);
                 }
             }),
         ];
@@ -110,7 +110,7 @@ impl Launcher {
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.visible {
-            self.hide(cx);
+            self.hide(window, cx);
         } else {
             self.show(window, cx);
         }
@@ -118,15 +118,15 @@ impl Launcher {
 
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = true;
-        crate::panel::show(window, cx);
+        crate::panel::show(window);
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
         cx.notify();
     }
 
-    pub fn hide(&mut self, cx: &mut Context<Self>) {
+    pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.visible = false;
-        crate::panel::hide(cx);
+        crate::panel::hide(window);
         cx.notify();
     }
 
@@ -174,9 +174,9 @@ impl Launcher {
         self.execute(item, window, cx);
     }
 
-    fn execute(&mut self, item: Item, _window: &mut Window, cx: &mut Context<Self>) {
-        self.hide(cx);
-        let window_handle = _window.window_handle();
+    fn execute(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        self.hide(window, cx);
+        let window_handle = window.window_handle();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let action = item.action.clone();
             let outcome = cx.background_spawn(async move { action.run() }).await;
@@ -207,7 +207,7 @@ impl Launcher {
         match keystroke.key.as_str() {
             "up" => self.select(-1, cx),
             "down" => self.select(1, cx),
-            "escape" => self.hide(cx),
+            "escape" => self.hide(window, cx),
             "enter" => self.execute_selected(window, cx),
             _ => return,
         }
