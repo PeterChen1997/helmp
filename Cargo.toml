@@ -11,6 +11,9 @@ publish = false
 anyhow = "1"
 gpui-kit = "=0.9.0"
 global-hotkey = "0.9.0"
+notify = "8.2.1"
+pinyin = { version = "0.11.0", default-features = false, features = ["plain", "heteronym"] }
+plist = { version = "1.10.3", default-features = false }
 
 [profile.dev]
 opt-level = 1

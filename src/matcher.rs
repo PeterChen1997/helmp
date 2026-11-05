@@ -1,27 +1,73 @@
 //! 文本匹配打分。所有 provider 共用，返回 `None` 表示不匹配。
 //!
-//! 当前规则（大小写不敏感）：完全相等 > 前缀 > 单词首字母 > 子串 > 子序列。
+//! 字面规则（大小写不敏感）：完全相等 1000 > 前缀 900 > 单词首字母 800 > 子串 700 > 子序列 400。
+//!
+//! 含汉字的候选另走拼音规则，取两者较高分：
+//! - 850：从第一个音节起，每个音节取一段非空前缀，恰好用到最后一个音节
+//!   （`weixin`、`wx`、`wxin` → 微信）。
+//! - 750：从第一个音节起按音节前缀吃完查询，但没用到最后（`wx` → 微信开发者工具）。
+//! - 550：同上，但从中间某个音节起（`xin` → 微信）。
+//! - 300：查询是默认读音全拼的子序列。故意低于字面子序列，保证字面命中永远排在拼音模糊命中前面。
+//!
+//! 多音字的每个读音都参与音节匹配（`zhong`/`chong` 都能命中「重」）。
+//! 索引型 provider 应该用 [`Candidate`] 预处理一次，查询时调用 [`score_candidate`]，避免每次查询重算拼音。
+
+use pinyin::{ToPinyin, ToPinyinMulti};
+
+const EXACT: u32 = 1000;
+const PREFIX: u32 = 900;
+const PINYIN_FULL: u32 = 850;
+const INITIALS: u32 = 800;
+const PINYIN_PREFIX: u32 = 750;
+const SUBSTRING: u32 = 700;
+const PINYIN_INNER: u32 = 550;
+const SUBSEQUENCE: u32 = 400;
+const PINYIN_SUBSEQUENCE: u32 = 300;
 
 pub fn score(query: &str, candidate: &str) -> Option<u32> {
+    score_candidate(query, &Candidate::new(candidate))
+}
+
+/// 预处理过的候选文本：小写形式，以及含汉字时的拼音音节。
+#[derive(Debug, Clone)]
+pub struct Candidate {
+    lower: String,
+    pinyin: Option<Syllables>,
+}
+
+impl Candidate {
+    pub fn new(text: &str) -> Self {
+        let lower = text.to_lowercase();
+        let pinyin = Syllables::new(&lower);
+        Self { lower, pinyin }
+    }
+}
+
+pub fn score_candidate(query: &str, candidate: &Candidate) -> Option<u32> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return Some(0);
     }
-    let candidate = candidate.to_lowercase();
+    let literal = literal_score(&query, &candidate.lower);
+    let pinyin = candidate.pinyin.as_ref().and_then(|s| s.score(&query));
+    // Option 的序：None < Some，所以 max 正好取较高的命中。
+    literal.max(pinyin)
+}
 
+fn literal_score(query: &str, candidate: &str) -> Option<u32> {
     if candidate == query {
-        return Some(1000);
+        return Some(EXACT);
     }
-    if candidate.starts_with(&query) {
-        return Some(900);
+    if candidate.starts_with(query) {
+        return Some(PREFIX);
     }
-    if initials(&candidate).starts_with(&query) {
-        return Some(800);
+    if initials(candidate).starts_with(query) {
+        return Some(INITIALS);
     }
-    if candidate.contains(&query) {
-        return Some(700);
+    if candidate.contains(query) {
+        return Some(SUBSTRING);
     }
-    subsequence(&query, &candidate).then_some(400)
+    subsequence(query, candidate).then_some(SUBSEQUENCE)
 }
 
 /// 取每个单词首字母：`visual studio code` → `vsc`。
@@ -34,6 +80,127 @@ fn initials(text: &str) -> String {
 fn subsequence(query: &str, candidate: &str) -> bool {
     let mut rest = candidate.chars();
     query.chars().all(|q| rest.any(|c| c == q))
+}
+
+/// 候选文本切成的「音节」：每个汉字一个（带全部读音），连续的字母数字算一个。
+#[derive(Debug, Clone)]
+struct Syllables {
+    /// 每个音节的可选拼写，第一个是默认读音。
+    tokens: Vec<Vec<String>>,
+    /// 默认读音连起来的全拼，用于子序列兜底。
+    joined: String,
+}
+
+impl Syllables {
+    /// 不含汉字时返回 `None`：纯字母候选只走字面规则。
+    fn new(lower: &str) -> Option<Self> {
+        let mut tokens: Vec<Vec<String>> = Vec::new();
+        let mut word = String::new();
+        let mut has_han = false;
+        for ch in lower.chars() {
+            if let Some(default) = ch.to_pinyin() {
+                has_han = true;
+                if !word.is_empty() {
+                    tokens.push(vec![std::mem::take(&mut word)]);
+                }
+                let mut readings = vec![default.plain().to_string()];
+                if let Some(multi) = ch.to_pinyin_multi() {
+                    for reading in multi {
+                        let plain = reading.plain();
+                        if !readings.iter().any(|r| r == plain) {
+                            readings.push(plain.to_string());
+                        }
+                    }
+                }
+                tokens.push(readings);
+            } else if ch.is_alphanumeric() {
+                word.push(ch);
+            } else if !word.is_empty() {
+                tokens.push(vec![std::mem::take(&mut word)]);
+            }
+        }
+        if !word.is_empty() {
+            tokens.push(vec![word]);
+        }
+        if !has_han {
+            return None;
+        }
+        let joined = tokens
+            .iter()
+            .filter_map(|t| t.first())
+            .map(String::as_str)
+            .collect();
+        Some(Self { tokens, joined })
+    }
+
+    fn score(&self, query: &str) -> Option<u32> {
+        // 拼音只由 ASCII 字母数字组成；用户可能用空格分隔音节（`wei xin`）。
+        let query: String = query.chars().filter(|c| !c.is_whitespace()).collect();
+        if query.is_empty() || !query.is_ascii() {
+            return None;
+        }
+        let total = self.tokens.len();
+        let mut best = None;
+        for start in 0..total {
+            let Some(end) = self.consume(query.as_bytes(), start) else {
+                continue;
+            };
+            let tier = match (start, end) {
+                (0, end) if end == total => PINYIN_FULL,
+                (0, _) => PINYIN_PREFIX,
+                _ => PINYIN_INNER,
+            };
+            best = best.max(Some(tier));
+            if start == 0 {
+                // 从头匹配的档位一定高于从中间匹配，不用再试。
+                break;
+            }
+        }
+        best.or_else(|| subsequence(&query, &self.joined).then_some(PINYIN_SUBSEQUENCE))
+    }
+
+    /// 从第 `start` 个音节起，每个音节吃掉查询的一段非空前缀，直到查询吃完。
+    /// 成功时返回能走到的最远音节下标（不含）。用备忘录保证最坏情况多项式。
+    fn consume(&self, query: &[u8], start: usize) -> Option<usize> {
+        let width = self.tokens.len() + 1;
+        let mut memo: Vec<Option<Option<usize>>> = vec![None; (query.len() + 1) * width];
+        self.consume_from(query, 0, start, &mut memo, width)
+    }
+
+    fn consume_from(
+        &self,
+        query: &[u8],
+        pos: usize,
+        token: usize,
+        memo: &mut [Option<Option<usize>>],
+        width: usize,
+    ) -> Option<usize> {
+        if pos == query.len() {
+            return Some(token);
+        }
+        let key = pos * width + token;
+        if let Some(&Some(cached)) = memo.get(key) {
+            return cached;
+        }
+        let mut best = None;
+        if let Some(readings) = self.tokens.get(token) {
+            for reading in readings {
+                let shared = reading
+                    .bytes()
+                    .zip(query.get(pos..).unwrap_or_default())
+                    .take_while(|(a, b)| a == *b)
+                    .count();
+                for len in 1..=shared {
+                    let end = self.consume_from(query, pos + len, token + 1, memo, width);
+                    best = best.max(end);
+                }
+            }
+        }
+        if let Some(slot) = memo.get_mut(key) {
+            *slot = Some(best);
+        }
+        best
+    }
 }
 
 #[cfg(test)]
@@ -54,5 +221,63 @@ mod tests {
     #[test]
     fn rejects_non_matching() {
         assert_eq!(score("xyz", "Safari"), None);
+    }
+
+    #[test]
+    fn full_pinyin_and_initials_hit_chinese_names() {
+        // 中文用户不切输入法就能搜中文应用名，是本项目相对 Raycast/Spotlight 的核心差异（README「MVP 验收」）。
+        for query in ["weixin", "wx", "wxin", "weix", "wei xin", "WX"] {
+            assert_eq!(score(query, "微信"), Some(PINYIN_FULL), "{query}");
+        }
+        assert_eq!(score("jsq", "计算器"), Some(PINYIN_FULL));
+        assert_eq!(score("fs", "飞书"), Some(PINYIN_FULL));
+        assert_eq!(score("feishu", "飞书"), Some(PINYIN_FULL));
+        // 汉字本身仍走字面规则，拿最高分。
+        assert_eq!(score("微信", "微信"), Some(EXACT));
+    }
+
+    #[test]
+    fn pinyin_tiers_prefer_complete_abbreviations() {
+        // 「wx」打完整个名字（微信）应排在只打了开头（微信开发者工具）之前，否则回车会打开错的应用。
+        let whole = score("wx", "微信").unwrap();
+        let head = score("wx", "微信开发者工具").unwrap();
+        let inner = score("xin", "微信").unwrap();
+        let fuzzy = score("wix", "微信").unwrap();
+        assert!(whole > head && head > inner && inner > fuzzy);
+        assert_eq!(fuzzy, PINYIN_SUBSEQUENCE);
+    }
+
+    #[test]
+    fn mixed_latin_and_chinese_names() {
+        // 「QQ音乐」这类中英混排名很常见：英文单词整体算一个音节，可以和拼音首字母连着打。
+        assert_eq!(score("qqyy", "QQ音乐"), Some(PINYIN_FULL));
+        assert_eq!(score("qqyinyue", "QQ音乐"), Some(PINYIN_FULL));
+        assert_eq!(score("yy", "QQ音乐"), Some(PINYIN_INNER));
+        // 中英混排名的英文部分仍走字面前缀。
+        assert_eq!(score("safari", "Safari浏览器"), Some(PREFIX));
+        assert_eq!(score("safarillq", "Safari浏览器"), Some(PINYIN_FULL));
+    }
+
+    #[test]
+    fn heteronyms_match_every_reading() {
+        // 多音字只认默认读音会让一半用户搜不到（「重庆」有人打 cq，也有人按 zhong 打 zq）。
+        assert!(score("cq", "重庆").is_some());
+        assert!(score("zq", "重庆").is_some());
+    }
+
+    #[test]
+    fn literal_prefix_beats_pinyin_fuzzy() {
+        // 字面前缀是用户最确定的意图，任何拼音模糊匹配都不能压过它。
+        let literal_prefix = score("we", "WeChat").unwrap();
+        let pinyin_subseq = score("wexn", "微信").unwrap();
+        let literal_subseq = score("wct", "WeChat").unwrap();
+        assert!(literal_prefix > pinyin_subseq);
+        assert!(literal_subseq > pinyin_subseq);
+    }
+
+    #[test]
+    fn pinyin_rejects_unrelated_queries() {
+        assert_eq!(score("fs", "微信"), None);
+        assert_eq!(score("xw", "微信"), None);
     }
 }
