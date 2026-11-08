@@ -26,6 +26,7 @@ pub struct Launcher {
     revision: u64,
     message: Option<String>,
     visible: bool,
+    input_source: crate::input_source::InputSourceSwitch,
     scroll: UniformListScrollHandle,
     _refresh: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -43,6 +44,7 @@ impl Launcher {
                 move |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => {
                         this.query = input.read(cx).value().to_string();
+                        crate::trace::log(format!("input change {:?}", this.query));
                         this.message = None;
                         this.selected = 0;
                         this.refresh(cx);
@@ -84,6 +86,7 @@ impl Launcher {
             revision: 0,
             message: None,
             visible: false,
+            input_source: Default::default(),
             scroll: UniformListScrollHandle::new(),
             _refresh: refresh,
             _subscriptions: subscriptions,
@@ -128,6 +131,7 @@ impl Launcher {
         crate::trace::log("launcher.show");
         self.visible = true;
         crate::panel::show(window, cx);
+        self.input_source.on_show();
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
         cx.notify();
@@ -137,6 +141,7 @@ impl Launcher {
         crate::trace::log("launcher.hide");
         self.visible = false;
         crate::panel::hide(window);
+        self.input_source.on_hide();
         cx.notify();
     }
 
@@ -219,6 +224,12 @@ impl Launcher {
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // 在捕获阶段拦截：单行 Input 会吞掉 ↑↓，这里先于它处理。
         let keystroke = &event.keystroke;
+        crate::trace::log(format!(
+            "key down {:?} char={:?} modified={}",
+            keystroke.key,
+            keystroke.key_char,
+            keystroke.modifiers.modified()
+        ));
         if keystroke.modifiers.modified() {
             return;
         }

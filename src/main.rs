@@ -7,6 +7,7 @@
 mod cli;
 mod engine;
 mod hotkey;
+mod input_source;
 mod launcher;
 mod matcher;
 mod panel;
