@@ -14,6 +14,7 @@ mod input_source;
 mod launcher;
 mod matcher;
 mod menubar;
+mod models;
 mod onboarding;
 mod panel;
 mod paths;

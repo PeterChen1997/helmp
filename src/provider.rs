@@ -30,6 +30,8 @@ pub enum Outcome {
     Show(Detail),
     /// 进入某个插件的范围（如从首页的「剪贴板历史」进入剪贴板）。
     EnterScope(&'static str),
+    /// 打开设置窗口（动作在后台线程执行，不能直接开窗口，交给界面线程做）。
+    OpenSettings,
 }
 
 /// 执行时框架传给动作的输入：表单视图下是各字段的值。

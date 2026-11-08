@@ -236,6 +236,11 @@ impl Launcher {
         })
     }
 
+    /// 菜单栏等需要直接查询时用（同一个引擎，结果与面板一致）。
+    pub fn engine(&self) -> Engine {
+        self.engine.clone()
+    }
+
     pub fn items(&self) -> &[Item] {
         &self.items
     }
@@ -556,6 +561,11 @@ impl Launcher {
                         }
                         Ok(Outcome::EnterScope(scope)) => {
                             this.open_scope(scope, window, cx);
+                            return;
+                        }
+                        Ok(Outcome::OpenSettings) => {
+                            this.executed = true;
+                            crate::settings::open(cx);
                             return;
                         }
                         Ok(Outcome::Show(detail)) => detail,

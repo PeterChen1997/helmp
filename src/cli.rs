@@ -70,6 +70,7 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
         Outcome::Done => println!("done"),
         Outcome::Message(message) => println!("{message}"),
         Outcome::EnterScope(scope) => println!("enter scope {scope}"),
+        Outcome::OpenSettings => println!("open settings"),
         Outcome::Show(detail) => {
             println!("{}", detail.title);
             for block in detail.blocks {

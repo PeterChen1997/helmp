@@ -14,6 +14,12 @@ const RECENT_ON_HOME: usize = 6;
 /// 首页「最近使用」的分组名。界面对这一组用图标平铺而不是列表。
 pub const RECENT_SECTION: &str = "最近使用";
 
+/// 首页「等你处理」：等待用户的 agent 会话。菜单栏也按这个分组名读取，score 应 ≥ 900。
+pub const WAITING_SECTION: &str = "等你处理";
+
+/// 首页「快捷命令」：各插件的入口命令，score 应 < 800。
+pub const COMMANDS_SECTION: &str = "快捷命令";
+
 #[derive(Clone)]
 pub struct Engine {
     providers: Arc<Vec<Arc<dyn Provider>>>,
