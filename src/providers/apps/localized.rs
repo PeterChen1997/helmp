@@ -17,11 +17,20 @@ const ZH_LOCALES: [&str; 5] = ["zh-Hans", "zh_CN", "zh-CN", "zh_Hans", "zh"];
 /// 同一份本地化里，显示名优先于 bundle 名。
 const NAME_KEYS: [&str; 2] = ["CFBundleDisplayName", "CFBundleName"];
 
-/// Info.plist 里的英文名（显示名、bundle 名，去重）。没有 Info.plist 返回空。
-pub fn bundle_names(app: &Path) -> Result<Vec<String>> {
+/// Info.plist 里与搜索、详情有关的字段。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BundleInfo {
+    /// 英文名（显示名、bundle 名，去重）。
+    pub names: Vec<String>,
+    /// `CFBundleShortVersionString`，如 `4.1.2`。
+    pub version: Option<String>,
+}
+
+/// 读 Info.plist。没有 Info.plist 返回空。
+pub fn bundle_info(app: &Path) -> Result<BundleInfo> {
     let path = app.join("Contents/Info.plist");
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(BundleInfo::default());
     }
     let value =
         plist::Value::from_file(&path).with_context(|| format!("解析 {}", path.display()))?;
@@ -37,7 +46,13 @@ pub fn bundle_names(app: &Path) -> Result<Vec<String>> {
             }
         }
     }
-    Ok(names)
+    let version = dict
+        .get("CFBundleShortVersionString")
+        .and_then(plist::Value::as_string)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    Ok(BundleInfo { names, version })
 }
 
 /// 简体中文本地化名。没有中文本地化返回 `Ok(None)`；文件存在但解析失败返回 `Err`。

@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::engine::WAITING_SECTION;
 use crate::matcher;
+use crate::provider::Tone;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -11,10 +13,12 @@ pub enum Source {
 }
 
 impl Source {
-    pub fn badge(self) -> &'static str {
-        match self {
-            Source::Claude => "Claude",
-            Source::Codex => "Codex",
+    /// 范围筛选的分段名（「全部」不对应任何来源）。
+    pub fn from_filter(filter: &str) -> Option<Source> {
+        match filter {
+            "Claude" => Some(Source::Claude),
+            "Codex" => Some(Source::Codex),
+            _ => None,
         }
     }
 
@@ -58,7 +62,44 @@ impl Status {
             Status::Unknown => "状态未知".into(),
         }
     }
+
+    /// 列表行右侧的状态标签：比 `label` 短（设计稿列表写「等你确认」，详情写「等你确认权限」）。
+    pub fn tag(&self) -> (String, Tone) {
+        match self {
+            Status::NeedsYou(label) if label.starts_with("等你确认") => {
+                ("等你确认".into(), Tone::Waiting)
+            }
+            Status::NeedsYou(label) if label.starts_with("等你：") => {
+                ("等你处理".into(), Tone::Waiting)
+            }
+            Status::NeedsYou(label) => (label.clone(), Tone::Waiting),
+            Status::Running => (self.label(), Tone::Running),
+            Status::Done => (self.label(), Tone::Done),
+            Status::Idle | Status::Interrupted(_) | Status::Unknown => {
+                (self.label(), Tone::Neutral)
+            }
+        }
+    }
+
+    pub fn tone(&self) -> Tone {
+        self.tag().1
+    }
+
+    /// 范围视图里的分组（设计稿 Agents：等你处理 / 进行中 / 最近完成）和组的基础分。
+    /// 分组的先后由组内最高分决定，基础分保证这个顺序。
+    fn section(&self) -> (&'static str, u32) {
+        match self {
+            Status::NeedsYou(_) => (WAITING_SECTION, 900),
+            Status::Running => (RUNNING_SECTION, 800),
+            Status::Done | Status::Idle => (FINISHED_SECTION, 700),
+            Status::Interrupted(_) | Status::Unknown => (OTHER_SECTION, 600),
+        }
+    }
 }
+
+const RUNNING_SECTION: &str = "进行中";
+const FINISHED_SECTION: &str = "最近完成";
+const OTHER_SECTION: &str = "其他";
 
 /// 回车后怎么跳过去。终端类目标在执行时才解析 tty，因为 tty 只在那一刻有意义。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +123,8 @@ pub struct Session {
     pub branch: Option<String>,
     /// 毫秒时间戳。
     pub last_activity_ms: u64,
+    /// 详情里「最后一条消息」：等你的会话是在等什么（要确认的命令、提的问题），否则是最后一段回复。
+    pub last_message: Option<String>,
     pub jump: Jump,
 }
 
@@ -91,9 +134,20 @@ impl Session {
         format!("{}:{}", self.source.key(), self.session_id)
     }
 
-    /// 「状态 · ~/项目目录 · git 分支 · 3 分钟前」，缺的段落省略。
+    /// 详情「来源」：深链跳转的是桌面 app，其余是终端里的 CLI。
+    pub fn origin(&self) -> &'static str {
+        let desktop = matches!(self.jump, Jump::DeepLink(_));
+        match (self.source, desktop) {
+            (Source::Claude, true) => "Claude 桌面版",
+            (Source::Claude, false) => "Claude Code 终端",
+            (Source::Codex, true) => "Codex 桌面版",
+            (Source::Codex, false) => "Codex CLI",
+        }
+    }
+
+    /// 「~/项目目录 · git 分支 · 3 分钟前」，缺的段落省略。状态在右侧标签里，不重复。
     pub fn subtitle(&self, home: Option<&Path>, now_ms: u64) -> String {
-        let mut parts = vec![self.status.label()];
+        let mut parts = Vec::new();
         if let Some(cwd) = &self.cwd {
             parts.push(display_path(cwd, home));
         }
@@ -156,6 +210,52 @@ pub fn rank(sessions: &[Session], query: &str, home: Option<&Path>) -> Vec<(usiz
             };
             Some((i, best.saturating_sub(MATCH_PENALTY) + bonus))
         })
+        .collect()
+}
+
+/// 范围视图（`ag `）：只看 `only` 来源的会话，返回 `(下标, 分数, 分组名)`。
+/// 空查询列出全部，按 等你处理 / 进行中 / 最近完成 / 其他 分组，组内最近活动在前；
+/// 有查询时只留命中的，分数是匹配分，分组仍按状态。
+pub fn rank_scoped(
+    sessions: &[Session],
+    query: &str,
+    only: Option<Source>,
+    home: Option<&Path>,
+) -> Vec<(usize, u32, &'static str)> {
+    let of_source = |i: &usize| only.is_none_or(|source| sessions[*i].source == source);
+    if query.trim().is_empty() {
+        let mut listed: Vec<usize> = (0..sessions.len()).filter(of_source).collect();
+        listed.sort_by_key(|&i| std::cmp::Reverse(sessions[i].last_activity_ms));
+        return listed
+            .into_iter()
+            .enumerate()
+            .map(|(rank, i)| {
+                let (section, base) = sessions[i].status.section();
+                (i, base + 99 - (rank as u32).min(99), section)
+            })
+            .collect();
+    }
+    sessions
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| of_source(i))
+        .filter_map(|(i, session)| {
+            let score = match_score(session, query, home)?;
+            Some((i, score, session.status.section().0))
+        })
+        .collect()
+}
+
+/// 首页「等你处理」：只放等你的会话，最近活动在前，分数 900..=999（engine 约定 ≥ 900）。
+pub fn waiting(sessions: &[Session]) -> Vec<(usize, u32)> {
+    let mut listed: Vec<usize> = (0..sessions.len())
+        .filter(|&i| sessions[i].status.needs_you())
+        .collect();
+    listed.sort_by_key(|&i| std::cmp::Reverse(sessions[i].last_activity_ms));
+    listed
+        .into_iter()
+        .enumerate()
+        .map(|(rank, i)| (i, LIST_NEEDS_YOU_BASE + 99 - (rank as u32).min(99)))
         .collect()
 }
 
@@ -241,6 +341,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/me/code/helep")),
             branch: Some("master".into()),
             last_activity_ms,
+            last_message: None,
             jump: Jump::Pid(1),
         }
     }
@@ -352,7 +453,8 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_has_status_dir_branch_and_age() {
+    fn subtitle_has_dir_branch_and_age_without_status() {
+        // 设计稿：状态在右侧彩色标签里，副标题再写一遍会挤掉项目和分支。
         let s = session(
             "t",
             Status::NeedsYou("等你确认权限".into()),
@@ -362,8 +464,129 @@ mod tests {
         let home = PathBuf::from("/Users/me");
         assert_eq!(
             s.subtitle(Some(&home), 3 * 60_000 + 5),
-            "等你确认权限 · ~/code/helep · master · 3 分钟前"
+            "~/code/helep · master · 3 分钟前"
         );
+    }
+
+    #[test]
+    fn status_tags_use_design_tones() {
+        // 颜色是一眼区分「要不要我管」的唯一线索：等你橙、运行中蓝、已完成绿、空闲灰。
+        assert_eq!(
+            Status::NeedsYou("等你确认权限".into()).tag(),
+            ("等你确认".into(), Tone::Waiting)
+        );
+        assert_eq!(
+            Status::NeedsYou("等你回答".into()).tag(),
+            ("等你回答".into(), Tone::Waiting)
+        );
+        assert_eq!(Status::Running.tag(), ("运行中".into(), Tone::Running));
+        assert_eq!(Status::Done.tag(), ("已完成".into(), Tone::Done));
+        assert_eq!(Status::Idle.tag(), ("空闲".into(), Tone::Neutral));
+    }
+
+    fn scoped(
+        sessions: &[Session],
+        query: &str,
+        only: Option<Source>,
+    ) -> Vec<(String, &'static str)> {
+        let mut ranked = rank_scoped(sessions, query, only, None);
+        ranked.sort_by_key(|&(_, score, _)| std::cmp::Reverse(score));
+        ranked
+            .into_iter()
+            .map(|(i, _, section)| (sessions[i].title.clone(), section))
+            .collect()
+    }
+
+    #[test]
+    fn scope_lists_by_status_section_then_recency() {
+        // 设计稿 Agents：进入范围后按 等你处理 / 进行中 / 最近完成 分组，最要紧的在最上面。
+        let sessions = vec![
+            session("完成", Status::Done, 9_000, Source::Codex),
+            session("空闲", Status::Idle, 8_000, Source::Claude),
+            session("在跑", Status::Running, 1_000, Source::Claude),
+            session(
+                "等你旧",
+                Status::NeedsYou("等你回答".into()),
+                10,
+                Source::Codex,
+            ),
+            session(
+                "等你新",
+                Status::NeedsYou("等你".into()),
+                20,
+                Source::Claude,
+            ),
+            session(
+                "中断",
+                Status::Interrupted("interrupted".into()),
+                9_500,
+                Source::Codex,
+            ),
+        ];
+        assert_eq!(
+            scoped(&sessions, "", None),
+            [
+                ("等你新".to_string(), WAITING_SECTION),
+                ("等你旧".to_string(), WAITING_SECTION),
+                ("在跑".to_string(), "进行中"),
+                ("完成".to_string(), "最近完成"),
+                ("空闲".to_string(), "最近完成"),
+                ("中断".to_string(), "其他"),
+            ]
+        );
+    }
+
+    #[test]
+    fn scope_filter_keeps_only_that_source() {
+        // 分段筛选选了 Codex，就不能混进 Claude 会话；「全部」和未知筛选值都不过滤。
+        let sessions = vec![
+            session("c 修复", Status::Idle, 1, Source::Claude),
+            session("x 修复", Status::Running, 2, Source::Codex),
+        ];
+        let titles = |query: &str, filter: &str| -> Vec<String> {
+            scoped(&sessions, query, Source::from_filter(filter))
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
+        };
+        assert_eq!(titles("", "Codex"), ["x 修复"]);
+        assert_eq!(titles("", "Claude"), ["c 修复"]);
+        assert_eq!(titles("", "全部").len(), 2);
+        assert_eq!(titles("修复", "Codex"), ["x 修复"]);
+        // 范围里打的是筛选词，不是全局关键词：「codex」不该把所有 Codex 会话列出来。
+        assert!(titles("codex", "全部").is_empty());
+    }
+
+    #[test]
+    fn home_suggestions_only_waiting_sessions() {
+        // 首页「等你处理」和菜单栏都读这一组：混进运行中 / 已完成的会话，「等你」的提醒就失去意义。
+        let sessions = vec![
+            session("在跑", Status::Running, 9_000, Source::Claude),
+            session(
+                "等你",
+                Status::NeedsYou("等你回答".into()),
+                10,
+                Source::Codex,
+            ),
+            session("完成", Status::Done, 5_000, Source::Codex),
+        ];
+        let waiting = waiting(&sessions);
+        assert_eq!(waiting.len(), 1);
+        let (i, score) = waiting[0];
+        assert_eq!(sessions[i].title, "等你");
+        // engine 约定「等你处理」≥ 900，排在最近使用（850）之前；但不能到 1000 压过应用精确命中。
+        assert!((900..1000).contains(&score), "{score}");
+    }
+
+    #[test]
+    fn origin_follows_jump_kind() {
+        // 「来源」告诉用户回车会切到哪个 App：桌面版走深链，终端会话找终端窗口。
+        let mut s = session("t", Status::Idle, 0, Source::Claude);
+        assert_eq!(s.origin(), "Claude Code 终端");
+        s.jump = Jump::DeepLink("claude://x".into());
+        assert_eq!(s.origin(), "Claude 桌面版");
+        s.source = Source::Codex;
+        assert_eq!(s.origin(), "Codex 桌面版");
     }
 
     #[test]

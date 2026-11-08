@@ -43,6 +43,10 @@ pub struct TailState {
     pub status: Status,
     /// 尾部最后一条用户消息，标题兜底用。
     pub last_user: Option<String>,
+    /// 最后一条 agent 回复。
+    pub last_message: Option<String>,
+    /// 还没被回答的 async 提问：「问题？（选项 A / 选项 B）」。
+    pub question: Option<String>,
 }
 
 enum Edge {
@@ -57,8 +61,9 @@ enum Edge {
 /// - `task_started` 未闭合 → Running；`task_complete` → Done；尾部一个边界都没有 → Unknown
 pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
     let mut edge = None;
-    let mut question = false;
+    let mut question: Option<String> = None;
     let mut last_user = None;
+    let mut last_message = None;
     for line in lines {
         // 大部分行是 response_item（工具输出、推理），先粗筛再解析。
         if !contains(line, b"\"event_msg\"") {
@@ -71,9 +76,17 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
         match payload["type"].as_str() {
             Some("task_started") => {
                 edge = Some(Edge::Started);
-                question = false;
+                question = None;
             }
-            Some("task_complete") => edge = Some(Edge::Complete),
+            Some("task_complete") => {
+                edge = Some(Edge::Complete);
+                if let Some(text) = payload["last_agent_message"]
+                    .as_str()
+                    .filter(|t| !t.trim().is_empty())
+                {
+                    last_message = Some(state::one_line(text, 200));
+                }
+            }
             Some("turn_aborted") => {
                 edge = Some(Edge::Aborted(
                     payload["reason"].as_str().unwrap_or_default().to_string(),
@@ -83,11 +96,22 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
                 let item = &payload["item"];
                 match item["type"].as_str() {
                     Some("UserMessage") => {
-                        question = false;
+                        question = None;
                         last_user = item_text(item).map(|t| state::one_line(&t, 60));
                     }
-                    Some("AgentMessage") if item["delivery"].as_str() == Some("async") => {
-                        question = true;
+                    Some("AgentMessage") => {
+                        let text = item_text(item);
+                        if item["delivery"].as_str() == Some("async") {
+                            // 拿不到结构化问题时退回消息原文；两者都没有也仍然算在等你。
+                            question = Some(
+                                async_question(item)
+                                    .or(text)
+                                    .map(|t| state::one_line(&t, 200))
+                                    .unwrap_or_default(),
+                            );
+                        } else if let Some(text) = text {
+                            last_message = Some(state::one_line(&text, 200));
+                        }
                     }
                     _ => {}
                 }
@@ -97,12 +121,41 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
     }
     let status = match edge {
         Some(Edge::Aborted(reason)) => Status::Interrupted(reason),
-        _ if question => Status::NeedsYou("等你回答".into()),
+        _ if question.is_some() => Status::NeedsYou("等你回答".into()),
         Some(Edge::Started) => Status::Running,
         Some(Edge::Complete) => Status::Done,
         None => Status::Unknown,
     };
-    TailState { status, last_user }
+    TailState {
+        // 中断后挂着的提问已无意义，不再展示。
+        question: question.filter(|q| status.needs_you() && !q.is_empty()),
+        status,
+        last_user,
+        last_message,
+    }
+}
+
+/// `questions:[{title, options[]}]` → 「你想先做哪个平台？（先做电脑单机 / 先做网页游戏）」，多个问题用空格连接。
+fn async_question(item: &Value) -> Option<String> {
+    let parts: Vec<String> = item["questions"]
+        .as_array()?
+        .iter()
+        .filter_map(|q| {
+            let title = q["title"].as_str()?.trim();
+            let options: Vec<&str> = q["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            Some(if options.is_empty() {
+                title.to_string()
+            } else {
+                format!("{title}（{}）", options.join(" / "))
+            })
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -397,6 +450,12 @@ impl CodexScanner {
                         .or_else(|| c.meta.branch.clone()),
                     cwd,
                     last_activity_ms: c.sig.map(|(_, t)| to_ms(t)).unwrap_or(0),
+                    // 等你回答时展示问题本身，否则展示最后一条回复。
+                    last_message: c
+                        .tail
+                        .question
+                        .clone()
+                        .or_else(|| c.tail.last_message.clone()),
                     jump,
                 }
             })
@@ -443,6 +502,11 @@ mod tests {
         // 只看 turn 边界会把「等你回答」误判成「已完成」，用户就错过了提问。
         let state = tail(ASYNC_QUESTION);
         assert_eq!(state.status, Status::NeedsYou("等你回答".into()));
+        // 详情直接给出问题和选项，用户不切过去也知道在等什么。
+        assert_eq!(
+            state.question.as_deref(),
+            Some("你想先做哪个平台？（先做电脑单机 / 先做网页游戏）")
+        );
     }
 
     #[test]
@@ -451,11 +515,15 @@ mod tests {
         let state = tail(ANSWERED);
         assert_eq!(state.status, Status::Done);
         assert_eq!(state.last_user.as_deref(), Some("先做电脑单机"));
+        assert_eq!(state.question, None);
     }
 
     #[test]
     fn completed_turn_is_done() {
-        assert_eq!(tail(DONE).status, Status::Done);
+        let state = tail(DONE);
+        assert_eq!(state.status, Status::Done);
+        // 详情的「最后一条消息」取最后一条 agent 回复。
+        assert_eq!(state.last_message.as_deref(), Some("已检查完毕。"));
     }
 
     #[test]

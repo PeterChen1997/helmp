@@ -14,8 +14,10 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, bail};
 use notify::{RecursiveMode, Watcher as _};
 
-use crate::matcher::{self, Candidate};
-use crate::provider::{Action, Item, Provider};
+use objc2_app_kit::NSWorkspace;
+
+use crate::matcher::{self, Candidate, Match, MatchKind};
+use crate::provider::{Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider};
 
 /// 应用根目录下再往下找几层子目录（`/Applications/Utilities`、`/Applications/Setapp` 等）。
 const MAX_SUBDIR_DEPTH: usize = 2;
@@ -25,9 +27,16 @@ const REBUILD_DEBOUNCE: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 struct App {
     path: String,
+    /// 解析过符号链接的路径，用来和 `NSRunningApplication.bundleURL` 比较。
+    real_path: String,
     title: String,
-    subtitle: String,
-    names: Vec<Candidate>,
+    /// 与标题不同的英文名，显示在详情标题下（如「微信」下的 WeChat）。
+    english: Option<String>,
+    version: Option<String>,
+    /// 缩写了家目录的路径。
+    location: String,
+    /// (原文, 预处理结果)：原文用来判断命中的是不是标题。
+    names: Vec<(String, Candidate)>,
 }
 
 type Index = Arc<RwLock<Arc<Vec<App>>>>;
@@ -64,29 +73,167 @@ impl Provider for Apps {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
-        search(&apps, query)
+        search(&apps, query, running_app_paths)
     }
 }
 
-fn search(apps: &[App], query: &str) -> Vec<Item> {
-    apps.iter()
+/// `running` 只在有命中时调用一次，返回正在运行的应用路径。
+fn search(apps: &[App], query: &str, running: impl FnOnce() -> HashSet<String>) -> Vec<Item> {
+    let hits: Vec<(&App, &str, Match)> = apps
+        .iter()
         .filter_map(|app| {
-            let score = app
+            let (name, hit) = app
                 .names
                 .iter()
-                .filter_map(|name| matcher::score_candidate(query, name))
-                .max()?;
-            Some(Item {
-                id: format!("apps:{}", app.path),
-                title: app.title.clone(),
-                subtitle: app.subtitle.clone(),
-                badge: "应用".into(),
-                score,
-                action: Action::open(app.path.clone()),
-                ..Item::blank()
-            })
+                .filter_map(|(name, candidate)| {
+                    Some((name.as_str(), matcher::match_candidate(query, candidate)?))
+                })
+                .max_by_key(|(_, hit)| hit.score)?;
+            Some((app, name, hit))
         })
+        .collect();
+    if hits.is_empty() {
+        return Vec::new();
+    }
+    let running = running();
+    hits.into_iter()
+        .map(|(app, name, hit)| item(app, name, &hit, running.contains(&app.real_path)))
         .collect()
+}
+
+fn item(app: &App, name: &str, hit: &Match, running: bool) -> Item {
+    let mut actions = vec![
+        NamedAction::new("在访达中显示", Some("⌘↵"), reveal_action(&app.path)),
+        NamedAction::new("复制路径", Some("⌘⇧C"), copy_action(&app.path)),
+    ];
+    if running {
+        actions.push(NamedAction::new(
+            "退出应用",
+            Some("⌘Q"),
+            quit_action(app.real_path.clone()),
+        ));
+    }
+    Item {
+        id: format!("apps:{}", app.path),
+        title: app.title.clone(),
+        subtitle: hint(app, name, hit),
+        badge: "应用".into(),
+        score: hit.score,
+        action: Action::open(app.path.clone()),
+        action_title: "打开".into(),
+        icon: Icon::File(PathBuf::from(&app.path)),
+        actions,
+        detail: Some(detail(app, hit)),
+        ..Item::blank()
+    }
+}
+
+/// 副标题：拼音命中时告诉用户怎么打出来的（设计稿「拼音 weixin · 首字母 wx」），否则显示位置。
+fn hint(app: &App, name: &str, hit: &Match) -> String {
+    match &hit.pinyin {
+        Some(span) if span.whole => format!("拼音 {} · 首字母 {}", span.full, span.initials),
+        Some(span) if hit.kind == MatchKind::PinyinInitials => format!("首字母 {}", span.initials),
+        Some(span) => format!("拼音 {}", span.full),
+        // 命中的是英文名（输入 lark 找到「飞书」），把英文名带上，不然看不出为什么命中。
+        None if name != app.title => format!("{name} · {}", app.location),
+        None => app.location.clone(),
+    }
+}
+
+fn detail(app: &App, hit: &Match) -> Detail {
+    let line: Vec<String> = app
+        .english
+        .iter()
+        .cloned()
+        .chain(app.version.iter().map(|v| format!("版本 {v}")))
+        .collect();
+    Detail {
+        icon: Icon::File(PathBuf::from(&app.path)),
+        title: app.title.clone(),
+        tag: None,
+        blocks: if line.is_empty() {
+            Vec::new()
+        } else {
+            vec![Block::Text(line.join(" · "))]
+        },
+        metadata: vec![
+            ("位置".into(), app.location.clone()),
+            ("匹配方式".into(), hit.kind.label().into()),
+        ],
+    }
+}
+
+/// 在访达中选中这个文件 / 目录。
+pub(crate) fn reveal_action(path: &str) -> Action {
+    let path = path.to_string();
+    Action::new(move || {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .status()?;
+        anyhow::ensure!(status.success(), "在访达中显示 {path} 失败：{status}");
+        Ok(Outcome::Done)
+    })
+}
+
+/// 把文字写进系统剪贴板。
+pub(crate) fn copy_action(text: &str) -> Action {
+    let text = text.to_string();
+    Action::new(move || {
+        use std::io::Write as _;
+        // pbcopy 按 locale 解码输入：Helmp 可能从 LANG 为空的环境启动，中文路径会变成乱码。
+        let mut child = std::process::Command::new("pbcopy")
+            .env("LANG", "en_US.UTF-8")
+            .env("LC_ALL", "en_US.UTF-8")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .context("启动 pbcopy")?;
+        child
+            .stdin
+            .take()
+            .context("pbcopy 没有 stdin")?
+            .write_all(text.as_bytes())?;
+        let status = child.wait()?;
+        anyhow::ensure!(status.success(), "pbcopy 失败：{status}");
+        Ok(Outcome::Done)
+    })
+}
+
+/// 正在运行的应用的 bundle 路径。
+fn running_app_paths() -> HashSet<String> {
+    objc2::rc::autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .runningApplications()
+            .iter()
+            .filter_map(|app| Some(app.bundleURL()?.path()?.to_string()))
+            .collect()
+    })
+}
+
+/// 让应用正常退出（等同于在应用里按 ⌘Q，未保存的文档由应用自己提示）。
+fn quit_action(real_path: String) -> Action {
+    Action::new(move || {
+        let asked = objc2::rc::autoreleasepool(|_| {
+            let apps = NSWorkspace::sharedWorkspace().runningApplications();
+            let matching: Vec<_> = apps
+                .iter()
+                .filter(|app| {
+                    app.bundleURL()
+                        .and_then(|url| url.path())
+                        .is_some_and(|path| path.to_string() == real_path)
+                })
+                .collect();
+            if matching.is_empty() {
+                return None;
+            }
+            Some(matching.iter().all(|app| app.terminate()))
+        });
+        match asked {
+            None => bail!("{real_path} 已经没有在运行"),
+            Some(false) => bail!("{real_path} 拒绝退出"),
+            Some(true) => Ok(Outcome::Done),
+        }
+    })
 }
 
 fn roots(home: Option<&Path>) -> Vec<PathBuf> {
@@ -202,9 +349,9 @@ fn load_app(path: &Path, home: Option<&Path>) -> App {
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let english = localized::bundle_names(path).unwrap_or_else(|err| {
+    let info = localized::bundle_info(path).unwrap_or_else(|err| {
         eprintln!("helmp: apps 读取 Info.plist 失败：{err:#}");
-        Vec::new()
+        localized::BundleInfo::default()
     });
     let chinese = localized::chinese_name(path).unwrap_or_else(|err| {
         eprintln!("helmp: apps 读取中文名失败：{err:#}");
@@ -213,19 +360,36 @@ fn load_app(path: &Path, home: Option<&Path>) -> App {
 
     let title = chinese.clone().unwrap_or_else(|| stem.clone());
     let mut seen = HashSet::new();
-    let names = std::iter::once(stem)
-        .chain(english)
+    let names: Vec<String> = std::iter::once(stem)
+        .chain(info.names)
         .chain(chinese)
         .filter(|name| !name.trim().is_empty() && seen.insert(name.to_lowercase()))
-        .map(|name| Candidate::new(&name))
         .collect();
+    let english = names
+        .iter()
+        .find(|name| !name.eq_ignore_ascii_case(&title))
+        .cloned();
 
     let path_str = path.to_string_lossy().into_owned();
+    // 解析失败（如悬空的符号链接）就用原路径：只影响「退出应用」能否认出它在运行。
+    let real_path = path
+        .canonicalize()
+        .map(|real| real.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path_str.clone());
     App {
-        subtitle: abbreviate_home(&path_str, home),
+        location: abbreviate_home(&path_str, home),
+        real_path,
         path: path_str,
         title,
-        names,
+        english,
+        version: info.version,
+        names: names
+            .into_iter()
+            .map(|name| {
+                let candidate = Candidate::new(&name);
+                (name, candidate)
+            })
+            .collect(),
     }
 }
 
@@ -246,10 +410,23 @@ mod tests {
     fn app(path: &str, title: &str, names: &[&str]) -> App {
         App {
             path: path.into(),
+            real_path: path.into(),
             title: title.into(),
-            subtitle: path.into(),
-            names: names.iter().map(|name| Candidate::new(name)).collect(),
+            english: names
+                .iter()
+                .find(|name| !name.eq_ignore_ascii_case(title))
+                .map(|name| name.to_string()),
+            version: None,
+            location: path.into(),
+            names: names
+                .iter()
+                .map(|name| (name.to_string(), Candidate::new(name)))
+                .collect(),
         }
+    }
+
+    fn search(apps: &[App], query: &str) -> Vec<Item> {
+        super::search(apps, query, HashSet::new)
     }
 
     fn fixture() -> Vec<App> {
@@ -316,6 +493,92 @@ mod tests {
         assert_eq!(item.id, "apps:/Applications/Lark.app");
         assert_eq!(item.title, "飞书");
         assert_eq!(item.badge, "应用");
+    }
+
+    fn find<'a>(items: &'a [Item], title: &str) -> &'a Item {
+        items.iter().find(|item| item.title == title).unwrap()
+    }
+
+    #[test]
+    fn subtitle_explains_pinyin_hits() {
+        // 设计稿 Results：中文名靠拼音命中时，副标题说明是怎么打出来的，用户才知道 wx 就能找到微信。
+        let items = search(&fixture(), "wx");
+        assert_eq!(find(&items, "微信").subtitle, "拼音 weixin · 首字母 wx");
+        assert_eq!(find(&items, "微信开发者工具").subtitle, "首字母 wx");
+        // 命中英文名时带上英文名，否则「lark → 飞书」看起来像误中。
+        let items = search(&fixture(), "lark");
+        assert_eq!(
+            find(&items, "飞书").subtitle,
+            "Lark · /Applications/Lark.app"
+        );
+        // 直接命中标题时只给位置。
+        let items = search(&fixture(), "focus");
+        assert_eq!(
+            find(&items, "FocuSee").subtitle,
+            "/Applications/FocuSee.app"
+        );
+    }
+
+    #[test]
+    fn detail_shows_name_version_location_and_match_kind() {
+        // 详情区回答三个问题：这是哪个版本、装在哪、为什么被搜出来（两个同名应用时靠位置区分）。
+        let mut apps = fixture();
+        apps[0].version = Some("4.1.2".into());
+        let items = search(&apps, "wx");
+        let detail = find(&items, "微信").detail.clone().unwrap();
+        assert_eq!(
+            detail.icon,
+            Icon::File(PathBuf::from("/Applications/WeChat.app"))
+        );
+        assert_eq!(detail.title, "微信");
+        assert_eq!(detail.blocks, [Block::Text("WeChat · 版本 4.1.2".into())]);
+        assert_eq!(
+            detail.metadata,
+            [
+                ("位置".to_string(), "/Applications/WeChat.app".to_string()),
+                ("匹配方式".to_string(), "拼音首字母".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn quit_action_only_for_running_apps() {
+        // 「退出应用」只对正在运行的应用有意义；没运行时出现在 ⌘K 里，按了只会报错。
+        let titles = |items: &[Item], title: &str| -> Vec<String> {
+            find(items, title)
+                .actions
+                .iter()
+                .map(|a| a.title.clone())
+                .collect()
+        };
+        let idle = search(&fixture(), "lark");
+        assert_eq!(titles(&idle, "飞书"), ["在访达中显示", "复制路径"]);
+        let running = super::search(&fixture(), "lark", || {
+            HashSet::from(["/Applications/Lark.app".to_string()])
+        });
+        assert_eq!(
+            titles(&running, "飞书"),
+            ["在访达中显示", "复制路径", "退出应用"]
+        );
+        let item = find(&running, "飞书");
+        assert_eq!(item.action_title, "打开");
+        assert_eq!(
+            item.icon,
+            Icon::File(PathBuf::from("/Applications/Lark.app"))
+        );
+        let shortcuts: Vec<_> = item
+            .actions
+            .iter()
+            .map(|a| a.shortcut.as_deref().unwrap_or_default())
+            .collect();
+        assert_eq!(shortcuts, ["⌘↵", "⌘⇧C", "⌘Q"]);
+    }
+
+    #[test]
+    fn running_check_skipped_without_hits() {
+        // 查运行中的应用要走 AppKit；没有命中时不该付这个代价（每次按键都会查询）。
+        let items = super::search(&fixture(), "zzzz", || panic!("不该查询运行状态"));
+        assert!(items.is_empty());
     }
 
     #[test]
