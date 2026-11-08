@@ -13,7 +13,7 @@ macOS 原生启动器（Rust + GPUI），目标是 Spotlight 式应用启动、a
 | 截图与 OCR | `截图`、`ocr` | 区域截图、保存、识别文字（Vision，中英文）；需录屏权限 |
 | 脚本插件 | 标题前缀 + 参数 | 兼容 Raycast Script Commands；目录 `~/Library/Application Support/huan/scripts/` 或 `HUAN_SCRIPT_DIRS` |
 
-面板：`⌥Space` 唤起，↑↓ 选择，⏎ 执行，Esc 隐藏。
+面板：`⌥Space` 唤起，↑↓ 选择，⏎ 执行，Esc 隐藏。唤起时自动切到英文键盘 ABC，隐藏时切回原输入法（`HUAN_KEEP_INPUT_SOURCE=1` 关闭）。
 
 ## 运行
 
