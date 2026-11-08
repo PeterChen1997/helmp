@@ -159,6 +159,19 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         println!("self-test hide-latency: {} ms", started.elapsed().as_millis());
         report("after-hide".into(), cx);
 
+        // HUAN_SELF_TEST_RESHOW=<秒>：隐藏后等这么久再唤起，检查上次输入是被保留还是清空。
+        if let Some(secs) = std::env::var("HUAN_SELF_TEST_RESHOW").ok().and_then(|s| s.parse().ok()) {
+            cx.background_executor().timer(Duration::from_secs(secs)).await;
+            toggle(window, launcher.clone(), cx);
+            cx.background_executor().timer(settle).await;
+            let launcher = launcher.clone();
+            window
+                .update(cx, move |_, _, cx| {
+                    println!("self-test reshow after {secs}s: query={:?}", launcher.read(cx).query());
+                })
+                .expect("launcher window gone");
+        }
+
         cx.update(|cx| cx.quit());
     })
     .detach();

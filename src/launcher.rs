@@ -2,7 +2,7 @@
 //! 键盘：↑↓ 选择，⏎ 执行，Esc 隐藏；窗口失去 key 时隐藏。
 //! 执行结果：先隐藏面板，后台跑 Action；返回 `Outcome::Message` 时重新打开面板展示文字。
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::*;
@@ -13,6 +13,26 @@ use crate::engine::Engine;
 use crate::provider::{Item, Outcome};
 
 const ROW_HEIGHT: Pixels = px(44.);
+/// 隐藏超过这么久再唤起，就清空上次输入回到空白搜索（参考 Raycast「Pop to Root Search」默认 90 秒）。
+/// `HUAN_RESET_AFTER_SECS` 可覆盖，0 表示每次唤起都清空。
+const DEFAULT_RESET_AFTER: Duration = Duration::from_secs(90);
+
+fn reset_after() -> Duration {
+    std::env::var("HUAN_RESET_AFTER_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_RESET_AFTER)
+}
+
+/// 唤起时是否清空上次输入。
+/// - 刚执行过一个结果（`executed`）：任务已完成，下次唤起是新任务，清空。
+/// - 隐藏时长达到阈值：大概率是新的意图，清空。
+/// - 否则保留上次输入（调用方会全选它，直接打字即替换），方便改一下再搜。
+fn should_reset(hidden_for: Option<Duration>, reset_after: Duration, executed: bool) -> bool {
+    executed || hidden_for.is_some_and(|hidden_for| hidden_for >= reset_after)
+}
+
 /// 面板可见时定期重查，让 agent 状态、剪贴板等后台变化反映到列表。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -26,6 +46,9 @@ pub struct Launcher {
     revision: u64,
     message: Option<String>,
     visible: bool,
+    hidden_at: Option<Instant>,
+    /// 上次唤起后执行过结果，下次唤起清空。
+    executed: bool,
     input_source: crate::input_source::InputSourceSwitch,
     scroll: UniformListScrollHandle,
     _refresh: Task<()>,
@@ -86,6 +109,8 @@ impl Launcher {
             revision: 0,
             message: None,
             visible: false,
+            hidden_at: None,
+            executed: false,
             input_source: Default::default(),
             scroll: UniformListScrollHandle::new(),
             _refresh: refresh,
@@ -99,6 +124,10 @@ impl Launcher {
 
     pub fn input_is_focused(&self, window: &Window, cx: &App) -> bool {
         self.input.read(cx).focus_handle(cx).is_focused(window)
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
     }
 
     pub fn message(&self) -> Option<&str> {
@@ -130,6 +159,22 @@ impl Launcher {
     pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.show");
         self.visible = true;
+        let hidden_for = self.hidden_at.take().map(|at| at.elapsed());
+        if should_reset(
+            hidden_for,
+            reset_after(),
+            std::mem::take(&mut self.executed),
+        ) {
+            crate::trace::log("reset query");
+            self.input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.query.clear();
+            self.selected = 0;
+            self.message = None;
+        } else if !self.query.is_empty() {
+            self.input
+                .update(cx, |input, cx| input.select_all(window, cx));
+        }
         crate::panel::show(window, cx);
         self.input_source.on_show();
         self.input.read(cx).focus_handle(cx).focus(window, cx);
@@ -140,6 +185,7 @@ impl Launcher {
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.hide");
         self.visible = false;
+        self.hidden_at = Some(Instant::now());
         crate::panel::hide(window);
         self.input_source.on_hide();
         cx.notify();
@@ -202,6 +248,7 @@ impl Launcher {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let action = item.action.clone();
             let outcome = cx.background_spawn(async move { action.run() }).await;
+            let _ = this.update(cx, |this, _| this.executed = true);
             let message = match outcome {
                 Ok(Outcome::Done) => None,
                 Ok(Outcome::Message(message)) => Some(message),
@@ -352,5 +399,45 @@ impl Render for Launcher {
                     .child(Input::new(&self.input).appearance(false).large()),
             )
             .child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不用 `super::*`：那会把 gpui 的 `test` 宏一起导进来，盖掉标准 `#[test]`。
+    use std::time::Duration;
+
+    use super::should_reset;
+
+    const LIMIT: Duration = Duration::from_secs(90);
+
+    #[test]
+    fn keeps_query_when_reopened_quickly() {
+        // 刚关掉又唤起，多半是想接着改上次的搜索，清掉会逼用户重打。
+        assert!(!should_reset(Some(Duration::from_secs(5)), LIMIT, false));
+    }
+
+    #[test]
+    fn clears_query_after_reset_window() {
+        // 隔了一段时间再唤起是新意图，残留旧词会让第一屏结果全是无关内容。
+        assert!(should_reset(Some(Duration::from_secs(90)), LIMIT, false));
+        assert!(should_reset(Some(Duration::from_secs(600)), LIMIT, false));
+    }
+
+    #[test]
+    fn clears_query_after_executing_a_result() {
+        // 打开了微信就算任务完成，下次唤起不应还停在「wx」上。
+        assert!(should_reset(Some(Duration::from_secs(1)), LIMIT, true));
+    }
+
+    #[test]
+    fn zero_limit_always_clears() {
+        // HUAN_RESET_AFTER_SECS=0 的语义是「每次都是新的」。
+        assert!(should_reset(Some(Duration::ZERO), Duration::ZERO, false));
+    }
+
+    #[test]
+    fn first_show_has_nothing_to_clear() {
+        assert!(!should_reset(None, LIMIT, false));
     }
 }
