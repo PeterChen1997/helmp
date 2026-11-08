@@ -1,4 +1,4 @@
-//! 执行脚本：选解释器、限时运行、按 mode 把输出变成 `Outcome`。
+//! 执行脚本：选解释器、限时运行、按 mode 取出要展示的输出。
 //!
 //! 熔断参考 `_research/launcher/08-plugin-system-best-practices.md`：
 //! 脚本是一次性命令（非每键查询），给 30 秒（与 Steward net 请求上限同值）；
@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::header::Mode;
-use crate::provider::Outcome;
 
 /// 单次执行的硬上限。
 pub const TIMEOUT: Duration = Duration::from_secs(30);
@@ -213,8 +212,9 @@ fn last_lines(text: &str, count: usize) -> String {
         .join("\n")
 }
 
-/// 按 mode 处理输出；非零退出码一律报错并带 stderr 尾部。
-pub fn outcome(title: &str, mode: Mode, output: &RunOutput) -> Result<Outcome> {
+/// 按 mode 取要展示的输出：silent 返回 `None`（跑完不打扰），其余返回文本。
+/// 非零退出码一律报错并带 stderr 尾部。
+pub fn shown_output(title: &str, mode: Mode, output: &RunOutput) -> Result<Option<String>> {
     if !output.status.success() {
         let how = match (output.status.code(), output.status.signal()) {
             (Some(code), _) => format!("退出码 {code}"),
@@ -233,8 +233,9 @@ pub fn outcome(title: &str, mode: Mode, output: &RunOutput) -> Result<Outcome> {
             anyhow!("脚本「{title}」失败，{how}：\n{tail}")
         });
     }
+    let nothing = || format!("「{title}」已完成（没有输出）");
     Ok(match mode {
-        Mode::Silent => Outcome::Done,
+        Mode::Silent => None,
         Mode::Compact | Mode::Inline => {
             let last = output
                 .stdout
@@ -242,20 +243,18 @@ pub fn outcome(title: &str, mode: Mode, output: &RunOutput) -> Result<Outcome> {
                 .rev()
                 .map(str::trim)
                 .find(|line| !line.is_empty());
-            Outcome::Message(
-                last.map_or_else(|| format!("「{title}」已完成（没有输出）"), str::to_string),
-            )
+            Some(last.map_or_else(nothing, str::to_string))
         }
         Mode::FullOutput => {
             let parts: Vec<&str> = [output.stdout.trim_end(), output.stderr.trim_end()]
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .collect();
-            if parts.is_empty() {
-                Outcome::Message(format!("「{title}」已完成（没有输出）"))
+            Some(if parts.is_empty() {
+                nothing()
             } else {
-                Outcome::Message(parts.join("\n"))
-            }
+                parts.join("\n")
+            })
         }
     })
 }
@@ -278,22 +277,24 @@ mod tests {
     fn modes_shape_the_output() {
         // mode 决定用户看到什么：silent 不打扰，compact 只要结论，fullOutput 要全文（含 stderr 里的诊断）。
         let ok = output(0, "第一行\n结果 42\n\n", "warn: x\n");
-        assert_eq!(outcome("t", Mode::Silent, &ok).unwrap(), Outcome::Done);
+        assert_eq!(shown_output("t", Mode::Silent, &ok).unwrap(), None);
         assert_eq!(
-            outcome("t", Mode::Compact, &ok).unwrap(),
-            Outcome::Message("结果 42".into())
+            shown_output("t", Mode::Compact, &ok).unwrap().as_deref(),
+            Some("结果 42")
         );
         assert_eq!(
-            outcome("t", Mode::Inline, &ok).unwrap(),
-            Outcome::Message("结果 42".into())
+            shown_output("t", Mode::Inline, &ok).unwrap().as_deref(),
+            Some("结果 42")
         );
         assert_eq!(
-            outcome("t", Mode::FullOutput, &ok).unwrap(),
-            Outcome::Message("第一行\n结果 42\nwarn: x".into())
+            shown_output("t", Mode::FullOutput, &ok).unwrap().as_deref(),
+            Some("第一行\n结果 42\nwarn: x")
         );
         assert_eq!(
-            outcome("t", Mode::Compact, &output(0, "", "")).unwrap(),
-            Outcome::Message("「t」已完成（没有输出）".into())
+            shown_output("t", Mode::Compact, &output(0, "", ""))
+                .unwrap()
+                .as_deref(),
+            Some("「t」已完成（没有输出）")
         );
     }
 
@@ -301,7 +302,7 @@ mod tests {
     fn non_zero_exit_is_an_error_with_stderr_tail() {
         // 失败要大声：即使是 silent 脚本，非零退出也必须让用户看到原因。
         let stderr: String = (1..=30).map(|i| format!("line {i}\n")).collect();
-        let err = outcome("t", Mode::Silent, &output(3, "", &stderr)).unwrap_err();
+        let err = shown_output("t", Mode::Silent, &output(3, "", &stderr)).unwrap_err();
         let message = format!("{err}");
         assert!(message.contains("退出码 3"), "{message}");
         assert!(message.contains("line 30") && message.contains("line 21"));

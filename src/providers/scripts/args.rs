@@ -1,8 +1,9 @@
-//! 从查询文本里取脚本参数。启动器没有参数表单，约定：
+//! 脚本参数：表单里每个参数一个字段，初值从查询文本里取。约定：
 //! 查询以脚本标题（或 packageName）开头时，余下文本就是参数；
 //! 多个参数按空白切分，最后一个参数吃掉剩余全部文本。
+//! 执行时以表单值为准（`from_values`），同样做必填、可选项与 URL 编码检查。
 
-use super::header::{ArgKind, Argument};
+use super::header::{ArgKind, Argument, DropdownOption};
 
 /// 参数不满足声明时的说明，用于 subtitle 和执行时的提示。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,13 +50,37 @@ pub fn split(text: &str, count: usize) -> Vec<String> {
     pieces
 }
 
-/// 把参数文本对应到声明的参数上，返回按位置传给脚本的值（可选参数缺省传空串，与 Raycast 一致）。
-pub fn resolve(arguments: &[Argument], text: &str) -> Result<Vec<String>, ArgError> {
+/// 表单初值：查询里的参数文本按位置切开；dropdown 认 title 或 value，给出 value，认不出给空串
+/// （表单会落到第一个选项）。不做必填检查——那是执行时的事。
+pub fn initial_values(arguments: &[Argument], text: &str) -> Vec<String> {
     let pieces = split(text, arguments.len());
+    arguments
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| {
+            let raw = pieces.get(index).map(String::as_str).unwrap_or_default();
+            match &argument.kind {
+                ArgKind::Dropdown(options) => find_option(options, raw)
+                    .map(|option| option.value.clone())
+                    .unwrap_or_default(),
+                ArgKind::Text | ArgKind::Password => raw.to_string(),
+            }
+        })
+        .collect()
+}
+
+fn find_option<'a>(options: &'a [DropdownOption], raw: &str) -> Option<&'a DropdownOption> {
+    options
+        .iter()
+        .find(|o| o.value.eq_ignore_ascii_case(raw) || o.title.eq_ignore_ascii_case(raw))
+}
+
+/// 按位置给出的参数值（表单值，或从查询切出的片段）→ 传给脚本的值。空串视为没填。
+pub fn from_values(arguments: &[Argument], given: &[String]) -> Result<Vec<String>, ArgError> {
     let mut values = Vec::with_capacity(arguments.len());
     let mut missing = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
-        let Some(raw) = pieces.get(index) else {
+        let Some(raw) = given.get(index).filter(|raw| !raw.is_empty()) else {
             if !argument.optional {
                 missing.push(argument.placeholder.clone());
             }
@@ -63,9 +88,7 @@ pub fn resolve(arguments: &[Argument], text: &str) -> Result<Vec<String>, ArgErr
             continue;
         };
         let value = match &argument.kind {
-            ArgKind::Dropdown(options) => options
-                .iter()
-                .find(|o| o.value.eq_ignore_ascii_case(raw) || o.title.eq_ignore_ascii_case(raw))
+            ArgKind::Dropdown(options) => find_option(options, raw)
                 .map(|o| o.value.clone())
                 .ok_or_else(|| ArgError::InvalidChoice {
                     placeholder: argument.placeholder.clone(),
@@ -125,7 +148,11 @@ pub fn percent_encode(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::scripts::header::DropdownOption;
+
+    /// 一行参数文本 → 传给脚本的值（「标题 + 参数」直接回车、命令行 run 走的就是这条路）。
+    fn resolve(arguments: &[Argument], text: &str) -> Result<Vec<String>, ArgError> {
+        from_values(arguments, &split(text, arguments.len()))
+    }
 
     fn text(placeholder: &str, optional: bool) -> Argument {
         Argument {
@@ -188,6 +215,44 @@ mod tests {
             resolve(&args, "first"),
             Err(ArgError::InvalidChoice { .. })
         ));
+    }
+
+    #[test]
+    fn form_initial_values_and_submitted_values() {
+        // 表单初值来自「标题 + 余下文本」：dropdown 要预选到对应项（存 value），认不出就留空让表单落到第一项；
+        // 提交时空字段等于没填，必填项照样要拦下。
+        let args = [
+            text("from", false),
+            Argument {
+                kind: ArgKind::Dropdown(vec![DropdownOption {
+                    title: "Business".into(),
+                    value: "b".into(),
+                }]),
+                placeholder: "class".into(),
+                optional: true,
+                percent_encoded: false,
+            },
+        ];
+        assert_eq!(
+            initial_values(&args, "北京 business"),
+            vec!["北京".to_string(), "b".to_string()]
+        );
+        assert_eq!(
+            initial_values(&args, "北京 头等舱"),
+            vec!["北京".to_string(), String::new()]
+        );
+        assert_eq!(
+            initial_values(&args, ""),
+            vec![String::new(), String::new()]
+        );
+        assert_eq!(
+            from_values(&args, &[String::new(), "b".into()]),
+            Err(ArgError::Missing(vec!["from".into()]))
+        );
+        assert_eq!(
+            from_values(&args, &["上海 浦东".into(), String::new()]),
+            Ok(vec!["上海 浦东".into(), String::new()])
+        );
     }
 
     #[test]
