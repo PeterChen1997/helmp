@@ -1125,7 +1125,13 @@ impl Launcher {
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(pal.muted)
-                        .child(item.badge.clone())
+                        .child(if self.scope.is_some() {
+                            // 范围内（如 Agent 会话）的小节标题带数量：「等你处理 · 2」。
+                            let count = self.items.iter().filter(|i| i.badge == item.badge).count();
+                            format!("{} · {count}", item.badge)
+                        } else {
+                            item.badge.clone()
+                        })
                         .into_any_element(),
                 );
             }
