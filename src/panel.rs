@@ -6,6 +6,8 @@
 //! - 毛玻璃：GPUI 的 Blurred 背景做不出圆角，这里在 GPUI 的视图下面垫一层
 //!   `NSVisualEffectView`（材质 popover，跟随系统明暗），用圆角遮罩图裁成设计稿的 24 px 圆角，
 //!   窗口本身透明、阴影跟随遮罩形状。GPUI 只画半透明的内容层。
+//! - 定位：每次显示前按 `config.general.panel_screen` 选屏（鼠标所在屏或主屏），
+//!   水平居中、顶边落在可见区域自上而下 1/4 处（类 Spotlight）。坐标换算是纯函数，见测试。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,10 +17,13 @@ use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSImage, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+    NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSEvent, NSImage, NSScreen, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow,
 };
-use objc2_foundation::{NSEdgeInsets, NSRect, NSSize};
+use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize};
+
+use crate::config::PanelScreen;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// 面板圆角，与设计稿一致。
@@ -91,6 +96,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
         // 隐藏期间 GPUI 不重绘，显示前标脏，避免闪出上一帧。
         view.setNeedsDisplay(true);
     }
+    position(&ns_window);
     ns_window.makeKeyAndOrderFront(None);
     crate::trace::log(format!(
         "panel.show 非激活方式后：is_key={}",
@@ -120,6 +126,66 @@ pub fn hide(window: &mut Window) {
     }
 }
 
+/// 按配置把面板挪到目标屏幕上。拿不到屏幕信息时保持原位并说明。
+fn position(ns_window: &NSWindow) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        eprintln!("helmp: 不在主线程，面板不重新定位");
+        return;
+    };
+    let screens: Vec<(NSRect, NSRect)> = NSScreen::screens(mtm)
+        .iter()
+        .map(|screen| (screen.frame(), screen.visibleFrame()))
+        .collect();
+    let frames: Vec<NSRect> = screens.iter().map(|(frame, _)| *frame).collect();
+    let prefer = crate::config::get().general.panel_screen;
+    let Some(index) = pick_screen(&frames, NSEvent::mouseLocation(), prefer) else {
+        eprintln!("helmp: 没有可用的屏幕，面板不重新定位");
+        return;
+    };
+    let (_, visible) = screens[index];
+    let origin = panel_origin(visible, ns_window.frame().size);
+    crate::trace::log(format!(
+        "panel.position screen={index} origin=({}, {})",
+        origin.x, origin.y
+    ));
+    ns_window.setFrameOrigin(origin);
+}
+
+/// 选屏。`frames` 是 `NSScreen.screens` 的 frame（AppKit 全局坐标，原点在主屏左下，
+/// y 向上；第一个是带菜单栏的主屏）。鼠标不在任何屏上（理论上不会）时退回主屏。
+pub fn pick_screen(frames: &[NSRect], mouse: NSPoint, prefer: PanelScreen) -> Option<usize> {
+    if frames.is_empty() {
+        return None;
+    }
+    if prefer == PanelScreen::Primary {
+        return Some(0);
+    }
+    // 包含右 / 上边界：鼠标顶到屏幕最上沿时 y 恰好等于 maxY，NSPointInRect 会判为不在屏内。
+    let contains = |rect: &NSRect| {
+        mouse.x >= rect.origin.x
+            && mouse.x <= rect.origin.x + rect.size.width
+            && mouse.y >= rect.origin.y
+            && mouse.y <= rect.origin.y + rect.size.height
+    };
+    Some(frames.iter().position(contains).unwrap_or(0))
+}
+
+/// 面板左下角在 AppKit 坐标里的位置：在 `visible`（屏幕去掉菜单栏和 Dock 的区域）里水平居中，
+/// 顶边位于自上而下 1/4 处；放不下时贴着可见区域，宁可超出底部也不盖住菜单栏。
+pub fn panel_origin(visible: NSRect, size: NSSize) -> NSPoint {
+    let x = visible.origin.x + (visible.size.width - size.width) / 2.0;
+    let top_edge = visible.origin.y + visible.size.height;
+    let top = top_edge - visible.size.height / 4.0;
+    let mut y = top - size.height;
+    if y < visible.origin.y {
+        y = visible.origin.y;
+    }
+    if y + size.height > top_edge {
+        y = top_edge - size.height;
+    }
+    NSPoint::new(x.round(), y.round())
+}
+
 pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
@@ -129,4 +195,88 @@ pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
     // 我们只在主线程（GPUI 的窗口回调里）借用它。
     let view: &NSView = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
     view.window()
+}
+
+#[cfg(test)]
+mod tests {
+    // gpui_kit::* 里也有一个 `test` 属性宏，经 `super::*` 引入后会遮住标准库的。
+    use core::prelude::v1::test;
+
+    use super::*;
+
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(w, h))
+    }
+
+    /// 主屏 1512×982 在原点；外接屏 2560×1440 在右侧且底边更低；第三块竖屏在主屏上方。
+    fn screens() -> Vec<NSRect> {
+        vec![
+            rect(0.0, 0.0, 1512.0, 982.0),
+            rect(1512.0, -300.0, 2560.0, 1440.0),
+            rect(200.0, 982.0, 1080.0, 1920.0),
+        ]
+    }
+
+    #[test]
+    fn follows_the_mouse_across_screens() {
+        // 多屏用户在哪块屏上按快捷键，面板就该出现在哪块屏上；选错屏等于面板「没出来」。
+        let frames = screens();
+        let at = |x, y| pick_screen(&frames, NSPoint::new(x, y), PanelScreen::Mouse);
+        assert_eq!(at(100.0, 100.0), Some(0));
+        // 外接屏在主屏原点以下的部分（AppKit y 为负）。
+        assert_eq!(at(2000.0, -200.0), Some(1));
+        // 主屏上方的竖屏。
+        assert_eq!(at(500.0, 2500.0), Some(2));
+        // 鼠标顶到竖屏最上沿：y == maxY 仍算在这块屏上。
+        assert_eq!(at(500.0, 982.0 + 1920.0), Some(2));
+        // 不在任何屏上时退回主屏。
+        assert_eq!(at(-5000.0, 0.0), Some(0));
+    }
+
+    #[test]
+    fn primary_preference_ignores_the_mouse() {
+        // 用户选了「主屏幕」，鼠标在副屏上也要回到主屏。
+        let frames = screens();
+        let mouse = NSPoint::new(2000.0, 0.0);
+        assert_eq!(pick_screen(&frames, mouse, PanelScreen::Primary), Some(0));
+        assert_eq!(pick_screen(&[], mouse, PanelScreen::Mouse), None);
+    }
+
+    #[test]
+    fn centers_horizontally_with_top_at_a_quarter() {
+        // 类 Spotlight：水平居中、顶边在可见区域上 1/4 处。
+        // 主屏可见区域去掉了 37 的菜单栏：y 0..945。
+        let visible = rect(0.0, 0.0, 1512.0, 945.0);
+        let origin = panel_origin(visible, NSSize::new(880.0, 540.0));
+        assert_eq!(origin.x, 316.0);
+        // 顶边 = 945 - 945/4 = 708.75，左下角 y = 708.75 - 540 = 168.75 → 169。
+        assert_eq!(origin.y, 169.0);
+    }
+
+    #[test]
+    fn positions_on_a_secondary_screen_with_negative_origin() {
+        // 副屏的坐标可以是负数；算错就会把面板放到两块屏之间。
+        let visible = rect(1512.0, -300.0, 2560.0, 1415.0);
+        let size = NSSize::new(880.0, 540.0);
+        let origin = panel_origin(visible, size);
+        assert_eq!(origin.x, 1512.0 + 840.0);
+        let top = origin.y + size.height;
+        let expected_top = -300.0 + 1415.0 - 1415.0 / 4.0;
+        assert!((top - expected_top).abs() <= 0.5, "top={top}");
+        assert!(origin.x >= visible.origin.x);
+        assert!(origin.x + size.width <= visible.origin.x + visible.size.width);
+    }
+
+    #[test]
+    fn small_screen_never_covers_the_menu_bar() {
+        // 可见区域比面板还矮时，宁可超出底部，也不能盖住菜单栏（那样就点不到菜单栏图标了）。
+        let visible = rect(0.0, 0.0, 1024.0, 500.0);
+        let size = NSSize::new(880.0, 540.0);
+        let origin = panel_origin(visible, size);
+        assert_eq!(origin.y + size.height, 500.0);
+        // 稍矮一点的屏幕：1/4 处放不下时贴底，但仍完整在可见区域内。
+        let visible = rect(0.0, 0.0, 1024.0, 600.0);
+        let origin = panel_origin(visible, size);
+        assert_eq!(origin.y, 0.0);
+    }
 }
