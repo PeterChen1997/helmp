@@ -245,6 +245,12 @@ impl Launcher {
         &self.items
     }
 
+    /// 自检用：回到根视图（退出范围、清空输入与结果）。
+    pub fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset(window, cx);
+        self.refresh(cx);
+    }
+
     /// 自检用：等价于用户在输入框里敲入 `query`。
     pub fn set_query(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| {

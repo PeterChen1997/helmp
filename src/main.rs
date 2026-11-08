@@ -199,7 +199,11 @@ fn set_query(window: AnyWindowHandle, launcher: Entity<Launcher>, query: &str, c
     let query = query.to_string();
     window
         .update(cx, move |_, window, cx| {
-            launcher.update(cx, |launcher, cx| launcher.set_query(&query, window, cx));
+            launcher.update(cx, |launcher, cx| {
+                // 每个查询都从根视图开始，免得上一个查询进入的范围（如「cb 」）吞掉后面的查询。
+                launcher.reset_view(window, cx);
+                launcher.set_query(&query, window, cx)
+            });
         })
         .expect("launcher window gone");
 }
