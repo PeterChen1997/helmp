@@ -6,6 +6,7 @@ mod builtin;
 mod clipboard;
 mod screenshot;
 mod scripts;
+mod translate;
 
 use std::sync::Arc;
 
@@ -19,5 +20,6 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(clipboard::Clipboard::new()),
         Arc::new(scripts::Scripts::new()),
         Arc::new(agents::Agents::default()),
+        Arc::new(translate::Translate::default()),
     ]
 }
