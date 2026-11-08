@@ -70,10 +70,17 @@ fn run_gui(engine: Engine) {
                 ..Default::default()
             };
 
-            let (window, launcher) = gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| Launcher::new(engine, window, cx))
-            })
-            .expect("failed to open launcher window");
+            // 不用 gpui_kit::open_window：它的 Root 会铺一层不透明的主题底色，盖住毛玻璃。
+            let mut launcher = None;
+            let window: AnyWindowHandle = cx
+                .open_window(options, |window, cx| {
+                    let view = cx.new(|cx| Launcher::new(engine, window, cx));
+                    launcher = Some(view.clone());
+                    cx.new(|cx| gpui_kit::base::Root::new(view, window, cx).bg(transparent_black()))
+                })
+                .expect("failed to open launcher window")
+                .into();
+            let launcher = launcher.expect("launcher view not built");
             window
                 .update(cx, |_, window, _| panel::install_glass(window))
                 .expect("launcher window gone");

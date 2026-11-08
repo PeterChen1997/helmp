@@ -9,7 +9,7 @@
 //! （Loungy 的做法）。菜单栏通过 [`active`] 读取真实生效的快捷键来显示。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
@@ -493,6 +493,7 @@ pub fn register_toggle(
     publish(&registry);
 
     let (changed_tx, changed_rx) = mpsc::channel::<()>();
+    let _ = RECHECK.set(std::sync::Mutex::new(changed_tx.clone()));
     crate::config::subscribe(move |_| {
         // 接收端在轮询任务里，进程结束前一直存在；发送失败只可能发生在退出途中。
         let _ = changed_tx.send(());
@@ -515,7 +516,13 @@ pub fn register_toggle(
             }
             if changed_rx.try_recv().is_ok() {
                 while changed_rx.try_recv().is_ok() {}
-                let wanted_now = wanted(&crate::config::get());
+                // 设置窗口录制快捷键期间注销全部全局热键：Carbon 热键会在系统层吞掉按键，
+                // 不注销的话用户按下当前的唤起键（如 ⌥Space）录到的不是组合，而是面板被唤起。
+                let wanted_now = if SUSPENDED.load(Ordering::Relaxed) {
+                    Vec::new()
+                } else {
+                    wanted(&crate::config::get())
+                };
                 report(registry.apply(&manager, &wanted_now));
                 publish(&registry);
             }
@@ -525,6 +532,21 @@ pub fn register_toggle(
     .detach();
 
     Ok(())
+}
+
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
+static RECHECK: std::sync::OnceLock<std::sync::Mutex<mpsc::Sender<()>>> =
+    std::sync::OnceLock::new();
+
+/// 暂停 / 恢复全部全局热键（设置窗口录制快捷键时用）。
+pub fn set_suspended(suspended: bool) {
+    if SUSPENDED.swap(suspended, Ordering::Relaxed) == suspended {
+        return;
+    }
+    crate::trace::log(format!("hotkeys suspended={suspended}"));
+    if let Some(tx) = RECHECK.get() {
+        let _ = tx.lock().expect("hotkey recheck poisoned").send(());
+    }
 }
 
 // ======================= 执行命令 =======================

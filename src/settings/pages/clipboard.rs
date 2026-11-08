@@ -15,7 +15,47 @@ use crate::style::Palette;
 
 /// 清空全部剪贴板历史的实现。剪贴板插件目前没有对外的清空接口，按钮保持禁用；
 /// 接口就绪后把这里换成 `Some(crate::providers::clipboard::clear_all)` 即可（见报告）。
-const CLEAR_HISTORY: Option<fn() -> anyhow::Result<()>> = None;
+const CLEAR_HISTORY: Option<fn() -> anyhow::Result<()>> = Some(clear_history);
+
+fn clear_history() -> anyhow::Result<()> {
+    crate::providers::clipboard::clear_history().map(|_| ())
+}
+
+/// 「共 3,482 条 · 占用 46 MB」。读不到时不显示，原因打到 stderr。
+fn stats_label() -> Option<String> {
+    match crate::providers::clipboard::history_stats() {
+        Ok((count, bytes)) => Some(format!(
+            "共 {} 条 · 占用 {}",
+            thousands(count),
+            human_size(bytes)
+        )),
+        Err(err) => {
+            eprintln!("helmp: 读取剪贴板统计失败：{err:#}");
+            None
+        }
+    }
+}
+
+fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn human_size(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    if bytes as f64 >= MB {
+        format!("{:.0} MB", bytes as f64 / MB)
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
+}
 
 impl SettingsView {
     pub(in crate::settings) fn render_clipboard(
@@ -154,6 +194,9 @@ impl SettingsView {
                     ))
                     .when(CLEAR_HISTORY.is_none(), |el| {
                         el.child(widgets::help_text("剪贴板插件尚未提供清空接口", pal))
+                    })
+                    .when_some(stats_label(), |el, label| {
+                        el.child(widgets::help_text(label, pal))
                     }),
             )
             .into_any_element()

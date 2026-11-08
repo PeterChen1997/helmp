@@ -81,8 +81,14 @@ struct Poller {
 impl Poller {
     fn refresh(&mut self, sessions: &RwLock<Vec<Session>>) {
         let mut warnings = Warnings::new();
-        let mut found = self.claude.scan(&mut warnings);
-        found.extend(self.codex.scan(&mut warnings));
+        // 设置 › Agent 里的来源开关（未配置视为开启）。
+        let mut found = Vec::new();
+        if crate::config::extension_enabled("agents.claude") {
+            found.extend(self.claude.scan(&mut warnings));
+        }
+        if crate::config::extension_enabled("agents.codex") {
+            found.extend(self.codex.scan(&mut warnings));
+        }
         *sessions.write().expect("agents 缓存锁中毒") = found;
 
         let current: HashSet<String> = warnings.into_iter().collect();

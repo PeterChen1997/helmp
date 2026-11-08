@@ -1559,6 +1559,8 @@ impl Launcher {
 
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 输入框等 GPUI Kit 组件跟随明暗（只在模式真的变化时切换全局主题）。
+        crate::settings::sync_component_theme(window, cx);
         self.sync_form(window, cx);
         let pal = style::palette(window);
         let layout = self.layout();

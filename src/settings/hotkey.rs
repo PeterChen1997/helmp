@@ -212,6 +212,7 @@ impl HotkeyRecorder {
     }
 
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::hotkey::set_suspended(true);
         self.recording = true;
         self.hint = None;
         self.focus.focus(window, cx);
@@ -219,6 +220,7 @@ impl HotkeyRecorder {
     }
 
     fn stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::hotkey::set_suspended(false);
         self.recording = false;
         self.hint = None;
         self.held = Modifiers::default();
@@ -356,6 +358,15 @@ impl HotkeyRecorder {
             );
         }
         field.into_any_element()
+    }
+}
+
+/// 录制中途窗口被关掉时也要恢复全局热键，否则 Helmp 会一直没有快捷键。
+impl Drop for HotkeyRecorder {
+    fn drop(&mut self) {
+        if self.recording {
+            crate::hotkey::set_suspended(false);
+        }
     }
 }
 

@@ -145,14 +145,27 @@ impl Engine {
     /// 查询是否以某个范围的前缀开头（如 `cb `），返回范围与去掉前缀后的文本。
     pub fn resolve_prefix(&self, query: &str) -> Option<(Scope, String)> {
         let lower = query.to_lowercase();
-        self.scopes().into_iter().find_map(|scope| {
-            let prefix = scope
-                .prefixes
-                .iter()
-                .find(|prefix| lower.starts_with(prefix.as_str()))?;
-            let rest = query.get(prefix.len()..).unwrap_or_default().to_string();
-            Some((scope, rest))
-        })
+        let config = crate::config::get();
+        self.enabled()
+            .filter_map(|provider| provider.scope())
+            .find_map(|scope| {
+                // 设置 › 扩展里的别名也能当前缀用：别名 `j` → 输入「j 」进入。
+                let alias = self
+                    .providers
+                    .iter()
+                    .find(|p| p.scope().is_some_and(|s| s.id == scope.id))
+                    .and_then(|p| config.extensions.get(p.id()))
+                    .and_then(|ext| ext.alias.clone())
+                    .filter(|alias| !alias.trim().is_empty())
+                    .map(|alias| format!("{} ", alias.trim().to_lowercase()));
+                let prefix = scope
+                    .prefixes
+                    .iter()
+                    .chain(alias.iter())
+                    .find(|prefix| lower.starts_with(prefix.as_str()))?;
+                let rest = query.get(prefix.len()..).unwrap_or_default().to_string();
+                Some((scope, rest))
+            })
     }
 
     pub fn provider_ids(&self) -> Vec<&'static str> {
