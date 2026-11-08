@@ -83,6 +83,7 @@ fn search(apps: &[App], query: &str) -> Vec<Item> {
                 badge: "应用".into(),
                 score,
                 action: Action::open(app.path.clone()),
+                ..Item::blank()
             })
         })
         .collect()

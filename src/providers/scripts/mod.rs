@@ -349,6 +349,7 @@ fn item_for(script: &Arc<Script>, query: &str) -> Option<Item> {
         badge: "脚本".into(),
         score,
         action: action(Arc::clone(script), resolved, confirmed),
+        ..Item::blank()
     })
 }
 

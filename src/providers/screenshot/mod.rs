@@ -110,6 +110,7 @@ impl Provider for Screenshot {
                     badge: BADGE.into(),
                     score,
                     action: Action::new(cmd.run),
+                    ..Item::blank()
                 })
             })
             .collect();
@@ -137,6 +138,7 @@ fn ocr_file_item(query: &str) -> Option<Item> {
         badge: BADGE.into(),
         score: 1000,
         action: Action::new(move || ocr_file(&path)),
+        ..Item::blank()
     })
 }
 

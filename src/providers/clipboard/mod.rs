@@ -108,6 +108,7 @@ impl Provider for Clipboard {
                     badge: BADGE.into(),
                     score,
                     action: Action::new(move || inner.paste(id)),
+                    ..Item::blank()
                 }
             })
             .collect()

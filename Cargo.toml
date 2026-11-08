@@ -12,9 +12,10 @@ anyhow = "1"
 gpui-kit = "=0.9.0"
 global-hotkey = "0.9.0"
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSString", "NSError", "NSDate", "NSDateFormatter", "NSFormatter", "NSLocale", "NSURL"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSBitmapImageRep", "NSImageRep"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDateFormatter", "NSDictionary", "NSError", "NSFormatter", "NSGeometry", "NSLocale", "NSString", "NSURL", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAppearance", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSGraphics", "NSImage", "NSImageRep", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-core-graphics"] }
 raw-window-handle = "0.6.2"
+block2 = "0.6.2"
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
 objc2-vision = { version = "0.3.2", default-features = false, features = ["std", "VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNObservation", "VNTypes", "objc2-core-foundation"] }
 notify = "8.2.1"

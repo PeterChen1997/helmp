@@ -23,6 +23,7 @@ impl Provider for Builtin {
                 badge: "命令".into(),
                 score,
                 action: Action::new(|| std::process::exit(0)),
+                ..Item::blank()
             }],
             _ => Vec::new(),
         }

@@ -5,25 +5,29 @@
 //! `HELMP_SELF_TEST=1 helmp`  图形界面自检：程序化 show → 查询 → hide 后退出
 
 mod cli;
+mod config;
 mod engine;
+mod history;
 mod hotkey;
+mod icons;
 mod input_source;
 mod launcher;
 mod matcher;
+mod menubar;
+mod onboarding;
 mod panel;
 mod paths;
 mod provider;
 mod providers;
+mod settings;
+mod style;
 mod trace;
 
-use gpui_kit::assets::Assets;
+use gpui_kit::assets::AllAssets;
 use gpui_kit::*;
 
 use engine::Engine;
-use launcher::Launcher;
-
-/// 面板尺寸。后续按内容自适应，骨架先固定。
-const PANEL_SIZE: Size<Pixels> = size(px(720.), px(480.));
+use launcher::{Launcher, LauncherHandle, PANEL_SIZE};
 
 fn main() {
     let engine = Engine::new(providers::all());
@@ -42,41 +46,54 @@ fn main() {
 }
 
 fn run_gui(engine: Engine) {
-    gpui_kit::application().with_assets(Assets).run(move |cx| {
-        // 菜单栏工具型 App：不进 Dock、不参与 ⌘Tab。
-        cx.set_activation_policy(ActivationPolicy::Accessory);
-        gpui_kit::init(cx);
+    // 完整 Lucide 图标集：插件按名字引用符号图标（`Icon::Symbol { name: "scan-text", .. }`）。
+    gpui_kit::application()
+        .with_assets(AllAssets)
+        .run(move |cx| {
+            // 菜单栏工具型 App：不进 Dock、不参与 ⌘Tab。
+            cx.set_activation_policy(ActivationPolicy::Accessory);
+            gpui_kit::init(cx);
 
-        let bounds = Bounds::centered(None, PANEL_SIZE, cx);
-        let options = WindowOptions {
-            kind: WindowKind::PopUp,
-            titlebar: None,
-            focus: true,
-            show: false,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            window_background: WindowBackgroundAppearance::Blurred,
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            ..Default::default()
-        };
+            let bounds = Bounds::centered(None, PANEL_SIZE, cx);
+            let options = WindowOptions {
+                kind: WindowKind::PopUp,
+                titlebar: None,
+                focus: true,
+                show: false,
+                is_movable: false,
+                is_resizable: false,
+                is_minimizable: false,
+                // 毛玻璃由 panel::install_glass 垫的 NSVisualEffectView 提供，GPUI 只画半透明内容。
+                window_background: WindowBackgroundAppearance::Transparent,
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            };
 
-        let (window, launcher) = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| Launcher::new(engine, window, cx))
-        })
-        .expect("failed to open launcher window");
+            let (window, launcher) = gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| Launcher::new(engine, window, cx))
+            })
+            .expect("failed to open launcher window");
+            window
+                .update(cx, |_, window, _| panel::install_glass(window))
+                .expect("launcher window gone");
+            cx.set_global(LauncherHandle {
+                window,
+                launcher: launcher.clone(),
+            });
 
-        if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
-            // 大声失败：热键注册不上整个 App 就没有意义。
-            eprintln!("helmp: failed to register global hotkey: {err:#}");
-            cx.quit();
-            return;
-        }
+            if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
+                // 大声失败：热键注册不上整个 App 就没有意义。
+                eprintln!("helmp: failed to register global hotkey: {err:#}");
+                cx.quit();
+                return;
+            }
+            menubar::install(cx);
+            onboarding::maybe_show(cx);
 
-        if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
-            self_test(cx, window, launcher, query.to_string_lossy().into_owned());
-        }
-    });
+            if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
+                self_test(cx, window, launcher, query.to_string_lossy().into_owned());
+            }
+        });
 }
 
 /// 图形界面自检：在真实窗口里走一遍 show → 逐个查询 → 执行 → hide，把状态打到 stdout 后退出。

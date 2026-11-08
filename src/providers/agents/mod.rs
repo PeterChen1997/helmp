@@ -106,6 +106,7 @@ impl Provider for Agents {
                     badge: session.source.badge().into(),
                     score,
                     action: jump::action(session.jump.clone()),
+                    ..Item::blank()
                 }
             })
             .collect()
