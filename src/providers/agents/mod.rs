@@ -18,14 +18,20 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 
+use crate::engine::WAITING_SECTION;
 use crate::paths;
-use crate::provider::{Item, Provider};
+use crate::provider::{Accessory, Block, Detail, Icon, Item, NamedAction, Provider, Scope, Tint};
+use crate::providers::apps::{copy_action, reveal_action};
 
-use self::state::Session;
+use self::state::{Session, Source};
 
 /// 任何 jsonl 只读尾部这么多字节（本机 Claude 1,514 个 jsonl / 7.2 GB，绝不能全量读）。
 const TAIL_BYTES: u64 = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 全局搜索里会话的分组名（设计稿 Results）。范围视图里按状态分组，首页用 `WAITING_SECTION`。
+const GLOBAL_SECTION: &str = "Agent 会话";
+const SCOPE_ID: &str = "agents";
 
 /// 一轮扫描里遇到的问题。每条只在首次出现时打印到 stderr，避免每秒刷屏。
 type Warnings = Vec<String>;
@@ -33,15 +39,36 @@ type Warnings = Vec<String>;
 pub struct Agents {
     sessions: Arc<RwLock<Vec<Session>>>,
     home: Option<PathBuf>,
+    claude_icon: Icon,
+    codex_icon: Icon,
 }
 
 impl Default for Agents {
     fn default() -> Self {
+        let home = paths::home_dir().ok();
         Self {
+            claude_icon: app_icon("Claude.app", home.as_deref()),
+            // Codex 桌面端集成在 ChatGPT.app 里，`codex://` 深链也由它处理。
+            codex_icon: app_icon("ChatGPT.app", home.as_deref()),
             sessions: Arc::default(),
-            home: paths::home_dir().ok(),
+            home,
         }
     }
+}
+
+/// 来源 App 的图标；没装这个 App 时用紫色机器人符号，避免列表里出现空白图标。
+fn app_icon(bundle: &str, home: Option<&Path>) -> Icon {
+    let candidates = std::iter::once(PathBuf::from("/Applications"))
+        .chain(home.map(|home| home.join("Applications")))
+        .map(|dir| dir.join(bundle));
+    candidates
+        .into_iter()
+        .find(|path| path.is_dir())
+        .map(Icon::File)
+        .unwrap_or(Icon::Symbol {
+            name: "bot",
+            tint: Tint::Purple,
+        })
 }
 
 struct Poller {
@@ -91,25 +118,121 @@ impl Provider for Agents {
         Ok(())
     }
 
+    /// 全局搜索：标题 / 项目 / 分支匹配，或关键词（agent / 会话 / claude / codex）列出全部。
     fn query(&self, query: &str) -> Vec<Item> {
         let sessions = self.sessions.read().expect("agents 缓存锁中毒");
-        let home = self.home.as_deref();
         let now = now_ms();
-        state::rank(&sessions, query, home)
+        state::rank(&sessions, query, self.home.as_deref())
             .into_iter()
-            .map(|(i, score)| {
-                let session = &sessions[i];
-                Item {
-                    id: format!("agents:{}", session.domain_id()),
-                    title: session.title.clone(),
-                    subtitle: session.subtitle(home, now),
-                    badge: session.source.badge().into(),
-                    score,
-                    action: jump::action(session.jump.clone()),
-                    ..Item::blank()
-                }
-            })
+            .map(|(i, score)| self.item(&sessions[i], score, GLOBAL_SECTION, now))
             .collect()
+    }
+
+    fn scope(&self) -> Option<Scope> {
+        Some(Scope {
+            id: SCOPE_ID,
+            label: "Agent 会话".into(),
+            tint: Tint::Purple,
+            prefixes: vec!["ag ".into(), "agent ".into()],
+            placeholder: "按标题、项目或分支筛选".into(),
+            filters: vec!["全部".into(), "Claude".into(), "Codex".into()],
+        })
+    }
+
+    fn query_scoped(&self, query: &str, filter: &str) -> Vec<Item> {
+        let sessions = self.sessions.read().expect("agents 缓存锁中毒");
+        let now = now_ms();
+        let only = Source::from_filter(filter);
+        state::rank_scoped(&sessions, query, only, self.home.as_deref())
+            .into_iter()
+            .map(|(i, score, section)| self.item(&sessions[i], score, section, now))
+            .collect()
+    }
+
+    /// 首页「等你处理」：只放等你的会话。菜单栏也读这一组。
+    fn suggestions(&self) -> Vec<Item> {
+        let sessions = self.sessions.read().expect("agents 缓存锁中毒");
+        let now = now_ms();
+        state::waiting(&sessions)
+            .into_iter()
+            .map(|(i, score)| self.item(&sessions[i], score, WAITING_SECTION, now))
+            .collect()
+    }
+}
+
+impl Agents {
+    fn item(&self, session: &Session, score: u32, badge: &str, now: u64) -> Item {
+        let home = self.home.as_deref();
+        let icon = match session.source {
+            Source::Claude => self.claude_icon.clone(),
+            Source::Codex => self.codex_icon.clone(),
+        };
+        let (tag, tone) = session.status.tag();
+        Item {
+            id: format!("agents:{}", session.domain_id()),
+            title: session.title.clone(),
+            subtitle: session.subtitle(home, now),
+            badge: badge.into(),
+            score,
+            action: jump::action(session.jump.clone()),
+            action_title: "跳转到会话".into(),
+            accessories: vec![Accessory::Tag { text: tag, tone }],
+            actions: actions(session),
+            detail: Some(detail(session, icon.clone(), home, now)),
+            icon,
+            ..Item::blank()
+        }
+    }
+}
+
+/// ⌘K 次级操作。活着的会话绝不提供「恢复会话」：`--resume` 会开出第二个进程（见 jump.rs）。
+fn actions(session: &Session) -> Vec<NamedAction> {
+    let mut actions = Vec::new();
+    if let Some(cwd) = session.cwd.as_deref().and_then(Path::to_str) {
+        actions.push(NamedAction::new(
+            "在访达中显示项目",
+            Some("⌘↵"),
+            reveal_action(cwd),
+        ));
+        actions.push(NamedAction::new(
+            "复制项目路径",
+            Some("⌘⇧C"),
+            copy_action(cwd),
+        ));
+    }
+    // 会话 ID 用于 `claude --resume <id>` / `codex resume <id>`，或者在日志里查这个会话。
+    actions.push(NamedAction::new(
+        "复制会话 ID",
+        None,
+        copy_action(&session.session_id),
+    ));
+    actions
+}
+
+/// 详情：标题、状态、最后一条消息（等你时是在等什么）、项目 / 分支 / 来源 / 最后活动。
+fn detail(session: &Session, icon: Icon, home: Option<&Path>, now: u64) -> Detail {
+    let mut metadata = Vec::new();
+    if let Some(cwd) = &session.cwd {
+        metadata.push(("项目".into(), state::display_path(cwd, home)));
+    }
+    if let Some(branch) = &session.branch {
+        metadata.push(("分支".into(), branch.clone()));
+    }
+    metadata.push(("来源".into(), session.origin().into()));
+    metadata.push(("最后活动".into(), state::ago(now, session.last_activity_ms)));
+    Detail {
+        icon,
+        title: session.title.clone(),
+        tag: Some((session.status.label(), session.status.tone())),
+        blocks: session
+            .last_message
+            .iter()
+            .map(|text| Block::Quote {
+                label: "最后一条消息".into(),
+                text: text.clone(),
+            })
+            .collect(),
+        metadata,
     }
 }
 
@@ -152,6 +275,189 @@ fn tail_lines(bytes: &[u8], truncated: bool) -> impl Iterator<Item = &[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::{Block, Tone};
+    use state::{Jump, Status};
+
+    fn session(title: &str, source: Source, status: Status) -> Session {
+        Session {
+            source,
+            session_id: format!("id-{title}"),
+            title: title.into(),
+            status,
+            cwd: Some(PathBuf::from("/Users/me/code_hub/finder")),
+            branch: Some("main".into()),
+            last_activity_ms: now_ms() - 10 * 60_000,
+            last_message: Some("需要你确认：是否允许运行 npm test？".into()),
+            jump: Jump::DeepLink("claude://claude.ai/epitaxy/x".into()),
+        }
+    }
+
+    fn provider(sessions: Vec<Session>) -> Agents {
+        Agents {
+            sessions: Arc::new(RwLock::new(sessions)),
+            home: Some(PathBuf::from("/Users/me")),
+            claude_icon: Icon::File(PathBuf::from("/Applications/Claude.app")),
+            codex_icon: Icon::File(PathBuf::from("/Applications/ChatGPT.app")),
+        }
+    }
+
+    fn fixture() -> Agents {
+        provider(vec![
+            session(
+                "Finder daily radar",
+                Source::Claude,
+                Status::NeedsYou("等你确认权限".into()),
+            ),
+            session("Helmp 启动器开发", Source::Claude, Status::Running),
+            session("VPC 接入排查", Source::Codex, Status::Done),
+        ])
+    }
+
+    #[test]
+    fn item_matches_agents_design() {
+        // 设计稿 Agents / Home：来源 App 图标、彩色状态标签、副标题「~/项目 · 分支 · 10 分钟前」、回车「跳转到会话」。
+        let items = fixture().query("radar");
+        let item = items.first().unwrap();
+        assert_eq!(
+            item.icon,
+            Icon::File(PathBuf::from("/Applications/Claude.app"))
+        );
+        assert_eq!(
+            item.accessories,
+            [Accessory::Tag {
+                text: "等你确认".into(),
+                tone: Tone::Waiting
+            }]
+        );
+        assert_eq!(item.subtitle, "~/code_hub/finder · main · 10 分钟前");
+        assert_eq!(item.action_title, "跳转到会话");
+        assert_eq!(item.badge, GLOBAL_SECTION);
+        let shortcuts: Vec<_> = item
+            .actions
+            .iter()
+            .map(|a| (a.title.as_str(), a.shortcut.as_deref()))
+            .collect();
+        assert_eq!(
+            shortcuts,
+            [
+                ("在访达中显示项目", Some("⌘↵")),
+                ("复制项目路径", Some("⌘⇧C")),
+                ("复制会话 ID", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn detail_has_status_quote_and_metadata() {
+        // 详情要回答「在等我什么、在哪个项目、回车会切到哪个 App」，不切过去就能判断要不要马上处理。
+        let items = fixture().query("radar");
+        let detail = items.first().unwrap().detail.clone().unwrap();
+        assert_eq!(detail.title, "Finder daily radar");
+        assert_eq!(detail.tag, Some(("等你确认权限".into(), Tone::Waiting)));
+        assert_eq!(
+            detail.blocks,
+            [Block::Quote {
+                label: "最后一条消息".into(),
+                text: "需要你确认：是否允许运行 npm test？".into()
+            }]
+        );
+        assert_eq!(
+            detail.metadata,
+            [
+                ("项目".to_string(), "~/code_hub/finder".to_string()),
+                ("分支".to_string(), "main".to_string()),
+                ("来源".to_string(), "Claude 桌面版".to_string()),
+                ("最后活动".to_string(), "10 分钟前".to_string()),
+            ]
+        );
+        // 拿不到最后一条消息时整块省略，而不是显示一个空引用框。
+        let mut quiet = session("安静", Source::Codex, Status::Idle);
+        quiet.last_message = None;
+        quiet.cwd = None;
+        quiet.branch = None;
+        let items = provider(vec![quiet]).query("安静");
+        let detail = items.first().unwrap().detail.clone().unwrap();
+        assert!(detail.blocks.is_empty());
+        assert_eq!(
+            detail.metadata.first().map(|(k, _)| k.as_str()),
+            Some("来源")
+        );
+    }
+
+    #[test]
+    fn scope_declares_prefixes_and_filters() {
+        // 「ag 」进入范围、分段筛选 全部 / Claude / Codex 是设计稿约定；第一个筛选是默认值。
+        let scope = fixture().scope().unwrap();
+        assert_eq!(scope.id, "agents");
+        assert_eq!(scope.label, "Agent 会话");
+        assert_eq!(scope.tint, Tint::Purple);
+        assert_eq!(scope.prefixes, ["ag ", "agent "]);
+        assert_eq!(scope.filters, ["全部", "Claude", "Codex"]);
+    }
+
+    #[test]
+    fn scoped_query_filters_by_source_and_groups_by_status() {
+        let agents = fixture();
+        let codex: Vec<_> = agents
+            .query_scoped("", "Codex")
+            .into_iter()
+            .map(|i| (i.title, i.badge))
+            .collect();
+        assert_eq!(
+            codex,
+            [("VPC 接入排查".to_string(), "最近完成".to_string())]
+        );
+        let all = agents.query_scoped("", "全部");
+        assert_eq!(all.len(), 3);
+        let waiting = all
+            .iter()
+            .find(|i| i.title == "Finder daily radar")
+            .unwrap();
+        assert_eq!(waiting.badge, WAITING_SECTION);
+    }
+
+    #[test]
+    fn suggestions_are_waiting_sessions_under_waiting_section() {
+        // 菜单栏按 WAITING_SECTION 这个分组名读取；名字或内容不对，菜单栏的「等你处理」就是空的或错的。
+        let items = fixture().suggestions();
+        let titles: Vec<_> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["Finder daily radar"]);
+        assert!(
+            items
+                .iter()
+                .all(|i| i.badge == WAITING_SECTION && i.score >= 900)
+        );
+    }
+
+    #[test]
+    fn global_keyword_still_lists_sessions() {
+        // 全局输入 agent / 会话 / claude / codex 列出会话是已有行为，升级 v2 不能丢。
+        let agents = fixture();
+        assert_eq!(agents.query("agent").len(), 3);
+        assert_eq!(agents.query("会话").len(), 3);
+        assert_eq!(agents.query("codex").len(), 1);
+    }
+
+    /// 本机真实会话的列表与详情（只读 ~/.claude、~/.codex）：
+    /// `cargo test agents::tests::dump_real -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_real_sessions() {
+        let agents = Agents::default();
+        agents.start().unwrap();
+        for item in agents.query_scoped("", "全部") {
+            let detail = item.detail.unwrap();
+            println!(
+                "[{}] {} | {} | {:?} | {:?}",
+                item.badge, item.title, item.subtitle, item.accessories, item.icon
+            );
+            println!("    tag={:?}", detail.tag);
+            for block in &detail.blocks {
+                println!("    {block:?}");
+            }
+            println!("    {:?}", detail.metadata);
+        }
+    }
 
     #[test]
     fn tail_read_drops_partial_first_line() {

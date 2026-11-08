@@ -11,6 +11,7 @@
 //!
 //! 多音字的每个读音都参与音节匹配（`zhong`/`chong` 都能命中「重」）。
 //! 索引型 provider 应该用 [`Candidate`] 预处理一次，查询时调用 [`score_candidate`]，避免每次查询重算拼音。
+//! 需要告诉用户「为什么命中」时（应用详情的「匹配方式」）用 [`match_candidate`]，分数与 `score_candidate` 一致。
 
 use pinyin::{ToPinyin, ToPinyinMulti};
 
@@ -44,30 +45,101 @@ impl Candidate {
 }
 
 pub fn score_candidate(query: &str, candidate: &Candidate) -> Option<u32> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
+    if query.trim().is_empty() {
         return Some(0);
     }
-    let literal = literal_score(&query, &candidate.lower);
-    let pinyin = candidate.pinyin.as_ref().and_then(|s| s.score(&query));
-    // Option 的序：None < Some，所以 max 正好取较高的命中。
-    literal.max(pinyin)
+    match_candidate(query, candidate).map(|m| m.score)
 }
 
-fn literal_score(query: &str, candidate: &str) -> Option<u32> {
+/// 命中方式。每种方式对应唯一的分数档位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    Exact,
+    Prefix,
+    /// 英文单词首字母（`vsc` → Visual Studio Code）。
+    WordInitials,
+    Substring,
+    Subsequence,
+    /// 每个音节只打了首字母（`wx` → 微信）。
+    PinyinInitials,
+    /// 每个音节都打了完整的默认读音（`weixin` → 微信）。
+    PinyinFull,
+    /// 全拼与首字母混打，或用了多音字的其他读音（`wxin` → 微信）。
+    PinyinMixed,
+    /// 默认读音全拼的子序列。
+    PinyinFuzzy,
+}
+
+impl MatchKind {
+    /// 给人看的名字，用于详情里的「匹配方式」。
+    pub fn label(self) -> &'static str {
+        match self {
+            MatchKind::Exact => "名称完全匹配",
+            MatchKind::Prefix => "名称开头",
+            MatchKind::WordInitials => "单词首字母",
+            MatchKind::Substring => "名称包含",
+            MatchKind::Subsequence => "模糊匹配",
+            MatchKind::PinyinInitials => "拼音首字母",
+            MatchKind::PinyinFull => "全拼",
+            MatchKind::PinyinMixed => "拼音",
+            MatchKind::PinyinFuzzy => "拼音模糊匹配",
+        }
+    }
+}
+
+/// 拼音命中的那一段音节（默认读音）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinyinSpan {
+    /// 全拼，如 `weixin`。
+    pub full: String,
+    /// 首字母，如 `wx`。
+    pub initials: String,
+    /// 是否从第一个音节一直覆盖到最后一个（`wx` → 微信 是，`wx` → 微信开发者工具 不是）。
+    pub whole: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    /// 与 [`score_candidate`] 相同的分数。
+    pub score: u32,
+    pub kind: MatchKind,
+    /// 走音节规则命中时才有；拼音模糊匹配与字面命中为 `None`。
+    pub pinyin: Option<PinyinSpan>,
+}
+
+/// 与 [`score_candidate`] 同样的规则，额外返回命中方式。空查询返回 `None`。
+pub fn match_candidate(query: &str, candidate: &Candidate) -> Option<Match> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    let literal = literal_match(&query, &candidate.lower).map(|(score, kind)| Match {
+        score,
+        kind,
+        pinyin: None,
+    });
+    let pinyin = candidate.pinyin.as_ref().and_then(|s| s.matches(&query));
+    // 各档分数互不相同，取较高的命中。
+    match (literal, pinyin) {
+        (Some(a), Some(b)) => Some(if b.score > a.score { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+fn literal_match(query: &str, candidate: &str) -> Option<(u32, MatchKind)> {
     if candidate == query {
-        return Some(EXACT);
+        return Some((EXACT, MatchKind::Exact));
     }
     if candidate.starts_with(query) {
-        return Some(PREFIX);
+        return Some((PREFIX, MatchKind::Prefix));
     }
     if initials(candidate).starts_with(query) {
-        return Some(INITIALS);
+        return Some((INITIALS, MatchKind::WordInitials));
     }
     if candidate.contains(query) {
-        return Some(SUBSTRING);
+        return Some((SUBSTRING, MatchKind::Substring));
     }
-    subsequence(query, candidate).then_some(SUBSEQUENCE)
+    subsequence(query, candidate).then_some((SUBSEQUENCE, MatchKind::Subsequence))
 }
 
 /// 取每个单词首字母：`visual studio code` → `vsc`。
@@ -133,30 +205,56 @@ impl Syllables {
         Some(Self { tokens, joined })
     }
 
-    fn score(&self, query: &str) -> Option<u32> {
+    fn matches(&self, query: &str) -> Option<Match> {
         // 拼音只由 ASCII 字母数字组成；用户可能用空格分隔音节（`wei xin`）。
         let query: String = query.chars().filter(|c| !c.is_whitespace()).collect();
         if query.is_empty() || !query.is_ascii() {
             return None;
         }
         let total = self.tokens.len();
-        let mut best = None;
+        // 起点越靠前档位越高（从头 > 从中间），所以第一个能吃完查询的起点就是最好的。
         for start in 0..total {
             let Some(end) = self.consume(query.as_bytes(), start) else {
                 continue;
             };
-            let tier = match (start, end) {
+            let score = match (start, end) {
                 (0, end) if end == total => PINYIN_FULL,
                 (0, _) => PINYIN_PREFIX,
                 _ => PINYIN_INNER,
             };
-            best = best.max(Some(tier));
-            if start == 0 {
-                // 从头匹配的档位一定高于从中间匹配，不用再试。
-                break;
-            }
+            let span = self.tokens.get(start..end).unwrap_or_default();
+            let full: String = span
+                .iter()
+                .filter_map(|t| t.first())
+                .map(String::as_str)
+                .collect();
+            let initials: String = span
+                .iter()
+                .filter_map(|t| t.first()?.chars().next())
+                .collect();
+            // 每个音节至少吃一个字符，长度相等说明每个音节恰好只打了首字母。
+            let kind = if query.len() == end - start {
+                MatchKind::PinyinInitials
+            } else if query == full {
+                MatchKind::PinyinFull
+            } else {
+                MatchKind::PinyinMixed
+            };
+            return Some(Match {
+                score,
+                kind,
+                pinyin: Some(PinyinSpan {
+                    full,
+                    initials,
+                    whole: start == 0 && end == total,
+                }),
+            });
         }
-        best.or_else(|| subsequence(&query, &self.joined).then_some(PINYIN_SUBSEQUENCE))
+        subsequence(&query, &self.joined).then_some(Match {
+            score: PINYIN_SUBSEQUENCE,
+            kind: MatchKind::PinyinFuzzy,
+            pinyin: None,
+        })
     }
 
     /// 从第 `start` 个音节起，每个音节吃掉查询的一段非空前缀，直到查询吃完。
@@ -273,6 +371,40 @@ mod tests {
         let literal_subseq = score("wct", "WeChat").unwrap();
         assert!(literal_prefix > pinyin_subseq);
         assert!(literal_subseq > pinyin_subseq);
+    }
+
+    #[test]
+    fn match_kind_explains_how_the_query_hit() {
+        // 应用详情的「匹配方式」要说清楚为什么命中：用户看到「拼音首字母」才知道 wx 能直接搜微信。
+        let m = match_candidate("wx", &Candidate::new("微信")).unwrap();
+        assert_eq!(m.kind, MatchKind::PinyinInitials);
+        assert_eq!(
+            m.pinyin,
+            Some(PinyinSpan {
+                full: "weixin".into(),
+                initials: "wx".into(),
+                whole: true
+            })
+        );
+        let kind = |q: &str, c: &str| match_candidate(q, &Candidate::new(c)).unwrap().kind;
+        assert_eq!(kind("weixin", "微信"), MatchKind::PinyinFull);
+        assert_eq!(kind("wxin", "微信"), MatchKind::PinyinMixed);
+        assert_eq!(kind("wix", "微信"), MatchKind::PinyinFuzzy);
+        assert_eq!(kind("微信", "微信"), MatchKind::Exact);
+        assert_eq!(kind("vsc", "Visual Studio Code"), MatchKind::WordInitials);
+        // 只命中开头时，span 只覆盖被打到的音节，并标明没有覆盖整个名字。
+        let head = match_candidate("wx", &Candidate::new("微信开发者工具")).unwrap();
+        assert_eq!(head.kind, MatchKind::PinyinInitials);
+        let span = head.pinyin.unwrap();
+        assert_eq!(span.full, "weixin");
+        assert!(!span.whole);
+    }
+
+    #[test]
+    fn empty_query_keeps_score_contract() {
+        // 别的插件依赖「空查询 score 为 Some(0)」列出全部候选；match_candidate 没有「命中方式」可说，返回 None。
+        assert_eq!(score("  ", "微信"), Some(0));
+        assert_eq!(match_candidate("  ", &Candidate::new("微信")), None);
     }
 
     #[test]
