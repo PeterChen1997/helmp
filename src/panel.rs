@@ -16,7 +16,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 /// 被较新的 macOS 拒绝成为 key）退回到激活整个 App，保证键盘一定能输入。
 pub fn show(window: &mut Window, cx: &mut App) {
     let Some(ns_window) = ns_window(window) else {
-        eprintln!("huan: 无法取得 NSWindow，退回 GPUI 激活");
+        eprintln!("helmp: 无法取得 NSWindow，退回 GPUI 激活");
         cx.activate(true);
         window.activate_window();
         return;
@@ -35,7 +35,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
         return;
     }
     if !FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
-        eprintln!("huan: 面板未能以非激活方式成为 key window，改为激活 App");
+        eprintln!("helmp: 面板未能以非激活方式成为 key window，改为激活 App");
     }
     cx.activate(true);
     ns_window.makeKeyAndOrderFront(None);
@@ -51,7 +51,7 @@ pub fn hide(window: &mut Window) {
     match ns_window(window) {
         Some(ns_window) => ns_window.orderOut(None),
         // 拿不到原生窗口说明平台层变了，大声报出来而不是假装隐藏成功。
-        None => eprintln!("huan: 无法取得 NSWindow，面板未隐藏"),
+        None => eprintln!("helmp: 无法取得 NSWindow，面板未隐藏"),
     }
 }
 

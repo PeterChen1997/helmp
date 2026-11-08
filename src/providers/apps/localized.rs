@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn reads_chinese_name_from_bundle_on_disk() {
         let app =
-            std::env::temp_dir().join(format!("huan-test-{}/飞书测试.app", std::process::id()));
+            std::env::temp_dir().join(format!("helmp-test-{}/飞书测试.app", std::process::id()));
         let lproj = app.join("Contents/Resources/zh_CN.lproj");
         std::fs::create_dir_all(&lproj).unwrap();
         std::fs::write(

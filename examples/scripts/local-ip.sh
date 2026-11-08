@@ -11,7 +11,7 @@
 # @raycast.packageName 示例
 # @raycast.icon 🌐
 # @raycast.description 列出本机各网卡的 IPv4 地址
-# @raycast.author huan
+# @raycast.author helmp
 
 set -euo pipefail
 

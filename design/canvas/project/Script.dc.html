@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · 脚本命令</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.glass{background:rgba(246,246,248,.74);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);box-shadow:0 0 0 .5px rgba(0,0,0,.16),inset 0 0 0 .5px rgba(255,255,255,.7),0 24px 70px rgba(0,0,0,.24)}
+.panel{position:absolute;left:200px;top:130px;width:880px;height:540px;border-radius:24px;overflow:hidden;display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:10px;height:60px;flex:none;padding:0 16px 0 20px;border-bottom:1px solid rgba(0,0,0,.08)}
+.scope{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:7px;background:rgba(58,58,60,.1);color:#1d1d1f;font-weight:600;white-space:nowrap}
+.arg{display:flex;align-items:center;gap:8px;height:34px;padding:0 12px;border-radius:9px;background:rgba(255,255,255,.75);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.14)}
+.body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0;padding:18px 22px}
+.sub{color:#6e6e73;font-size:12px}
+.k{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.07);color:#3a3a3c;font-size:11.5px;font-weight:500}
+.foot{display:flex;align-items:center;gap:16px;height:40px;flex:none;padding:0 14px 0 16px;border-top:1px solid rgba(0,0,0,.08);font-size:12px;color:#48484a}
+.ctx{display:flex;align-items:center;gap:6px;font-weight:600}
+.hint{display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;margin:0;font-size:12.5px}
+.kv dt{color:#6e6e73}
+.kv dd{margin:0}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+</style>
+</helmet>
+<div class="desk">
+  <div class="glass panel">
+    <div class="bar">
+      <span class="scope"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#1d1d1f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 5 3 3-3 3M8 11h5"/></svg>Count Characters Bash</span>
+      <div class="arg" style="flex: 1; box-shadow: inset 0 0 0 2px #0b63e5">
+        <label for="a1" class="sub">Text</label>
+        <input id="a1" value="hello huan" style="flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 16px; color: #1d1d1f">
+        <span class="sub">可选</span>
+      </div>
+    </div>
+
+    <div class="body">
+      <div style="display: flex; align-items: baseline; gap: 10px">
+        <span style="font-size: 12px; font-weight: 600; color: #6e6e73">输出</span>
+        <span class="sub" style="margin-left: auto">退出码 0</span>
+      </div>
+      <pre class="mono" style="margin: 0; padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,.7); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12); font-size: 15px; line-height: 1.6; white-space: pre-wrap">10 chars</pre>
+      <dl class="kv" style="margin-top: auto; padding-top: 14px; border-top: 1px solid rgba(0,0,0,.08)">
+        <dt>说明</dt><dd>统计剪贴板或传入文本的字符数</dd>
+        <dt>脚本</dt><dd class="mono" style="font-size: 12.5px">developer-utils/count-characters.sh</dd>
+        <dt>来源</dt><dd>Raycast Script Commands · 输出模式 fullOutput</dd>
+      </dl>
+    </div>
+
+    <div class="foot">
+      <span class="ctx"><img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="" style="width: 16px; height: 16px; border-radius: 4px">Helmp<span style="font-weight: 400; color: #6e6e73">› 脚本</span></span>
+      <span class="hint" style="margin-left: auto">运行<span class="k">↵</span></span>
+      <span class="hint">复制输出<span class="k">⌘C</span></span>
+      <span class="hint">操作<span class="k">⌘K</span></span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

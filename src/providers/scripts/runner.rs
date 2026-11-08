@@ -154,7 +154,7 @@ fn kill_group(pgid: i32) {
         // ESRCH 表示整组已经退出，不算错误；其他情况要说出来。
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::ESRCH) {
-            eprintln!("huan: scripts 终止进程组 {pgid} 失败：{err}");
+            eprintln!("helmp: scripts 终止进程组 {pgid} 失败：{err}");
         }
     }
 }

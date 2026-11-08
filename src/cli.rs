@@ -1,9 +1,9 @@
 //! 无头命令行：不开窗口，直接走 provider，用于测试和端到端验证。
 //!
 //! ```text
-//! huan query <text>            打印结果：badge \t title \t subtitle \t id
-//! huan run <id> [query]        执行某个结果（先用同一 query 查出来）
-//! huan providers               列出已注册的 provider
+//! helmp query <text>            打印结果：badge \t title \t subtitle \t id
+//! helmp run <id> [query]        执行某个结果（先用同一 query 查出来）
+//! helmp providers               列出已注册的 provider
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -34,7 +34,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
 
 fn start(engine: &Engine) {
     for (id, err) in engine.start_blocking() {
-        eprintln!("huan: provider {id} 启动失败：{err:#}");
+        eprintln!("helmp: provider {id} 启动失败：{err:#}");
     }
 }
 
@@ -50,7 +50,7 @@ fn query(engine: &Engine, text: &str) -> Result<()> {
 }
 
 fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
-    let id = id.context("用法：huan run <id> [query]")?;
+    let id = id.context("用法：helmp run <id> [query]")?;
     start(engine);
     let Some(item) = engine.query(text).into_iter().find(|item| item.id == id) else {
         bail!("查询 {text:?} 的结果里没有 {id}");

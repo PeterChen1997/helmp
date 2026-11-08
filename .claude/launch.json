@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "design",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8796", "--bind", "127.0.0.1", "--directory", "/Users/peterchen/code_hub/helep/design"],
+      "port": 8796
+    }
+  ]
+}

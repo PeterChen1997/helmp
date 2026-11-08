@@ -11,15 +11,15 @@ impl Provider for Builtin {
     }
 
     fn query(&self, query: &str) -> Vec<Item> {
-        let quit = ["退出唤", "quit huan"]
+        let quit = ["退出 Helmp", "quit helmp"]
             .iter()
             .filter_map(|name| matcher::score(query, name))
             .max();
         match (query.trim().is_empty(), quit) {
             (false, Some(score)) => vec![Item {
                 id: "builtin:quit".into(),
-                title: "退出唤".into(),
-                subtitle: "Quit Huan".into(),
+                title: "退出 Helmp".into(),
+                subtitle: "Quit Helmp".into(),
                 badge: "命令".into(),
                 score,
                 action: Action::new(|| std::process::exit(0)),

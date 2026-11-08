@@ -1,6 +1,6 @@
 //! L1 脚本插件：兼容 Raycast Script Commands。
 //!
-//! - 目录：`<data_dir>/scripts/` + 环境变量 `HUAN_SCRIPT_DIRS`（冒号分隔），递归扫描，跳过隐藏文件。
+//! - 目录：`<data_dir>/scripts/` + 环境变量 `HELMP_SCRIPT_DIRS`（冒号分隔），递归扫描，跳过隐藏文件。
 //! - 每 5 秒按 (修改时间, 大小, 可执行位) 检查变化，只重读变了的文件。
 //! - 参数：查询以脚本标题或 packageName 开头时，余下文本是参数（见 `args`）。
 //! - `needsConfirmation: true` 的脚本只有查询以 ` !` 结尾才执行。
@@ -105,7 +105,7 @@ impl Provider for Scripts {
         rescan(&self.index, &dirs, true);
         let index = Arc::clone(&self.index);
         std::thread::Builder::new()
-            .name("huan-scripts-watch".into())
+            .name("helmp-scripts-watch".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(POLL_INTERVAL);
@@ -129,12 +129,12 @@ impl Provider for Scripts {
     }
 }
 
-/// 默认脚本目录（不存在就创建，方便用户找到放哪）+ `HUAN_SCRIPT_DIRS`。
+/// 默认脚本目录（不存在就创建，方便用户找到放哪）+ `HELMP_SCRIPT_DIRS`。
 fn script_dirs() -> Result<Vec<PathBuf>> {
     let default = crate::paths::data_dir()?.join("scripts");
     fs::create_dir_all(&default).with_context(|| format!("创建 {}", default.display()))?;
     let mut dirs = vec![default];
-    if let Some(extra) = std::env::var_os("HUAN_SCRIPT_DIRS") {
+    if let Some(extra) = std::env::var_os("HELMP_SCRIPT_DIRS") {
         dirs.extend(std::env::split_paths(&extra).filter(|dir| !dir.as_os_str().is_empty()));
     }
     Ok(dirs)
@@ -146,7 +146,7 @@ fn absolute_dir(dir: &Path) -> PathBuf {
         Ok(dir) => dir,
         Err(err) => {
             eprintln!(
-                "huan: scripts 目录 {} 暂不可用：{err}（出现后会自动加载）",
+                "helmp: scripts 目录 {} 暂不可用：{err}（出现后会自动加载）",
                 dir.display()
             );
             std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf())
@@ -258,12 +258,12 @@ fn rescan(index: &RwLock<Index>, dirs: &[PathBuf], initial: bool) {
     };
 
     for problem in &new_problems {
-        eprintln!("huan: scripts {problem}");
+        eprintln!("helmp: scripts {problem}");
     }
     for (path, stamp) in to_parse {
         let entry = parse_file(&path, &stamp);
         if let Entry::Skipped(reason) = &entry {
-            eprintln!("huan: 跳过脚本 {}：{reason}", path.display());
+            eprintln!("helmp: 跳过脚本 {}：{reason}", path.display());
         }
         files.insert(path, (stamp, entry));
     }
@@ -288,7 +288,7 @@ fn rescan(index: &RwLock<Index>, dirs: &[PathBuf], initial: bool) {
         .filter(|(_, entry)| matches!(entry, Entry::Skipped(_)))
         .count();
     eprintln!(
-        "huan: scripts 已加载 {} 个脚本，跳过 {skipped} 个",
+        "helmp: scripts 已加载 {} 个脚本，跳过 {skipped} 个",
         scripts.len()
     );
     index.files = files;
@@ -384,7 +384,7 @@ pub mod tests {
         pub fn new(tag: &str) -> Self {
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             let path = std::env::temp_dir().join(format!(
-                "huan-scripts-{tag}-{}-{}",
+                "helmp-scripts-{tag}-{}-{}",
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::Relaxed)
             ));

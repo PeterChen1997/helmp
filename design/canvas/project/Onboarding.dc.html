@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · 首次启动权限引导</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.win{position:absolute;left:320px;top:110px;width:640px;height:580px;display:flex;flex-direction:column;border-radius:18px;overflow:hidden;background:rgba(252,252,253,.94);box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 30px 80px rgba(0,0,0,.28)}
+.grp{border-radius:12px;background:rgba(0,0,0,.035);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.06)}
+.r{display:flex;align-items:center;gap:14px;min-height:64px;padding:10px 16px}
+.r + .r{border-top:1px solid rgba(0,0,0,.07)}
+.ti{display:flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;border-radius:9px}
+.help{color:#6e6e73;font-size:12px;line-height:1.45}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:28px;padding:0 14px;border:0;border-radius:7px;font:inherit;font-size:13px;font-weight:500}
+.dot{width:7px;height:7px;border-radius:50%;background:rgba(0,0,0,.18)}
+</style>
+</helmet>
+<div class="desk">
+  <div class="win">
+    <div style="display: flex; gap: 8px; padding: 14px 16px 0">
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15)"></span>
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: rgba(0,0,0,.12)"></span>
+      <span style="width: 12px; height: 12px; border-radius: 50%; background: rgba(0,0,0,.12)"></span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 40px 22px; text-align: center">
+      <img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="Helmp" style="width: 72px; height: 72px; border-radius: 16px; box-shadow: 0 6px 16px rgba(11,99,229,.28)">
+      <h1 style="margin: 6px 0 0; font-size: 22px; font-weight: 700">授予权限</h1>
+      <p style="margin: 0; max-width: 440px; color: #48484a; font-size: 13px; line-height: 1.55">Helmp 只在需要时请求权限。不授权也能搜索应用、查看 Agent 会话和剪贴板历史，下面三项用于更完整的体验。</p>
+    </div>
+
+    <div style="padding: 0 32px">
+      <div class="grp">
+        <div class="r">
+          <span class="ti" style="background: #0b63e5"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="4.5" r="1.6"/><path d="M4 7.5 10 9l6-1.5M10 9v3.5M7 18l3-5.5 3 5.5"/></svg></span>
+          <span style="flex: 1; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">辅助功能</span><span class="help">选中剪贴板记录后自动粘贴到前台应用</span></span>
+          <span style="display: flex; align-items: center; gap: 5px; color: #1c6b30; font-weight: 600"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#1c6b30" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 7.5 2.7 2.7L11 4.5"/></svg>已授权</span>
+        </div>
+        <div class="r">
+          <span class="ti" style="background: #5e5ce6"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M3 6.5V4.5A1.5 1.5 0 0 1 4.5 3h2M13.5 3h2A1.5 1.5 0 0 1 17 4.5v2M17 13.5v2a1.5 1.5 0 0 1-1.5 1.5h-2M6.5 17h-2A1.5 1.5 0 0 1 3 15.5v-2"/><path d="M7 8.5h6M7 11.5h4"/></svg></span>
+          <span style="flex: 1; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">录屏与系统录音</span><span class="help">区域截图与识别文字</span></span>
+          <button type="button" class="btn" style="background: #0b63e5; color: #fff">前往授权</button>
+        </div>
+        <div class="r">
+          <span class="ti" style="background: #3a3a3c"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 7 3 3-3 3M10 13h5"/></svg></span>
+          <span style="flex: 1; display: flex; flex-direction: column; gap: 3px"><span style="font-weight: 600">自动化</span><span class="help">跳转到 iTerm 或终端里正在运行的 Agent 会话；首次跳转时系统会询问</span></span>
+          <button type="button" class="btn" style="background: rgba(0,0,0,.07); color: #1d1d1f">稍后</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 18px 24px 20px">
+      <span style="display: flex; gap: 6px" aria-label="第 2 步，共 3 步"><span class="dot"></span><span class="dot" style="background: #0b63e5"></span><span class="dot"></span></span>
+      <button type="button" class="btn" style="margin-left: auto; background: transparent; color: #0b63e5">跳过</button>
+      <button type="button" class="btn" style="background: #0b63e5; color: #fff">继续</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

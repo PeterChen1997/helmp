@@ -24,10 +24,10 @@ impl Engine {
         for provider in self.providers.iter() {
             let provider = Arc::clone(provider);
             std::thread::Builder::new()
-                .name(format!("huan-{}", provider.id()))
+                .name(format!("helmp-{}", provider.id()))
                 .spawn(move || {
                     if let Err(err) = provider.start() {
-                        eprintln!("huan: provider {} 启动失败：{err:#}", provider.id());
+                        eprintln!("helmp: provider {} 启动失败：{err:#}", provider.id());
                     }
                 })
                 .expect("spawn provider thread");

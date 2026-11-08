@@ -59,7 +59,7 @@ impl Poller {
 
         let current: HashSet<String> = warnings.into_iter().collect();
         for warning in current.difference(&self.reported) {
-            eprintln!("huan: agents: {warning}");
+            eprintln!("helmp: agents: {warning}");
         }
         self.reported = current;
     }
@@ -81,7 +81,7 @@ impl Provider for Agents {
         poller.refresh(&self.sessions);
         let sessions = Arc::clone(&self.sessions);
         std::thread::Builder::new()
-            .name("huan-agents-poll".into())
+            .name("helmp-agents-poll".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(POLL_INTERVAL);
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn tail_read_drops_partial_first_line() {
         // 从文件中间开始读，第一行必然是残的；拿残行去解析会把别的字段误认成事件。
-        let dir = std::env::temp_dir().join(format!("huan-tail-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("helmp-tail-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.jsonl");
         std::fs::write(&path, b"{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n").unwrap();

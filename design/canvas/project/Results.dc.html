@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · 搜索结果</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.glass{background:rgba(246,246,248,.74);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);box-shadow:0 0 0 .5px rgba(0,0,0,.16),inset 0 0 0 .5px rgba(255,255,255,.7),0 24px 70px rgba(0,0,0,.24)}
+.panel{position:absolute;left:200px;top:130px;width:880px;height:540px;border-radius:24px;overflow:hidden;display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:12px;height:60px;flex:none;padding:0 20px;border-bottom:1px solid rgba(0,0,0,.08)}
+.q{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:20px;color:#1d1d1f}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.body{flex:1;display:flex;min-height:0}
+.side{width:380px;flex:none;padding:4px 8px;overflow:hidden;border-right:1px solid rgba(0,0,0,.08)}
+.detail{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;padding:22px 26px;overflow:hidden}
+.sec{padding:10px 12px 4px;font-size:12px;font-weight:600;color:#6e6e73}
+.row{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 10px;border-radius:10px}
+.row.on{background:#0b63e5;color:#fff}
+.two{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t{font-weight:600}
+.sub{color:#6e6e73;font-size:12px}
+.row.on .sub{color:rgba(255,255,255,.88)}
+.chip{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:10px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.idle{background:rgba(0,0,0,.06);color:#48484a}
+.k{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.07);color:#3a3a3c;font-size:11.5px;font-weight:500}
+.foot{display:flex;align-items:center;gap:16px;height:40px;flex:none;padding:0 14px 0 16px;border-top:1px solid rgba(0,0,0,.08);font-size:12px;color:#48484a}
+.ctx{display:flex;align-items:center;gap:6px;font-weight:600}
+.hint{display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;margin:0;font-size:12.5px}
+.kv dt{color:#6e6e73}
+.kv dd{margin:0}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+.mi{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:7px}
+.mi .sc{margin-left:auto;color:#6e6e73;font-size:12px}
+.mi.on{background:#0b63e5;color:#fff}
+.mi.on .sc{color:rgba(255,255,255,.88)}
+</style>
+</helmet>
+<div class="desk">
+  <div class="glass panel">
+    <div class="bar">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#6e6e73" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="9.5" cy="9.5" r="6.5"/><path d="m14.5 14.5 5 5"/></svg>
+      <label for="q" class="vh">搜索</label>
+      <input id="q" class="q" value="wx">
+      <span class="sub">4 个结果</span>
+    </div>
+
+    <div class="body">
+      <div class="side">
+        <div class="sec">应用</div>
+        <div class="row on">
+          <img src="/_blob/931b533add3d07079270a100374d7818" alt="" style="width: 30px; height: 30px">
+          <span class="two"><span class="t">微信</span><span class="sub one">拼音 weixin · 首字母 wx</span></span>
+        </div>
+        <div class="row">
+          <img src="/_blob/f6b00659e9549fa639cd28a70447b8dd" alt="" style="width: 30px; height: 30px">
+          <span class="two"><span class="t">微信开发者工具</span><span class="sub one">首字母 wx</span></span>
+        </div>
+        <div class="sec">Agent 会话</div>
+        <div class="row">
+          <img src="/_blob/491258cde129fd053b687aea4fa432f9" alt="" style="width: 28px; height: 28px; margin: 0 1px">
+          <span class="two"><span class="t one">修复 wx 登录回调</span><span class="sub one">~/code_hub/mini-app · 2 小时前</span></span>
+          <span class="chip idle">空闲</span>
+        </div>
+        <div class="sec">剪贴板</div>
+        <div class="row">
+          <span style="display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; background: rgba(0,0,0,.05)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#48484a" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6"/></svg></span>
+          <span class="two"><span class="one mono">wx_appid=wx8f3c2a9d71e6b405</span><span class="sub one">飞书 · 5 分钟前</span></span>
+        </div>
+      </div>
+
+      <div class="detail">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 0 6px">
+          <img src="/_blob/931b533add3d07079270a100374d7818" alt="" style="width: 88px; height: 88px">
+          <span style="font-size: 20px; font-weight: 600">微信</span>
+          <span class="sub">WeChat · 版本 4.1.2</span>
+        </div>
+        <dl class="kv" style="padding: 14px 0 0; border-top: 1px solid rgba(0,0,0,.08)">
+          <dt>位置</dt><dd class="mono">/Applications/WeChat.app</dd>
+          <dt>上次打开</dt><dd>今天 12:58</dd>
+          <dt>匹配方式</dt><dd>拼音首字母</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="ctx"><img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="" style="width: 16px; height: 16px; border-radius: 4px">Helmp</span>
+      <span class="hint" style="margin-left: auto">打开<span class="k">↵</span></span>
+      <span class="hint">操作<span class="k">⌘K</span></span>
+    </div>
+  </div>
+
+  <div class="glass" style="position: absolute; left: 818px; top: 382px; width: 252px; border-radius: 14px; padding: 6px">
+    <div style="padding: 6px 10px; font-size: 12px; font-weight: 600; color: #6e6e73">微信</div>
+    <div class="mi on">打开<span class="sc">↵</span></div>
+    <div class="mi">在访达中显示<span class="sc">⌘↵</span></div>
+    <div class="mi">复制路径<span class="sc">⌘⇧C</span></div>
+    <div class="mi">固定到最近使用<span class="sc">⌘P</span></div>
+    <div class="mi">退出应用<span class="sc">⌘Q</span></div>
+    <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 10px 4px; border-top: 1px solid rgba(0,0,0,.08)">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="#6e6e73" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="m9 9 3.5 3.5"/></svg>
+      <span style="color: #6e6e73; font-size: 12px">搜索操作…</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -11,7 +11,7 @@
 # @raycast.packageName 示例
 # @raycast.icon 🆔
 # @raycast.description 生成随机 UUID 并复制到剪贴板
-# @raycast.author huan
+# @raycast.author helmp
 
 set -euo pipefail
 

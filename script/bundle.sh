@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 huan 打成 target/<profile>/Huan.app（菜单栏工具型，LSUIElement），并做 ad-hoc 签名。
+# 把 helmp 打成 target/<profile>/Helmp.app（菜单栏工具型，LSUIElement），并做 ad-hoc 签名。
 # 用法：script/bundle.sh [debug|release]，默认 debug。
 set -euo pipefail
 
@@ -14,27 +14,29 @@ else
 fi
 
 version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
-app="target/$profile/Huan.app"
+app="target/$profile/Helmp.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
-cp "target/$profile/huan" "$app/Contents/MacOS/huan"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp "target/$profile/helmp" "$app/Contents/MacOS/helmp"
+cp resources/AppIcon.icns resources/menubar-template.png resources/menubar-template@2x.png "$app/Contents/Resources/"
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>dev.huan.launcher</string>
-  <key>CFBundleName</key><string>Huan</string>
-  <key>CFBundleDisplayName</key><string>唤</string>
-  <key>CFBundleExecutable</key><string>huan</string>
+  <key>CFBundleIdentifier</key><string>dev.helmp.launcher</string>
+  <key>CFBundleName</key><string>Helmp</string>
+  <key>CFBundleDisplayName</key><string>Helmp</string>
+  <key>CFBundleExecutable</key><string>helmp</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSAppleEventsUsageDescription</key><string>唤需要控制终端 App，才能跳转到对应的 agent 会话。</string>
+  <key>NSAppleEventsUsageDescription</key><string>Helmp 需要控制终端 App，才能跳转到对应的 Agent 会话。</string>
 </dict>
 </plist>
 PLIST

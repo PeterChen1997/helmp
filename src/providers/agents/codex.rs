@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn lock_probe_detects_live_writer_only() {
         // 锁文件在进程退出后会留下来；只有真有人持锁才算活，否则列表全是死会话。
-        let dir = std::env::temp_dir().join(format!("huan-lock-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("helmp-lock-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let lock = dir.join("thread.lock");
         std::fs::write(&lock, b"").unwrap();

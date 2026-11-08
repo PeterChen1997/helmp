@@ -1,8 +1,8 @@
-//! 唤（Huan）：macOS 原生启动器。
+//! Helmp：macOS 原生启动器（读作 help me）。
 //!
 //! `huan`                   启动图形界面（⌥Space 唤起）
-//! `huan query <text>`      无头查询，见 `cli.rs`
-//! `HUAN_SELF_TEST=1 huan`  图形界面自检：程序化 show → 查询 → hide 后退出
+//! `helmp query <text>`      无头查询，见 `cli.rs`
+//! `HELMP_SELF_TEST=1 helmp`  图形界面自检：程序化 show → 查询 → hide 后退出
 
 mod cli;
 mod engine;
@@ -31,7 +31,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(result) = cli::run(&engine, &args) {
         if let Err(err) = result {
-            eprintln!("huan: {err:#}");
+            eprintln!("helmp: {err:#}");
             std::process::exit(1);
         }
         return;
@@ -68,12 +68,12 @@ fn run_gui(engine: Engine) {
 
         if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
             // 大声失败：热键注册不上整个 App 就没有意义。
-            eprintln!("huan: failed to register global hotkey: {err:#}");
+            eprintln!("helmp: failed to register global hotkey: {err:#}");
             cx.quit();
             return;
         }
 
-        if let Some(query) = std::env::var_os("HUAN_SELF_TEST") {
+        if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
             self_test(cx, window, launcher, query.to_string_lossy().into_owned());
         }
     });
@@ -81,12 +81,12 @@ fn run_gui(engine: Engine) {
 
 /// 图形界面自检：在真实窗口里走一遍 show → 逐个查询 → 执行 → hide，把状态打到 stdout 后退出。
 ///
-/// - `HUAN_SELF_TEST`：用 `|` 分隔的查询词，`1` 表示只测显隐。
-/// - `HUAN_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
+/// - `HELMP_SELF_TEST`：用 `|` 分隔的查询词，`1` 表示只测显隐。
+/// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
     use std::time::{Duration, Instant};
 
-    let exec = std::env::var("HUAN_SELF_TEST_EXEC").ok();
+    let exec = std::env::var("HELMP_SELF_TEST_EXEC").ok();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let settle = Duration::from_millis(1500);
         // 等 provider 首次索引完成。
@@ -159,8 +159,8 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         println!("self-test hide-latency: {} ms", started.elapsed().as_millis());
         report("after-hide".into(), cx);
 
-        // HUAN_SELF_TEST_RESHOW=<秒>：隐藏后等这么久再唤起，检查上次输入是被保留还是清空。
-        if let Some(secs) = std::env::var("HUAN_SELF_TEST_RESHOW").ok().and_then(|s| s.parse().ok()) {
+        // HELMP_SELF_TEST_RESHOW=<秒>：隐藏后等这么久再唤起，检查上次输入是被保留还是清空。
+        if let Some(secs) = std::env::var("HELMP_SELF_TEST_RESHOW").ok().and_then(|s| s.parse().ok()) {
             cx.background_executor().timer(Duration::from_secs(secs)).await;
             toggle(window, launcher.clone(), cx);
             cx.background_executor().timer(settle).await;

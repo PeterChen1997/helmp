@@ -1,7 +1,7 @@
 //! 区域截图：包系统 `screencapture -i`（十字准星选区，空格切窗口，Esc 取消）。
 //!
 //! 屏幕录制权限只用 `CGPreflightScreenCaptureAccess` 检查，不调用 Request 弹框。
-//! 注意 screencapture 子进程继承父进程的 TCC 身份：终端里跑问的是终端的权限，打包后问的是唤。
+//! 注意 screencapture 子进程继承父进程的 TCC 身份：终端里跑问的是终端的权限，打包后问的是 Helmp。
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -11,8 +11,8 @@ use objc2_core_graphics::CGPreflightScreenCaptureAccess;
 
 use super::pasteboard;
 
-pub const NO_SCREEN_ACCESS: &str = "唤没有屏幕录制权限，无法截图。\n\
-请到「系统设置 → 隐私与安全性 → 录屏与系统录音」里允许唤（从终端运行时是允许该终端），然后重试。";
+pub const NO_SCREEN_ACCESS: &str = "Helmp 没有屏幕录制权限，无法截图。\n\
+请到「系统设置 → 隐私与安全性 → 录屏与系统录音」里允许 Helmp（从终端运行时是允许该终端），然后重试。";
 
 pub fn has_screen_access() -> bool {
     CGPreflightScreenCaptureAccess()

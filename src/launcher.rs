@@ -14,11 +14,11 @@ use crate::provider::{Item, Outcome};
 
 const ROW_HEIGHT: Pixels = px(44.);
 /// 隐藏超过这么久再唤起，就清空上次输入回到空白搜索（参考 Raycast「Pop to Root Search」默认 90 秒）。
-/// `HUAN_RESET_AFTER_SECS` 可覆盖，0 表示每次唤起都清空。
+/// `HELMP_RESET_AFTER_SECS` 可覆盖，0 表示每次唤起都清空。
 const DEFAULT_RESET_AFTER: Duration = Duration::from_secs(90);
 
 fn reset_after() -> Duration {
-    std::env::var("HUAN_RESET_AFTER_SECS")
+    std::env::var("HELMP_RESET_AFTER_SECS")
         .ok()
         .and_then(|secs| secs.parse().ok())
         .map(Duration::from_secs)
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn zero_limit_always_clears() {
-        // HUAN_RESET_AFTER_SECS=0 的语义是「每次都是新的」。
+        // HELMP_RESET_AFTER_SECS=0 的语义是「每次都是新的」。
         assert!(should_reset(Some(Duration::ZERO), Duration::ZERO, false));
     }
 

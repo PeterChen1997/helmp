@@ -11,6 +11,6 @@
 # @raycast.packageName 示例
 # @raycast.icon 🕐
 # @raycast.description 显示当前日期与时间
-# @raycast.author huan
+# @raycast.author helmp
 
 date "+%Y-%m-%d %H:%M:%S %Z"

@@ -154,7 +154,7 @@ fn screenshot_and_save() -> Result<Outcome> {
     }
     let dir = paths::data_dir()?.join("screenshots");
     std::fs::create_dir_all(&dir).with_context(|| format!("创建 {}", dir.display()))?;
-    let path = dir.join(format!("唤截图 {}.png", timestamp()));
+    let path = dir.join(format!("Helmp 截图 {}.png", timestamp()));
     if capture::to_file(&path)? {
         let status = Command::new("open").arg("-R").arg(&path).status()?;
         anyhow::ensure!(
@@ -171,7 +171,7 @@ fn ocr_screen() -> Result<Outcome> {
         return Ok(Outcome::Message(capture::NO_SCREEN_ACCESS.into()));
     }
     let path = std::env::temp_dir().join(format!(
-        "huan-ocr-{}-{}.png",
+        "helmp-ocr-{}-{}.png",
         std::process::id(),
         timestamp()
     ));
@@ -185,7 +185,7 @@ fn ocr_screen() -> Result<Outcome> {
     if path.exists()
         && let Err(err) = std::fs::remove_file(&path)
     {
-        eprintln!("huan: 删除临时截图 {} 失败：{err}", path.display());
+        eprintln!("helmp: 删除临时截图 {} 失败：{err}", path.display());
     }
     copy_recognized(&image?)
 }
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn ocr_with_absolute_path_offers_file_item() {
-        // `huan run screenshot:ocr-file:<路径> "ocr <路径>"` 依赖这个 id 格式做命令行测试。
+        // `helmp run screenshot:ocr-file:<路径> "ocr <路径>"` 依赖这个 id 格式做命令行测试。
         let found = ids("OCR /tmp/a b.png");
         assert!(found.contains(&"screenshot:ocr-file:/tmp/a b.png".to_string()));
         // 相对路径不认，避免依赖当前工作目录。
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn ocr_file_missing_file_fails_loudly() {
         // 路径打错要报错，不能显示「没有识别到文字」误导用户。
-        assert!(ocr_file(Path::new("/nonexistent/huan-ocr.png")).is_err());
+        assert!(ocr_file(Path::new("/nonexistent/helmp-ocr.png")).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! 回车跳转：桌面深链 → iTerm2 / Terminal.app 按 tty 选中 tab → 其他终端只激活宿主 App。
 //!
-//! 活着的会话绝不 `--resume`（会开第二个进程）。`HUAN_DRY_RUN=1` 时只返回将要执行的命令。
+//! 活着的会话绝不 `--resume`（会开第二个进程）。`HELMP_DRY_RUN=1` 时只返回将要执行的命令。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -67,7 +67,7 @@ fn shell_quote(arg: &str) -> String {
     }
 }
 
-/// 子进程一律用 UTF-8 locale：唤可能从 LANG 为空的环境启动，osascript 会把脚本里的中文按 C locale 解码成乱码。
+/// 子进程一律用 UTF-8 locale：Helmp 可能从 LANG 为空的环境启动，osascript 会把脚本里的中文按 C locale 解码成乱码。
 fn command(program: &str) -> Command {
     let mut command = Command::new(program);
     command
@@ -77,7 +77,7 @@ fn command(program: &str) -> Command {
 }
 
 fn dry_run() -> bool {
-    std::env::var("HUAN_DRY_RUN").as_deref() == Ok("1")
+    std::env::var("HELMP_DRY_RUN").as_deref() == Ok("1")
 }
 
 pub fn action(jump: Jump) -> Action {
@@ -283,11 +283,14 @@ mod tests {
         assert!(no_env.args[1].contains("tty of s is \"/dev/ttys000\""));
     }
 
-    /// 本机真实 iTerm2 shell 的端到端解析：`HUAN_TEST_TTY_PID=<pid> cargo test -- --ignored`。
+    /// 本机真实 iTerm2 shell 的端到端解析：`HELMP_TEST_TTY_PID=<pid> cargo test -- --ignored`。
     #[test]
     #[ignore = "依赖本机正在运行的终端进程"]
     fn resolves_real_terminal_process() {
-        let pid: i32 = std::env::var("HUAN_TEST_TTY_PID").unwrap().parse().unwrap();
+        let pid: i32 = std::env::var("HELMP_TEST_TTY_PID")
+            .unwrap()
+            .parse()
+            .unwrap();
         let plan = plan(&Jump::Pid(pid)).unwrap();
         println!("{}", plan.render());
     }

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · 品牌与图标</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.glass{background:rgba(250,250,252,.78);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);box-shadow:0 0 0 .5px rgba(0,0,0,.14),inset 0 0 0 .5px rgba(255,255,255,.7),0 24px 70px rgba(0,0,0,.2)}
+.opt{display:flex;flex-direction:column;align-items:center;gap:10px;padding:24px 18px 20px;border-radius:18px;text-align:center}
+.cap{color:#48484a;font-size:12.5px;line-height:1.5}
+</style>
+</helmet>
+<div class="desk">
+  <div class="glass" style="position: absolute; left: 80px; top: 70px; width: 1120px; height: 660px; border-radius: 28px; padding: 48px 56px; box-sizing: border-box; display: flex; flex-direction: column; gap: 32px">
+    <div style="display: flex; align-items: flex-end; gap: 24px">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <span style="font-size: 64px; font-weight: 700; letter-spacing: -1.5px; line-height: 1">Helmp</span>
+        <span style="font-size: 17px; color: #48484a">读起来像 help me。按一下 ⌥Space，它就在。</span>
+      </div>
+      <span style="margin-left: auto; color: #6e6e73; font-size: 12.5px">crates.io、Homebrew、npm 均未被占用</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+      <div class="opt" style="background: rgba(255,255,255,.5)">
+        <img src="/_blob/0e65f6d3ae198b7468c5e66b82ba6280" alt="候选 A：蓝色玻璃方块上的白色救生圈" style="width: 132px; height: 132px; border-radius: 30px">
+        <span style="font-weight: 600; font-size: 15px">A · 救生圈</span>
+        <span class="cap">直接对应「求助」，最好懂；但也像客服或帮助中心的图标。</span>
+      </div>
+      <div class="opt" style="background: rgba(255,255,255,.85); box-shadow: 0 0 0 2px #0b63e5">
+        <img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="候选 B：蓝紫玻璃方块上的白色 H 与星芒" style="width: 132px; height: 132px; border-radius: 30px">
+        <span style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px">B · H 与星芒<span style="height: 20px; padding: 0 8px; border-radius: 10px; background: #0b63e5; color: #fff; font-size: 11.5px; line-height: 20px">推荐</span></span>
+        <span class="cap">首字母加一颗星芒，指向名字和 AI 助手；单色化后在菜单栏也清楚。</span>
+      </div>
+      <div class="opt" style="background: rgba(255,255,255,.5)">
+        <img src="/_blob/0b58d737e62eb93553d314c8f514eed3" alt="候选 C：珊瑚色玻璃方块上的放大镜与举起的手" style="width: 132px; height: 132px; border-radius: 30px">
+        <span style="font-weight: 600; font-size: 15px">C · 放大镜与手</span>
+        <span class="cap">暖色在 Dock 和启动台里最醒目；但举起的手也容易读成「停」。</span>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 28px; padding-top: 24px; border-top: 1px solid rgba(0,0,0,.08)">
+      <span style="font-weight: 600">菜单栏图标（B 的单色版）</span>
+      <div style="display: flex; align-items: center; gap: 14px; height: 30px; padding: 0 14px; border-radius: 8px; background: rgba(255,255,255,.6); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.1)">
+        <span style="display: flex; align-items: center; justify-content: center; width: 30px; height: 22px; border-radius: 6px; background: rgba(0,0,0,.12)"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3v10M10.5 6.5V13M3.5 8h7" fill="none" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/><path d="m12.6 1 .6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" fill="#1d1d1f"/></svg></span>
+        <span style="font-size: 13px">11月8日 周六 13:45</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; height: 30px; padding: 0 14px; border-radius: 8px; background: rgba(30,30,32,.82)">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3v10M10.5 6.5V13M3.5 8h7" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="m12.6 1 .6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" fill="#fff"/></svg>
+        <span style="font-size: 13px; color: #fff">深色菜单栏</span>
+      </div>
+      <svg width="64" height="64" viewBox="0 0 16 16" role="img" aria-label="菜单栏图标放大"><path d="M3.5 3v10M10.5 6.5V13M3.5 8h7" fill="none" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/><path d="m12.6 1 .6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" fill="#1d1d1f"/></svg>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

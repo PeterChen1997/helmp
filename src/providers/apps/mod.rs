@@ -133,18 +133,18 @@ fn watch(
             .with_context(|| format!("监听 {}", real.display()))?;
     }
     std::thread::Builder::new()
-        .name("huan-apps-watch".into())
+        .name("helmp-apps-watch".into())
         .spawn(move || {
             // 监听器随线程存活；通道断开（监听器出错退出）时线程结束。
             let _watcher = watcher;
             while let Ok(first) = rx.recv() {
                 if let Err(err) = first {
-                    eprintln!("huan: apps 监听出错：{err}");
+                    eprintln!("helmp: apps 监听出错：{err}");
                 }
                 // 防抖：吃掉 REBUILD_DEBOUNCE 内连续到来的事件。
                 while rx.recv_timeout(REBUILD_DEBOUNCE).is_ok() {}
                 if let Err(err) = rebuild(&index, &roots, &extras, home.as_deref()) {
-                    eprintln!("huan: apps 重建索引失败：{err:#}");
+                    eprintln!("helmp: apps 重建索引失败：{err:#}");
                 }
             }
         })
@@ -189,7 +189,7 @@ fn collect_bundles(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<(
         } else if depth < MAX_SUBDIR_DEPTH {
             // 子目录可能没有权限（其他用户的目录等），告警后跳过，不影响其余应用。
             if let Err(err) = collect_bundles(&path, depth + 1, out) {
-                eprintln!("huan: apps 跳过 {}：{err:#}", path.display());
+                eprintln!("helmp: apps 跳过 {}：{err:#}", path.display());
             }
         }
     }
@@ -202,11 +202,11 @@ fn load_app(path: &Path, home: Option<&Path>) -> App {
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_default();
     let english = localized::bundle_names(path).unwrap_or_else(|err| {
-        eprintln!("huan: apps 读取 Info.plist 失败：{err:#}");
+        eprintln!("helmp: apps 读取 Info.plist 失败：{err:#}");
         Vec::new()
     });
     let chinese = localized::chinese_name(path).unwrap_or_else(|err| {
-        eprintln!("huan: apps 读取中文名失败：{err:#}");
+        eprintln!("helmp: apps 读取中文名失败：{err:#}");
         None
     });
 
@@ -319,8 +319,8 @@ mod tests {
 
     #[test]
     fn rebuilds_index_when_app_is_installed() {
-        // 用户装完新应用马上就要能搜到，不能等重启唤。
-        let root = std::env::temp_dir().join(format!("huan-watch-{}", std::process::id()));
+        // 用户装完新应用马上就要能搜到，不能等重启 Helmp。
+        let root = std::env::temp_dir().join(format!("helmp-watch-{}", std::process::id()));
         std::fs::create_dir_all(root.join("Old.app")).unwrap();
         let index = Index::default();
         let roots = vec![root.clone()];

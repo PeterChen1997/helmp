@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · 截图识别文字</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.glass{background:rgba(246,246,248,.74);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);box-shadow:0 0 0 .5px rgba(0,0,0,.16),inset 0 0 0 .5px rgba(255,255,255,.7),0 24px 70px rgba(0,0,0,.24)}
+.panel{position:absolute;left:200px;top:130px;width:880px;height:540px;border-radius:24px;overflow:hidden;display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:12px;height:60px;flex:none;padding:0 20px;border-bottom:1px solid rgba(0,0,0,.08)}
+.scope{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:7px;background:rgba(94,92,230,.14);color:#3d3bb8;font-weight:600;white-space:nowrap}
+.body{flex:1;display:flex;min-height:0}
+.side{width:380px;flex:none;display:flex;flex-direction:column;gap:8px;padding:18px 20px;border-right:1px solid rgba(0,0,0,.08)}
+.detail{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;padding:18px 22px}
+.sub{color:#6e6e73;font-size:12px}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;background:rgba(0,0,0,.06);font-size:12px;color:#3a3a3c}
+.k{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.07);color:#3a3a3c;font-size:11.5px;font-weight:500}
+.foot{display:flex;align-items:center;gap:16px;height:40px;flex:none;padding:0 14px 0 16px;border-top:1px solid rgba(0,0,0,.08);font-size:12px;color:#48484a}
+.ctx{display:flex;align-items:center;gap:6px;font-weight:600}
+.hint{display:flex;align-items:center;gap:6px}
+</style>
+</helmet>
+<div class="desk">
+  <div class="glass panel">
+    <div class="bar">
+      <span class="scope">截图识别</span>
+      <span style="display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: #1f8a3b"><svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 7.5 2.7 2.7L11 4.5"/></svg></span>
+      <span style="font-size: 15px; font-weight: 600">已识别 2 行文字，已复制到剪贴板</span>
+      <span style="margin-left: auto; display: flex; gap: 6px"><span class="tag">简体中文</span><span class="tag">英文</span></span>
+    </div>
+
+    <div class="body">
+      <figure class="side" style="margin: 0">
+        <figcaption class="sub">截图区域 640 × 220</figcaption>
+        <div style="flex: 1; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: #fff; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12); overflow: hidden">
+          <img src="/_blob/515ba350eae01ca918a351d675c977e6" alt="截图：你好 Huan 2026，以及一行英文" style="max-width: 100%; max-height: 100%; object-fit: contain">
+        </div>
+      </figure>
+      <div class="detail">
+        <label for="ocr" class="sub">识别结果，可直接修改</label>
+        <textarea id="ocr" style="flex: 1; resize: none; padding: 14px 16px; border: 0; border-radius: 12px; background: rgba(255,255,255,.7); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.12); font: inherit; font-size: 15px; line-height: 1.7; color: #1d1d1f; outline: 0">你好 Huan 2026
+The quick brown fox jumps over the lazy dog</textarea>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="ctx"><img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="" style="width: 16px; height: 16px; border-radius: 4px">Helmp<span style="font-weight: 400; color: #6e6e73">› 截图识别</span></span>
+      <span class="hint" style="margin-left: auto">复制<span class="k">↵</span></span>
+      <span class="hint">翻译<span class="k">⌘T</span></span>
+      <span class="hint">操作<span class="k">⌘K</span></span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -44,7 +44,7 @@ const SUBSTRING_TIER: u32 = 700;
 /// 正文命中但首行不命中时的档位（介于子串 700 与子序列 400 之间）。
 const BODY_TIER: u32 = 600;
 /// 设为 `0` 时选中只复制不粘贴（端到端测试用，免得往前台 App 里乱贴）。
-const AUTOPASTE_ENV: &str = "HUAN_CLIPBOARD_AUTOPASTE";
+const AUTOPASTE_ENV: &str = "HELMP_CLIPBOARD_AUTOPASTE";
 
 pub struct Clipboard {
     inner: Arc<Inner>,
@@ -75,7 +75,7 @@ impl Provider for Clipboard {
 
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
-            .name("huan-clipboard-watch".into())
+            .name("helmp-clipboard-watch".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(watcher::POLL_INTERVAL);
@@ -84,7 +84,7 @@ impl Provider for Clipboard {
                         continue;
                     }
                     if let Err(err) = inner.handle(read, macos::frontmost_app()) {
-                        eprintln!("huan: 剪贴板采集失败：{err:#}");
+                        eprintln!("helmp: 剪贴板采集失败：{err:#}");
                     }
                 }
             })

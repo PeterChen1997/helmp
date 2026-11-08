@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp 设置 · 剪贴板与隐私</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.win{position:absolute;left:220px;top:90px;width:840px;height:620px;display:flex;border-radius:18px;overflow:hidden;background:rgba(252,252,253,.94);box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 30px 80px rgba(0,0,0,.28)}
+.side{width:220px;margin:8px 0 8px 8px;padding:10px 8px;border-radius:14px;background:rgba(236,236,240,.7);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08)}
+.nav{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px;border-radius:8px;font-size:13px}
+.nav.on{background:#0b63e5;color:#fff}
+.ni{display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px}
+.grp{margin:0 0 16px;border-radius:12px;background:rgba(0,0,0,.035);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.06)}
+.r{display:flex;align-items:center;gap:12px;min-height:42px;padding:5px 14px}
+.r + .r{border-top:1px solid rgba(0,0,0,.07)}
+.help{color:#6e6e73;font-size:12px;line-height:1.45}
+.gh{margin:0 0 6px 4px;font-size:13px;font-weight:600}
+.sw{position:relative;width:38px;height:22px;flex:none;margin-left:auto;border:0;padding:0;border-radius:11px;background:#0b63e5}
+.sw::after{content:"";position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.pop{display:inline-flex;align-items:center;gap:8px;height:24px;margin-left:auto;padding:0 6px 0 10px;border:0;border-radius:6px;background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.16),0 1px 1.5px rgba(0,0,0,.08);font:inherit;font-size:13px;color:#1d1d1f}
+</style>
+</helmet>
+<div class="desk">
+  <div class="win">
+    <nav class="side" aria-label="设置">
+      <div style="display: flex; gap: 8px; padding: 2px 6px 14px">
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15)"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #febc2e; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15)"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #28c840; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15)"></span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 2px 10px; padding: 0 8px; border-radius: 7px; background: rgba(0,0,0,.06); color: #6e6e73">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#6e6e73" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="6" r="4.2"/><path d="m9.2 9.2 3.3 3.3"/></svg>搜索
+      </div>
+      <div class="nav"><span class="ni" style="background: #8e8e93"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" stroke-linecap="round"/></svg></span>通用</div>
+      <div class="nav"><span class="ni" style="background: #0b63e5"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h3V3.5a1.5 1.5 0 0 1 3 0V5h3v3h-1.5a1.5 1.5 0 0 0 0 3H12v3H3z"/></svg></span>扩展</div>
+      <div class="nav"><span class="ni" style="background: #0a7f8a"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5" stroke-linecap="round"/></svg></span>模型</div>
+      <div class="nav"><span class="ni" style="background: #8944ab"><svg width="13" height="13" viewBox="0 0 16 16" fill="#fff" aria-hidden="true"><path d="M8 1.5 9.4 6.6 14.5 8 9.4 9.4 8 14.5 6.6 9.4 1.5 8l5.1-1.4z"/></svg></span>Agent</div>
+      <div class="nav on"><span class="ni" style="background: rgba(255,255,255,.25)"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="2.5" width="10" height="12" rx="2"/><path d="M6 2.5h4v2H6z"/></svg></span>剪贴板</div>
+      <div class="nav"><span class="ni" style="background: #5e5ce6"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2 5V3.5A1.5 1.5 0 0 1 3.5 2H5M11 2h1.5A1.5 1.5 0 0 1 14 3.5V5M14 11v1.5a1.5 1.5 0 0 1-1.5 1.5H11M5 14H3.5A1.5 1.5 0 0 1 2 12.5V11"/></svg></span>截图</div>
+      <div class="nav"><span class="ni" style="background: #1d1d1f"><svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="#fff"/></svg></span>外观</div>
+      <div class="nav"><span class="ni" style="background: #8e8e93"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 7v4.5"/><circle cx="8" cy="4.6" r=".6" fill="#fff"/></svg></span>关于</div>
+    </nav>
+
+    <main style="flex: 1; min-width: 0; padding: 16px 28px 20px; overflow: hidden">
+      <div style="height: 28px; display: flex; align-items: center; margin-bottom: 16px; font-size: 15px; font-weight: 700">剪贴板</div>
+
+      <div class="grp">
+        <div class="r"><span>记录剪贴板历史</span><button type="button" role="switch" aria-checked="true" aria-label="记录剪贴板历史" class="sw"></button></div>
+        <div class="r">
+          <span>保留时长</span>
+          <button type="button" class="pop" aria-haspopup="listbox">永久<svg width="9" height="12" viewBox="0 0 9 12" fill="none" stroke="#3a3a3c" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 4.5 2.5-2.5L7 4.5M2 7.5 4.5 10 7 7.5"/></svg></button>
+        </div>
+        <div class="r"><span>记录图片和文件</span><button type="button" role="switch" aria-checked="true" aria-label="记录图片和文件" class="sw"></button></div>
+      </div>
+
+      <div class="gh">隐私</div>
+      <div class="grp">
+        <div class="r">
+          <span style="display: flex; flex-direction: column; gap: 2px"><span>跳过标记为隐藏的内容</span><span class="help">密码 App、1Password 等标记为隐藏或临时的内容，不会写入磁盘</span></span>
+          <button type="button" role="switch" aria-checked="true" aria-label="跳过标记为隐藏的内容" class="sw"></button>
+        </div>
+        <div class="r" style="flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 14px">
+          <span>不记录以下应用复制的内容</span>
+          <div style="border-radius: 8px; background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.12)">
+            <div style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px"><img src="/_blob/2f843ef6218f48e132923f7223001f61" alt="" style="width: 20px; height: 20px">密码</div>
+            <div style="display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 6px; border-top: 1px solid rgba(0,0,0,.07)">
+              <button type="button" aria-label="添加应用" style="width: 26px; height: 22px; border: 0; border-radius: 5px; background: transparent; font: inherit; font-size: 16px; color: #3a3a3c">+</button>
+              <button type="button" aria-label="移除所选应用" style="width: 26px; height: 22px; border: 0; border-radius: 5px; background: transparent; font: inherit; font-size: 16px; color: #3a3a3c">−</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="gh">粘贴</div>
+      <div class="grp">
+        <div class="r">
+          <span style="display: flex; flex-direction: column; gap: 2px"><span>选中后自动粘贴到前台应用</span><span class="help">需要在「隐私与安全性 › 辅助功能」中允许 Helmp；未授权时只复制</span></span>
+          <button type="button" role="switch" aria-checked="true" aria-label="选中后自动粘贴到前台应用" class="sw"></button>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px">
+        <span class="help" style="font-size: 13px">共 3,482 条 · 占用 46 MB</span>
+        <button type="button" class="pop" style="padding: 0 10px; color: #b3261e">清空全部历史…</button>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

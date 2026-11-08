@@ -2,7 +2,7 @@
 //!
 //! 原因：中文输入法下打 `wx` 只会进入组字（marked text），搜索框收不到变化；Esc 还会被输入法
 //! 拿去取消组字，关不掉面板。启动器的查询本来就支持拼音缩写，所以唤起时用 ABC 更顺手。
-//! 设置 `HUAN_KEEP_INPUT_SOURCE=1` 可关闭此行为。
+//! 设置 `HELMP_KEEP_INPUT_SOURCE=1` 可关闭此行为。
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -61,7 +61,7 @@ impl Drop for Source {
 }
 
 fn enabled() -> bool {
-    std::env::var_os("HUAN_KEEP_INPUT_SOURCE").is_none()
+    std::env::var_os("HELMP_KEEP_INPUT_SOURCE").is_none()
 }
 
 /// 面板显示期间切到英文布局，记住原输入法以便恢复。只能在主线程调用。
@@ -83,7 +83,7 @@ impl InputSourceSwitch {
             )
         };
         let (Some(current), Some(ascii)) = (current, ascii) else {
-            eprintln!("huan: 读取当前输入法失败，保持不变");
+            eprintln!("helmp: 读取当前输入法失败，保持不变");
             return;
         };
         let (from, to) = (current.id(), ascii.id());
@@ -96,7 +96,7 @@ impl InputSourceSwitch {
         if status == 0 {
             self.previous = Some(current);
         } else {
-            eprintln!("huan: 切换到 {to} 失败（OSStatus {status}）");
+            eprintln!("helmp: 切换到 {to} 失败（OSStatus {status}）");
         }
     }
 
@@ -111,7 +111,7 @@ impl InputSourceSwitch {
         ));
         if status != 0 {
             eprintln!(
-                "huan: 恢复输入法 {} 失败（OSStatus {status}）",
+                "helmp: 恢复输入法 {} 失败（OSStatus {status}）",
                 previous.id()
             );
         }

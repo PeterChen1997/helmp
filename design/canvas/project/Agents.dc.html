@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Helmp · Agent 会话</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.desk{position:relative;width:1280px;height:800px;overflow:hidden;background:#cdd6ea url(/_blob/6f3c6191bac858ee8bf10a413df4532e) center/cover no-repeat;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;color:#1d1d1f;font-size:13px;-webkit-font-smoothing:antialiased}
+.glass{background:rgba(246,246,248,.74);-webkit-backdrop-filter:blur(40px) saturate(180%);backdrop-filter:blur(40px) saturate(180%);box-shadow:0 0 0 .5px rgba(0,0,0,.16),inset 0 0 0 .5px rgba(255,255,255,.7),0 24px 70px rgba(0,0,0,.24)}
+.panel{position:absolute;left:200px;top:130px;width:880px;height:540px;border-radius:24px;overflow:hidden;display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:12px;height:60px;flex:none;padding:0 20px;border-bottom:1px solid rgba(0,0,0,.08)}
+.q{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:20px;color:#1d1d1f}
+.scope{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:7px;background:rgba(11,99,229,.12);color:#0a4fb8;font-weight:600;white-space:nowrap}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.seg{display:flex;padding:2px;border-radius:8px;background:rgba(0,0,0,.06);font-size:12px}
+.seg button{height:24px;padding:0 10px;border:0;border-radius:6px;background:transparent;font:inherit;color:#3a3a3c}
+.seg button.on{background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.12);font-weight:600;color:#1d1d1f}
+.body{flex:1;display:flex;min-height:0}
+.side{width:380px;flex:none;padding:4px 8px;overflow:hidden;border-right:1px solid rgba(0,0,0,.08)}
+.detail{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;padding:22px 26px;overflow:hidden}
+.sec{padding:10px 12px 4px;font-size:12px;font-weight:600;color:#6e6e73}
+.row{display:flex;align-items:center;gap:10px;min-height:52px;padding:4px 10px;border-radius:10px}
+.row.on{background:#0b63e5;color:#fff}
+.two{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t{font-weight:600}
+.sub{color:#6e6e73;font-size:12px}
+.row.on .sub{color:rgba(255,255,255,.88)}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 8px;border-radius:10px;font-size:11.5px;font-weight:600;white-space:nowrap}
+.wait{background:#ffe7c7;color:#8a3b00}
+.run{background:#dceaff;color:#0a4fb8}
+.done{background:#dcf2e1;color:#1c6b30}
+.row.on .chip{background:rgba(255,255,255,.24);color:#fff}
+.k{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.07);color:#3a3a3c;font-size:11.5px;font-weight:500}
+.foot{display:flex;align-items:center;gap:16px;height:40px;flex:none;padding:0 14px 0 16px;border-top:1px solid rgba(0,0,0,.08);font-size:12px;color:#48484a}
+.ctx{display:flex;align-items:center;gap:6px;font-weight:600}
+.hint{display:flex;align-items:center;gap:6px}
+.kv{display:grid;grid-template-columns:72px minmax(0,1fr);row-gap:8px;margin:0;font-size:12.5px}
+.kv dt{color:#6e6e73}
+.kv dd{margin:0}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px}
+.card{padding:12px 14px;border-radius:10px;background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.1);line-height:1.55}
+</style>
+</helmet>
+<div class="desk">
+  <div class="glass panel">
+    <div class="bar">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#6e6e73" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="9.5" cy="9.5" r="6.5"/><path d="m14.5 14.5 5 5"/></svg>
+      <span class="scope">Agent 会话</span>
+      <label for="q" class="vh">筛选会话</label>
+      <input id="q" class="q" placeholder="按标题、项目或分支筛选">
+      <div class="seg" role="group" aria-label="来源"><button type="button" class="on">全部 4</button><button type="button">Claude</button><button type="button">Codex</button></div>
+    </div>
+
+    <div class="body">
+      <div class="side">
+        <div class="sec">等你处理 · 2</div>
+        <div class="row on">
+          <img src="/_blob/491258cde129fd053b687aea4fa432f9" alt="" style="width: 28px; height: 28px">
+          <span class="two"><span class="t one">Finder daily radar</span><span class="sub one">~/code_hub/finder · 10 分钟前</span></span>
+          <span class="chip wait">等你确认</span>
+        </div>
+        <div class="row">
+          <img src="/_blob/4e9eb3d0a2b93a22cf6cccaa782b2df3" alt="" style="width: 28px; height: 28px">
+          <span class="two"><span class="t one">Godot 框架调研</span><span class="sub one">~/code_hub/game · 1 小时前</span></span>
+          <span class="chip wait">等你回答</span>
+        </div>
+        <div class="sec">进行中 · 1</div>
+        <div class="row">
+          <img src="/_blob/491258cde129fd053b687aea4fa432f9" alt="" style="width: 28px; height: 28px">
+          <span class="two"><span class="t one">Helmp 启动器开发</span><span class="sub one">~/code_hub/helep · master · 刚刚</span></span>
+          <span class="chip run"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 1a4 4 0 1 1-4 4"/></svg>运行中</span>
+        </div>
+        <div class="sec">最近完成</div>
+        <div class="row">
+          <img src="/_blob/4e9eb3d0a2b93a22cf6cccaa782b2df3" alt="" style="width: 28px; height: 28px">
+          <span class="two"><span class="t one">VPC 接入排查</span><span class="sub one">~/code_hub/peter-config · 11 小时前</span></span>
+          <span class="chip done">已完成</span>
+        </div>
+      </div>
+
+      <div class="detail">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <img src="/_blob/491258cde129fd053b687aea4fa432f9" alt="" style="width: 40px; height: 40px">
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <span style="font-size: 17px; font-weight: 600">Finder daily radar</span>
+            <span class="chip wait" style="align-self: flex-start">等你确认权限</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="sub" style="margin-bottom: 4px">最后一条消息</div>
+          需要你确认：是否允许运行 <span class="mono">npm test</span>？
+        </div>
+        <dl class="kv" style="padding-top: 14px; border-top: 1px solid rgba(0,0,0,.08)">
+          <dt>项目</dt><dd class="mono">~/code_hub/finder</dd>
+          <dt>分支</dt><dd>main</dd>
+          <dt>来源</dt><dd>Claude 桌面版</dd>
+          <dt>最后活动</dt><dd>10 分钟前</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="ctx"><img src="/_blob/e5e5d765c84f233139f3950d6208d8c0" alt="" style="width: 16px; height: 16px; border-radius: 4px">Helmp<span style="font-weight: 400; color: #6e6e73">› Agent 会话</span></span>
+      <span class="hint" style="margin-left: auto">跳转到会话<span class="k">↵</span></span>
+      <span class="hint">操作<span class="k">⌘K</span></span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

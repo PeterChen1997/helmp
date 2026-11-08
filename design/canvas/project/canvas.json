@@ -1,0 +1,49 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-08T13:50:00+08:00"},
+  "title": "Helmp · macOS 原生设计稿",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 1280, "h": 800, "title": "01 菜单栏图标与下拉菜单"},
+    "Home.dc.html": {"x": 1360, "y": 0, "w": 1280, "h": 800, "title": "02 主面板 · 空查询首页（列表）"},
+    "Results.dc.html": {"x": 2720, "y": 0, "w": 1280, "h": 800, "title": "03 主面板 · 搜索结果（列表 + 详情）"},
+    "Agents.dc.html": {"x": 0, "y": 1180, "w": 1280, "h": 800, "title": "04 Agent 会话（列表 + 详情）"},
+    "Clipboard.dc.html": {"x": 1360, "y": 1180, "w": 1280, "h": 800, "title": "05 剪贴板历史（列表 + 详情）"},
+    "Ocr.dc.html": {"x": 2720, "y": 1180, "w": 1280, "h": 800, "title": "06 截图识别文字（详情）"},
+    "Translate.dc.html": {"x": 0, "y": 2360, "w": 1280, "h": 800, "title": "07 翻译（表单 + 详情）"},
+    "Script.dc.html": {"x": 1360, "y": 2360, "w": 1280, "h": 800, "title": "08 脚本命令（表单 + 详情）"},
+    "SettingsGeneral.dc.html": {"x": 0, "y": 3540, "w": 1280, "h": 800, "title": "09 设置 · 通用"},
+    "SettingsExtensions.dc.html": {"x": 1360, "y": 3540, "w": 1280, "h": 800, "title": "10 设置 · 扩展"},
+    "SettingsModels.dc.html": {"x": 2720, "y": 3540, "w": 1280, "h": 800, "title": "11 设置 · 模型"},
+    "SettingsClipboard.dc.html": {"x": 4080, "y": 3540, "w": 1280, "h": 800, "title": "12 设置 · 剪贴板与隐私"},
+    "Brand.dc.html": {"x": 0, "y": 4720, "w": 1280, "h": 800, "title": "13 品牌与图标"},
+    "Onboarding.dc.html": {"x": 1360, "y": 4720, "w": 1280, "h": 800, "title": "14 首次启动 · 权限引导"}
+  },
+  "order": [
+    "Main.dc.html",
+    "Home.dc.html",
+    "Results.dc.html",
+    "Agents.dc.html",
+    "Clipboard.dc.html",
+    "Ocr.dc.html",
+    "Translate.dc.html",
+    "Script.dc.html",
+    "SettingsGeneral.dc.html",
+    "SettingsExtensions.dc.html",
+    "SettingsModels.dc.html",
+    "SettingsClipboard.dc.html",
+    "Brand.dc.html",
+    "Onboarding.dc.html"
+  ],
+  "notes": {
+    "row1": {"x": 0, "y": -300, "text": "入口与主面板", "kind": "title1", "maxW": 4000},
+    "row2": {"x": 0, "y": 880, "text": "专门视图", "kind": "title1", "maxW": 4000},
+    "row3": {"x": 0, "y": 2060, "text": "翻译与脚本", "kind": "title1", "maxW": 2640},
+    "row4": {"x": 0, "y": 3240, "text": "设置窗口", "kind": "title1", "maxW": 5360},
+    "row5": {"x": 0, "y": 4420, "text": "品牌与首次启动", "kind": "title1", "maxW": 2640},
+    "spec": {"x": 2720, "y": 2360, "w": 560, "size": "m", "fill": "blue", "text": "统一的面板结构（插件也只用这一套）\n\n• 尺寸固定 880 × 540：顶部 60 搜索栏，底部 40 状态栏\n• 中间只有三种视图：列表、列表 + 详情、表单 + 详情\n• 插件只返回数据：列表项（图标、标题、副标题、标签）、详情（正文、键值）、表单（参数）\n• 操作不进详情区：主操作在右下角按 ↵，其余都在 ⌘K 菜单\n• 搜索栏左侧的范围标签表示当前所在的插件，esc 返回上一层"},
+    "spec2": {"x": 2720, "y": 4720, "w": 560, "size": "m", "fill": "gray", "text": "视觉规范（macOS Tahoe 原生）\n\n• 字体：SF Pro / 苹方，正文 13 px，搜索输入 20 px\n• 材质：白 74% + 40 px 模糊 + 180% 饱和，0.5 px 描边\n• 圆角：面板 24，窗口 18，行 10，按键提示 5\n• 选中行蓝底白字；状态色：等你橙、运行中蓝、已完成绿、空闲灰\n• Helmp 没有 Dock 图标，也没有自己的菜单栏菜单；入口只有 ⌥Space 和菜单栏图标\n• 设置是标准窗口：毛玻璃侧栏 + 分组表单，参照「系统设置」"}
+  },
+  "designSystems": []
+}

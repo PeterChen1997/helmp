@@ -1,5 +1,5 @@
 //! 脚本头注释解析：兼容 Raycast Script Commands 协议（`@raycast.*`），
-//! 同时接受 `@huan.*` 同名字段；两者都写时 `@huan.` 优先。
+//! 同时接受 `@helmp.*` 同名字段；两者都写时 `@helmp.` 优先。
 //!
 //! 注释前缀支持 `#`（sh/py/rb/AppleScript）、`//`（swift/js）、`--`（AppleScript/Lua）。
 //! 字段名大小写不敏感（社区仓库里有人写 `@raycast.packagename`）。
@@ -61,21 +61,21 @@ pub struct Header {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
-    /// 没有任何 `@raycast.` / `@huan.` 字段：不是脚本命令（图片、README 等），静默忽略。
+    /// 没有任何 `@raycast.` / `@helmp.` 字段：不是脚本命令（图片、README 等），静默忽略。
     NotAScript,
     Script(Header),
     /// 有元数据但不能用，附原因，由调用方打印到 stderr。
     Skipped(String),
 }
 
-/// 一行元数据：`<注释前缀> @raycast.<key> <value>`。返回 (是否 @huan., 小写 key, value)。
+/// 一行元数据：`<注释前缀> @raycast.<key> <value>`。返回 (是否 @helmp., 小写 key, value)。
 fn metadata_line(line: &str) -> Option<(bool, String, &str)> {
     let line = line.trim_start();
     let rest = ["//", "--", "#"]
         .iter()
         .find_map(|prefix| line.strip_prefix(prefix))?
         .trim_start();
-    let (is_huan, rest) = if let Some(rest) = rest.strip_prefix("@huan.") {
+    let (is_helmp, rest) = if let Some(rest) = rest.strip_prefix("@helmp.") {
         (true, rest)
     } else {
         (false, rest.strip_prefix("@raycast.")?)
@@ -85,16 +85,16 @@ fn metadata_line(line: &str) -> Option<(bool, String, &str)> {
     if key.is_empty() {
         return None;
     }
-    Some((is_huan, key.to_lowercase(), value.trim()))
+    Some((is_helmp, key.to_lowercase(), value.trim()))
 }
 
 pub fn parse(source: &str) -> Parsed {
-    // key -> (value, 是否来自 @huan.)
+    // key -> (value, 是否来自 @helmp.)
     let mut fields: HashMap<String, (String, bool)> = HashMap::new();
-    for (is_huan, key, value) in source.lines().filter_map(metadata_line) {
-        let keep_existing = matches!(fields.get(&key), Some((_, true))) && !is_huan;
+    for (is_helmp, key, value) in source.lines().filter_map(metadata_line) {
+        let keep_existing = matches!(fields.get(&key), Some((_, true))) && !is_helmp;
         if !keep_existing {
-            fields.insert(key, (value.to_string(), is_huan));
+            fields.insert(key, (value.to_string(), is_helmp));
         }
     }
     if fields.is_empty() {
@@ -308,19 +308,19 @@ open "https://example.com"
     }
 
     #[test]
-    fn huan_prefix_works_alone_and_overrides_raycast() {
-        // `@huan.` 让用户在不改 Raycast 字段的前提下为唤单独覆盖（比如中文标题），无论写在前还是后。
-        let only_huan = script("# @huan.title 时间\n# @huan.mode inline\n");
+    fn helmp_prefix_works_alone_and_overrides_raycast() {
+        // `@helmp.` 让用户在不改 Raycast 字段的前提下为 Helmp 单独覆盖（比如中文标题），无论写在前还是后。
+        let only_helmp = script("# @helmp.title 时间\n# @helmp.mode inline\n");
         assert_eq!(
-            (only_huan.title.as_str(), only_huan.mode),
+            (only_helmp.title.as_str(), only_helmp.mode),
             ("时间", Mode::Inline)
         );
-        let huan_first =
-            script("# @huan.title 中文标题\n# @raycast.title English\n# @raycast.mode silent\n");
-        assert_eq!(huan_first.title, "中文标题");
-        let huan_last =
-            script("# @raycast.title English\n# @raycast.mode silent\n# @huan.title 中文标题\n");
-        assert_eq!(huan_last.title, "中文标题");
+        let helmp_first =
+            script("# @helmp.title 中文标题\n# @raycast.title English\n# @raycast.mode silent\n");
+        assert_eq!(helmp_first.title, "中文标题");
+        let helmp_last =
+            script("# @raycast.title English\n# @raycast.mode silent\n# @helmp.title 中文标题\n");
+        assert_eq!(helmp_last.title, "中文标题");
     }
 
     #[test]
