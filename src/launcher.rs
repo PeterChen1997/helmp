@@ -505,6 +505,13 @@ impl Launcher {
 
     // ---------- 执行 ----------
 
+    /// 直接执行一个项（菜单栏、全局快捷键）：与面板里回车同一条路径，
+    /// 需要展示的结果（Message / Show / 出错）会打开面板显示。
+    pub fn run_item(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        let action = item.action.clone();
+        self.run(item, action, window, cx);
+    }
+
     pub fn execute_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.selected_item().cloned() else {
             return;

@@ -131,7 +131,7 @@ fn run(command: MenuCommand, cx: &mut App) {
             launcher.open_scope(scope, window, cx)
         }),
         MenuCommand::Run(command) => hotkey::execute(command, cx),
-        MenuCommand::RunItem(item) => hotkey::run_action(item.title, item.action, cx),
+        MenuCommand::RunItem(item) => hotkey::run_action(*item, cx),
         MenuCommand::Settings => crate::settings::open(cx),
         // 在回调里已经处理（见 MenuTarget::clicked）。
         MenuCommand::CheckUpdates => {}

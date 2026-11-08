@@ -20,7 +20,6 @@ use gpui_kit::*;
 
 use crate::config::Config;
 use crate::launcher::{Launcher, LauncherHandle};
-use crate::provider::{Action, Outcome};
 
 /// 唤起面板的默认快捷键，与 `config::General::default()` 一致。
 pub const DEFAULT_TOGGLE: &str = "alt-space";
@@ -553,7 +552,7 @@ pub fn execute(command: Command, cx: &mut App) {
                     .spawn(async move { engine.find(id, query, None) })
                     .await;
                 match item {
-                    Some(item) => cx.update(|cx| run_action(item.title, item.action, cx)),
+                    Some(item) => cx.update(|cx| run_action(item, cx)),
                     None => eprintln!("helmp: 找不到「{id}」（扩展可能被停用）"),
                 }
             })
@@ -577,26 +576,11 @@ pub fn engine(cx: &App) -> Option<crate::engine::Engine> {
 ///
 /// 面板没有公开「执行任意项并展示结果」的接口，所以 `Message` / `Show` 只能写到 stderr，
 /// 见报告里请求的 `Launcher::run_item`。
-pub fn run_action(title: String, action: Action, cx: &mut App) {
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let outcome = cx
-            .background_executor()
-            .spawn(async move { action.run() })
-            .await;
-        cx.update(|cx| match outcome {
-            Ok(Outcome::Done) => {}
-            Ok(Outcome::EnterScope(scope)) => execute(Command::Scope(scope), cx),
-            Ok(Outcome::OpenSettings) => crate::settings::open(cx),
-            Ok(Outcome::Message(message)) => {
-                eprintln!("helmp: 「{title}」的结果（面板无法展示）：{message}")
-            }
-            Ok(Outcome::Show(detail)) => {
-                eprintln!("helmp: 「{title}」的结果（面板无法展示）：{}", detail.title)
-            }
-            Err(err) => eprintln!("helmp: 「{title}」执行失败：{err:#}"),
-        });
-    })
-    .detach();
+/// 执行一个结果项（菜单栏点击、范围快捷键）：交给启动器，结果需要展示时会打开面板。
+pub fn run_action(item: crate::provider::Item, cx: &mut App) {
+    crate::launcher::LauncherHandle::update(cx, |launcher, window, cx| {
+        launcher.run_item(item, window, cx)
+    });
 }
 
 #[cfg(test)]
