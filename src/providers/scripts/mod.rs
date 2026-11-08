@@ -1,8 +1,11 @@
 //! L1 脚本插件：兼容 Raycast Script Commands。
 //!
-//! - 目录：`<data_dir>/scripts/` + 环境变量 `HELMP_SCRIPT_DIRS`（冒号分隔），递归扫描，跳过隐藏文件。
+//! - 目录：`<data_dir>/scripts/` + `config.script_dirs` + 环境变量 `HELMP_SCRIPT_DIRS`（冒号分隔），
+//!   递归扫描，跳过隐藏文件。目录列表每个轮询周期重读，设置里改了不用重启。
 //! - 每 5 秒按 (修改时间, 大小, 可执行位) 检查变化，只重读变了的文件。
-//! - 参数：查询以脚本标题或 packageName 开头时，余下文本是参数（见 `args`）。
+//! - 参数：有参数的脚本返回表单（每个参数一个字段）；查询以脚本标题或 packageName 开头时，
+//!   余下文本作为表单初值（见 `args`）。
+//! - 输出：compact / fullOutput / inline 在详情里展示（等宽），silent 跑完不打扰。
 //! - `needsConfirmation: true` 的脚本只有查询以 ` !` 结尾才执行。
 
 mod args;
@@ -14,15 +17,23 @@ use std::fs;
 use std::io::Read as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 
 use crate::matcher;
-use crate::provider::{Action, Item, Outcome, Provider};
-use args::ArgError;
-use header::{Header, Parsed};
+use crate::provider::{
+    Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction, Outcome,
+    Provider, Tint,
+};
+use header::{ArgKind, Argument, Header, Parsed};
+
+const ICON: Icon = Icon::Symbol {
+    name: "square-terminal",
+    tint: Tint::Graphite,
+};
+const BADGE: &str = "脚本";
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// 只在文件开头这么多字节里找头注释，避免把大文件整个读进来。
@@ -44,10 +55,43 @@ pub struct Script {
 }
 
 impl Script {
-    fn run(&self, args: &[String], timeout: Duration) -> Result<Outcome> {
+    /// 运行并返回要展示的输出（silent 为 `None`）与退出码。非零退出已在 runner 里变成错误。
+    fn run(&self, args: &[String], timeout: Duration) -> Result<(Option<String>, i32)> {
         let cwd = runner::working_dir(self.header.current_directory_path.as_deref(), &self.path)?;
         let output = runner::execute(&self.path, args, &cwd, timeout)?;
-        runner::outcome(&self.header.title, self.header.mode, &output)
+        let shown = runner::shown_output(&self.header.title, self.header.mode, &output)?;
+        Ok((shown, output.status.code().unwrap_or_default()))
+    }
+
+    /// 详情：输出（等宽）在上，说明 / 脚本 / 来源 / 退出码在下。未运行时只有元数据。
+    fn detail(&self, display_path: &str, ran: Option<(&str, i32)>) -> Detail {
+        let header = &self.header;
+        let mut metadata = Vec::new();
+        if let Some(description) = &header.description {
+            metadata.push(("说明".to_string(), description.clone()));
+        }
+        metadata.push(("脚本".to_string(), display_path.to_string()));
+        let dialect = if header.helmp_only {
+            "Helmp 脚本"
+        } else {
+            "Raycast Script Commands"
+        };
+        metadata.push((
+            "来源".to_string(),
+            format!("{dialect} · 输出模式 {}", header.mode.name()),
+        ));
+        let mut blocks = Vec::new();
+        if let Some((output, code)) = ran {
+            blocks.push(Block::Code(output.to_string()));
+            metadata.push(("退出码".to_string(), code.to_string()));
+        }
+        Detail {
+            icon: ICON,
+            title: header.title.clone(),
+            tag: None,
+            blocks,
+            metadata,
+        }
     }
 }
 
@@ -74,12 +118,18 @@ struct Index {
     scripts: Vec<Arc<Script>>,
     /// 已经打印过的目录读取问题，避免每 5 秒刷屏。
     reported: HashSet<String>,
+    /// 当前扫描的根目录（绝对路径），详情里的「脚本」显示相对它们的路径。
+    roots: Vec<PathBuf>,
 }
 
+/// 每个脚本最近一次的输出，⌘K「复制输出」用。
+type Outputs = Arc<Mutex<HashMap<PathBuf, String>>>;
+
 pub struct Scripts {
-    /// `None` 表示在 `start` 时按默认规则解析（数据目录 + 环境变量）。
+    /// `None` 表示按默认规则解析（数据目录 + 配置 + 环境变量），且每个轮询周期重读。
     dirs: Option<Vec<PathBuf>>,
     index: Arc<RwLock<Index>>,
+    outputs: Outputs,
 }
 
 impl Scripts {
@@ -87,6 +137,7 @@ impl Scripts {
         Self {
             dirs: None,
             index: Arc::default(),
+            outputs: Outputs::default(),
         }
     }
 }
@@ -97,11 +148,12 @@ impl Provider for Scripts {
     }
 
     fn start(&self) -> Result<()> {
-        let dirs = match &self.dirs {
+        let fixed = self.dirs.clone();
+        let mut configured = match &fixed {
             Some(dirs) => dirs.clone(),
             None => script_dirs()?,
         };
-        let dirs: Vec<PathBuf> = dirs.iter().map(|dir| absolute_dir(dir)).collect();
+        let mut dirs: Vec<PathBuf> = configured.iter().map(|dir| absolute_dir(dir)).collect();
         rescan(&self.index, &dirs, true);
         let index = Arc::clone(&self.index);
         std::thread::Builder::new()
@@ -109,6 +161,16 @@ impl Provider for Scripts {
             .spawn(move || {
                 loop {
                     std::thread::sleep(POLL_INTERVAL);
+                    if fixed.is_none() {
+                        match script_dirs() {
+                            Ok(next) if next != configured => {
+                                dirs = next.iter().map(|dir| absolute_dir(dir)).collect();
+                                configured = next;
+                            }
+                            Ok(_) => {}
+                            Err(err) => eprintln!("helmp: scripts 读取脚本目录配置失败：{err:#}"),
+                        }
+                    }
                     rescan(&index, &dirs, false);
                 }
             })
@@ -124,20 +186,61 @@ impl Provider for Scripts {
         index
             .scripts
             .iter()
-            .filter_map(|script| item_for(script, query))
+            .filter_map(|script| item_for(script, query, &index.roots, &self.outputs))
             .collect()
     }
 }
 
-/// 默认脚本目录（不存在就创建，方便用户找到放哪）+ `HELMP_SCRIPT_DIRS`。
+/// 默认脚本目录（不存在就创建，方便用户找到放哪）+ `config.script_dirs` + `HELMP_SCRIPT_DIRS`，去重。
 fn script_dirs() -> Result<Vec<PathBuf>> {
     let default = crate::paths::data_dir()?.join("scripts");
     fs::create_dir_all(&default).with_context(|| format!("创建 {}", default.display()))?;
+    let home = crate::paths::home_dir()?;
+    let configured = crate::config::get()
+        .script_dirs
+        .iter()
+        .filter(|dir| !dir.trim().is_empty())
+        .map(|dir| expand_tilde(dir.trim(), &home))
+        .collect();
+    let env: Vec<PathBuf> = std::env::var_os("HELMP_SCRIPT_DIRS")
+        .map(|extra| {
+            std::env::split_paths(&extra)
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(merge_dirs(default, configured, env))
+}
+
+fn merge_dirs(default: PathBuf, configured: Vec<PathBuf>, env: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut dirs = vec![default];
-    if let Some(extra) = std::env::var_os("HELMP_SCRIPT_DIRS") {
-        dirs.extend(std::env::split_paths(&extra).filter(|dir| !dir.as_os_str().is_empty()));
+    for dir in configured.into_iter().chain(env) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
     }
-    Ok(dirs)
+    dirs
+}
+
+fn expand_tilde(dir: &str, home: &Path) -> PathBuf {
+    match dir {
+        "~" => home.to_path_buf(),
+        _ => match dir.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(dir),
+        },
+    }
+}
+
+/// 详情里显示的脚本路径：相对所在的脚本目录（如 `developer-utils/count-characters.sh`）。
+fn display_path(path: &Path, roots: &[PathBuf]) -> String {
+    roots
+        .iter()
+        .filter_map(|root| path.strip_prefix(root).ok())
+        .min_by_key(|relative| relative.components().count())
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 /// 规范成绝对路径（Item id 要用绝对路径）。目录暂不存在也保留，出现后轮询会自动加载。
@@ -272,6 +375,7 @@ fn rescan(index: &RwLock<Index>, dirs: &[PathBuf], initial: bool) {
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     index.reported.extend(new_problems);
+    index.roots = dirs.to_vec();
     if !changed && !initial {
         return;
     }
@@ -323,52 +427,146 @@ fn match_query<'a>(header: &Header, query: &'a str) -> Option<(u32, &'a str)> {
     title.max(package).map(|score| (score, ""))
 }
 
-fn item_for(script: &Arc<Script>, query: &str) -> Option<Item> {
+fn item_for(
+    script: &Arc<Script>,
+    query: &str,
+    roots: &[PathBuf],
+    outputs: &Outputs,
+) -> Option<Item> {
     let header = &script.header;
     let (query, confirmed) = match args::strip_confirmation(query) {
         Some(stripped) if header.needs_confirmation => (stripped, true),
         _ => (query, false),
     };
     let (score, arg_text) = match_query(header, query)?;
-    let resolved = args::resolve(&header.arguments, arg_text);
-    let subtitle = match &resolved {
-        Err(err) => err.describe(),
-        Ok(_) => [
-            header.package_name.as_deref(),
-            header.description.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · "),
+    let initial = args::initial_values(&header.arguments, arg_text);
+    let subtitle = [
+        header.package_name.as_deref(),
+        header.description.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let display = display_path(&script.path, roots);
+    let copy_output = {
+        let (path, title) = (script.path.clone(), header.title.clone());
+        let outputs = Arc::clone(outputs);
+        Action::new(move || {
+            let output = outputs
+                .lock()
+                .expect("script outputs poisoned")
+                .get(&path)
+                .cloned()
+                .with_context(|| format!("「{title}」还没有输出：先运行一次"))?;
+            let pasteboard = super::screenshot::pasteboard::general();
+            super::screenshot::pasteboard::write_text(&pasteboard, &output)?;
+            Ok(Outcome::Done)
+        })
     };
     Some(Item {
         id: format!("scripts:{}", script.path.display()),
         title: header.title.clone(),
         subtitle,
-        badge: "脚本".into(),
+        badge: BADGE.into(),
         score,
-        action: action(Arc::clone(script), resolved, confirmed),
+        icon: ICON,
+        form: (!header.arguments.is_empty()).then(|| form_for(&header.arguments, &initial)),
+        detail: Some(script.detail(&display, None)),
+        action: action(
+            Arc::clone(script),
+            initial,
+            confirmed,
+            display,
+            Arc::clone(outputs),
+        ),
+        action_title: "运行".into(),
+        actions: vec![NamedAction::new("复制输出", Some("⌘C"), copy_output)],
         ..Item::blank()
     })
 }
 
-fn action(script: Arc<Script>, resolved: Result<Vec<String>, ArgError>, confirmed: bool) -> Action {
-    Action::new(move || {
-        let title = &script.header.title;
-        let args = match &resolved {
+/// 表单字段的 key：`argument1`…`argument3`，与头注释里的字段名一致。
+fn field_key(index: usize) -> String {
+    format!("argument{}", index + 1)
+}
+
+/// 每个参数一个字段：text / password 用单行文本，dropdown 用下拉。
+fn form_for(arguments: &[Argument], initial: &[String]) -> Form {
+    let fields = arguments
+        .iter()
+        .enumerate()
+        .map(|(index, argument)| Field {
+            key: field_key(index),
+            label: argument.placeholder.clone(),
+            kind: match &argument.kind {
+                ArgKind::Dropdown(options) => FieldKind::Select {
+                    options: options
+                        .iter()
+                        .map(|option| (option.title.clone(), option.value.clone()))
+                        .collect(),
+                },
+                ArgKind::Text | ArgKind::Password => FieldKind::Text {
+                    placeholder: if argument.optional {
+                        format!("{}（可选）", argument.placeholder)
+                    } else {
+                        argument.placeholder.clone()
+                    },
+                    multiline: false,
+                },
+            },
+            value: initial.get(index).cloned().unwrap_or_default(),
+            required: !argument.optional,
+        })
+        .collect();
+    Form { fields }
+}
+
+fn action(
+    script: Arc<Script>,
+    initial: Vec<String>,
+    confirmed: bool,
+    display: String,
+    outputs: Outputs,
+) -> Action {
+    Action::with_input(move |input: &ActionInput| {
+        let header = &script.header;
+        let title = &header.title;
+        // 表单值优先；没有表单（命令行 `helmp run`）时用查询里解析出的初值。
+        let given: Vec<String> = initial
+            .iter()
+            .enumerate()
+            .map(|(index, fallback)| {
+                input
+                    .form
+                    .get(&field_key(index))
+                    .unwrap_or(fallback)
+                    .clone()
+            })
+            .collect();
+        let args = match args::from_values(&header.arguments, &given) {
             Ok(args) => args,
             Err(err) => {
                 return Ok(Outcome::Message(format!(
-                    "「{title}」{}。在查询里输入「{title} <参数>」后回车",
+                    "「{title}」{}，填好后回车",
                     err.describe()
                 )));
             }
         };
-        if script.header.needs_confirmation && !confirmed {
+        if header.needs_confirmation && !confirmed {
             return Ok(Outcome::Message(CONFIRM_HINT.into()));
         }
-        script.run(args, runner::TIMEOUT)
+        let (shown, code) = script.run(&args, runner::TIMEOUT)?;
+        let Some(output) = shown else {
+            return Ok(Outcome::Done);
+        };
+        outputs
+            .lock()
+            .expect("script outputs poisoned")
+            .insert(script.path.clone(), output.clone());
+        Ok(Outcome::Show(
+            script.detail(&display, Some((&output, code))),
+        ))
     })
 }
 
@@ -420,9 +618,21 @@ pub mod tests {
         let scripts = Scripts {
             dirs: Some(vec![dir.path().to_path_buf()]),
             index: Arc::default(),
+            outputs: Outputs::default(),
         };
         rescan(&scripts.index, &[absolute_dir(dir.path())], true);
         scripts
+    }
+
+    /// 输出详情里的等宽输出文本。
+    fn shown_code(outcome: Outcome) -> String {
+        let Outcome::Show(detail) = outcome else {
+            panic!("应返回输出详情：{outcome:?}");
+        };
+        match detail.blocks.as_slice() {
+            [Block::Code(text)] => text.clone(),
+            other => panic!("输出应是一个等宽块：{other:?}"),
+        }
     }
 
     fn only(items: Vec<Item>) -> Item {
@@ -540,7 +750,7 @@ pub mod tests {
 
     #[test]
     fn text_after_title_is_passed_as_arguments() {
-        // 启动器没有参数表单，「标题 + 参数」是唯一的传参方式，必须把参数原样送进脚本。
+        // 「标题 + 参数」一行输完回车（以及命令行 `helmp run`）不经过表单编辑，参数必须原样送进脚本。
         let dir = TempDir::new("args");
         write_script(
             &dir,
@@ -554,17 +764,11 @@ pub mod tests {
         let scripts = provider(&dir);
         let item = only(scripts.query("route 北京 上海 浦东"));
         assert_eq!(item.score, TITLE_PREFIX_SCORE);
-        assert_eq!(
-            item.action.run().unwrap(),
-            Outcome::Message("北京->上海 浦东".into())
-        );
+        assert_eq!(shown_code(item.action.run().unwrap()), "北京->上海 浦东");
 
         let by_package = only(scripts.query("maps 杭州 苏州"));
         assert_eq!(by_package.score, PACKAGE_PREFIX_SCORE);
-        assert_eq!(
-            by_package.action.run().unwrap(),
-            Outcome::Message("杭州->苏州".into())
-        );
+        assert_eq!(shown_code(by_package.action.run().unwrap()), "杭州->苏州");
     }
 
     #[test]
@@ -585,11 +789,20 @@ pub mod tests {
             true,
         );
         let item = only(provider(&dir).query("touch it a"));
-        assert_eq!(item.subtitle, "需要参数：内容");
         let Outcome::Message(message) = item.action.run().unwrap() else {
             panic!("缺参数应返回说明");
         };
         assert!(message.contains("需要参数：内容"), "{message}");
+        assert!(!marker.exists(), "缺参数时脚本不应运行");
+
+        // 表单里把必填项清空再回车，同样要拦下。
+        let mut input = ActionInput::default();
+        input.form.insert("argument1".into(), String::new());
+        input.form.insert("argument2".into(), "x".into());
+        let Outcome::Message(message) = item.action.run_with(&input).unwrap() else {
+            panic!("缺参数应返回说明");
+        };
+        assert!(message.contains("需要参数：文件名"), "{message}");
         assert!(!marker.exists(), "缺参数时脚本不应运行");
     }
 
@@ -627,6 +840,7 @@ pub mod tests {
         let scripts = Scripts {
             dirs: None,
             index: Arc::default(),
+            outputs: Outputs::default(),
         };
         rescan(&scripts.index, &[absolute_dir(&examples)], true);
         let index = scripts.index.read().unwrap();
@@ -647,10 +861,163 @@ pub mod tests {
         drop(index);
 
         let item = only(scripts.query("时间"));
-        let Outcome::Message(now) = item.action.run().unwrap() else {
-            panic!("compact 应返回最后一行");
-        };
+        let now = shown_code(item.action.run().unwrap());
         // 形如 2026-11-05 14:03:59 CST
         assert!(now.starts_with("20") && now.contains(':'), "{now}");
+    }
+
+    #[test]
+    fn arguments_become_form_fields_with_initial_values() {
+        // 有参数的脚本在面板里是「表单 + 详情」：每个参数一个字段，dropdown 是下拉，
+        // 查询里「标题 + 文本」作为初值，这样老习惯（一行输完回车）依然成立。
+        let dir = TempDir::new("form");
+        write_script(
+            &dir,
+            "flight.sh",
+            "#!/bin/sh\n# @raycast.title Flight\n# @raycast.mode compact\n\
+             # @raycast.argument1 {\"type\":\"text\",\"placeholder\":\"出发地\"}\n\
+             # @raycast.argument2 {\"type\":\"password\",\"placeholder\":\"口令\",\"optional\":true}\n\
+             # @raycast.argument3 {\"type\":\"dropdown\",\"placeholder\":\"舱位\",\"data\":[{\"title\":\"经济舱\",\"value\":\"y\"},{\"title\":\"商务舱\",\"value\":\"c\"}]}\n\
+             echo \"$1|$2|$3\"\n",
+            true,
+        );
+        let item = only(provider(&dir).query("flight 北京 pw 商务舱"));
+        let form = item.form.as_ref().expect("有参数应返回表单");
+        let shape: Vec<(&str, &str, bool, &str)> = form
+            .fields
+            .iter()
+            .map(|f| {
+                let kind = match &f.kind {
+                    FieldKind::Text { .. } => "text",
+                    FieldKind::Select { .. } => "select",
+                };
+                (f.key.as_str(), f.label.as_str(), f.required, kind)
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("argument1", "出发地", true, "text"),
+                ("argument2", "口令", false, "text"),
+                ("argument3", "舱位", true, "select"),
+            ]
+        );
+        let values: Vec<&str> = form.fields.iter().map(|f| f.value.as_str()).collect();
+        assert_eq!(values, ["北京", "pw", "c"]);
+        assert_eq!(
+            form.fields[2].kind,
+            FieldKind::Select {
+                options: vec![("经济舱".into(), "y".into()), ("商务舱".into(), "c".into())]
+            }
+        );
+
+        // 回车时以表单值为准（用户可能改过），不是查询里的初值。
+        let mut input = ActionInput::default();
+        input.form.insert("argument1".into(), "上海".into());
+        input.form.insert("argument2".into(), String::new());
+        input.form.insert("argument3".into(), "y".into());
+        assert_eq!(shown_code(item.action.run_with(&input).unwrap()), "上海||y");
+    }
+
+    #[test]
+    fn output_detail_carries_code_block_and_metadata() {
+        // 设计稿「脚本」：输出用等宽块，底部 说明 / 脚本（相对路径）/ 来源 · 输出模式 / 退出码；
+        // ⌘K「复制输出」拿的是这次的输出。
+        let dir = TempDir::new("detail");
+        write_script(
+            &dir,
+            "developer-utils/count.sh",
+            "#!/bin/sh\n# @raycast.title Count Characters\n# @raycast.mode fullOutput\n\
+             # @raycast.description 统计字符数\n\
+             # @raycast.argument1 {\"type\":\"text\",\"placeholder\":\"Text\",\"optional\":true}\n\
+             printf '%s chars\\n' \"${#1}\"\n",
+            true,
+        );
+        let item = only(provider(&dir).query("count characters hello huan"));
+        assert_eq!(
+            item.icon,
+            Icon::Symbol {
+                name: "square-terminal",
+                tint: Tint::Graphite
+            }
+        );
+        // 未运行时详情只有元数据。
+        let before = item.detail.as_ref().unwrap();
+        assert!(before.blocks.is_empty());
+        assert_eq!(
+            before.metadata[1],
+            ("脚本".into(), "developer-utils/count.sh".into())
+        );
+
+        let Outcome::Show(detail) = item.action.run().unwrap() else {
+            panic!("fullOutput 应返回详情");
+        };
+        assert_eq!(detail.title, "Count Characters");
+        assert_eq!(detail.blocks, [Block::Code("10 chars".into())]);
+        assert_eq!(
+            detail.metadata,
+            [
+                ("说明".to_string(), "统计字符数".to_string()),
+                ("脚本".to_string(), "developer-utils/count.sh".to_string()),
+                (
+                    "来源".to_string(),
+                    "Raycast Script Commands · 输出模式 fullOutput".to_string()
+                ),
+                ("退出码".to_string(), "0".to_string()),
+            ]
+        );
+        let copy = item.actions.iter().find(|a| a.title == "复制输出").unwrap();
+        assert_eq!(copy.shortcut.as_deref(), Some("⌘C"));
+    }
+
+    #[test]
+    fn copy_output_before_running_fails_loudly() {
+        // 没运行过就「复制输出」必须报错，不能静默往剪贴板写空串。
+        let dir = TempDir::new("nocopy");
+        write_script(
+            &dir,
+            "a.sh",
+            "#!/bin/sh\n# @raycast.title Alpha\n# @raycast.mode compact\necho hi\n",
+            true,
+        );
+        let item = only(provider(&dir).query("alpha"));
+        // 没有参数的脚本不出表单，回车直接运行。
+        assert!(item.form.is_none());
+        let copy = item.actions.iter().find(|a| a.title == "复制输出").unwrap();
+        assert!(copy.action.run().is_err());
+    }
+
+    #[test]
+    fn script_dirs_merge_config_and_env_without_duplicates() {
+        // 设置里加的目录和环境变量里的目录都要扫；重复的目录扫两遍会让同一脚本出现两次。
+        let home = Path::new("/Users/me");
+        assert_eq!(expand_tilde("~/scripts", home), home.join("scripts"));
+        assert_eq!(expand_tilde("~", home), home.to_path_buf());
+        assert_eq!(expand_tilde("/opt/s", home), PathBuf::from("/opt/s"));
+        let merged = merge_dirs(
+            PathBuf::from("/d"),
+            vec![PathBuf::from("/a"), PathBuf::from("/d")],
+            vec![PathBuf::from("/a"), PathBuf::from("/b")],
+        );
+        assert_eq!(merged, ["/d", "/a", "/b"].map(PathBuf::from).to_vec());
+        assert_eq!(
+            display_path(
+                Path::new("/a/x/y.sh"),
+                &[PathBuf::from("/a"), PathBuf::from("/a/x")]
+            ),
+            "y.sh"
+        );
+        assert_eq!(display_path(Path::new("/z/y.sh"), &[]), "/z/y.sh");
+    }
+
+    #[test]
+    fn symbol_icon_exists_in_bundled_assets() {
+        // 图标名拼错时界面只会画一个空白方块，不会报错。
+        use gpui_kit::AssetSource as _;
+        let Icon::Symbol { name, .. } = ICON else {
+            panic!("脚本图标应是内置符号");
+        };
+        let path = format!("icons/{name}.svg");
+        assert!(gpui_kit::assets::AllAssets.load(&path).unwrap().is_some());
     }
 }

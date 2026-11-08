@@ -57,6 +57,20 @@ pub struct Header {
     pub needs_confirmation: bool,
     pub current_directory_path: Option<String>,
     pub refresh_time: Option<String>,
+    /// 只写了 `@helmp.*` 字段（Helmp 自己的脚本），否则是 Raycast Script Commands 格式。详情「来源」用。
+    pub helmp_only: bool,
+}
+
+impl Mode {
+    /// 协议里的原名，详情「来源」里显示「输出模式 fullOutput」。
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Silent => "silent",
+            Mode::Compact => "compact",
+            Mode::FullOutput => "fullOutput",
+            Mode::Inline => "inline",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +172,7 @@ fn build(fields: &HashMap<String, (String, bool)>) -> Result<Header, String> {
         needs_confirmation,
         current_directory_path: owned("currentdirectorypath"),
         refresh_time: owned("refreshtime"),
+        helmp_only: fields.values().all(|(_, is_helmp)| *is_helmp),
     })
 }
 
@@ -210,6 +225,16 @@ fn parse_dropdown(index: usize, data: Option<&Value>) -> Result<Vec<DropdownOpti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn records_whether_header_is_helmp_only() {
+        // 详情「来源」据此显示 Raycast Script Commands 还是 Helmp 脚本；混写按 Raycast 算。
+        let helmp = script("#!/bin/sh\n# @helmp.title A\n# @helmp.mode silent\n");
+        assert!(helmp.helmp_only);
+        let mixed = script("#!/bin/sh\n# @helmp.title A\n# @raycast.mode silent\n");
+        assert!(!mixed.helmp_only);
+        assert_eq!(mixed.mode.name(), "silent");
+    }
 
     fn script(source: &str) -> Header {
         match parse(source) {

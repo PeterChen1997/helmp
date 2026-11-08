@@ -278,18 +278,78 @@ impl Store {
     }
 
     /// 删除一条；图片条目连同图片文件一起删。
-    // 面板里还没有「删除历史条目」的入口（需要 provider 接口支持次级动作），先由测试覆盖。
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn delete(&mut self, id: i64) -> Result<bool> {
         let Some(entry) = self.get(id)? else {
             return Ok(false);
         };
         self.conn.execute("DELETE FROM clips WHERE id = ?1", [id])?;
         if entry.kind == Kind::Image {
-            let path = self.image_path(&entry);
-            fs::remove_file(&path).with_context(|| format!("删除剪贴板图片 {}", path.display()))?;
+            remove_image(&self.image_path(&entry))?;
         }
         Ok(true)
+    }
+
+    /// 删除最近一次复制早于 `cutoff_ms` 的条目（保留天数到期），返回被删的 id。
+    pub fn prune_before(&mut self, cutoff_ms: i64) -> Result<Vec<i64>> {
+        let expired: Vec<(i64, Option<String>)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, kind, content FROM clips WHERE copied_at < ?1")?;
+            let rows = stmt.query_map([cutoff_ms], |row| {
+                let kind: String = row.get(1)?;
+                let image = if kind == Kind::Image.as_str() {
+                    Some(row.get::<_, String>(2)?)
+                } else {
+                    None
+                };
+                Ok((row.get::<_, i64>(0)?, image))
+            })?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        self.conn
+            .execute("DELETE FROM clips WHERE copied_at < ?1", [cutoff_ms])
+            .context("清理过期剪贴板历史")?;
+        for image in expired.iter().filter_map(|(_, image)| image.as_deref()) {
+            remove_image(&self.images_dir.join(image))?;
+        }
+        Ok(expired.into_iter().map(|(id, _)| id).collect())
+    }
+
+    /// 清空全部历史（含图片文件），返回删除的条数。
+    pub fn clear(&mut self) -> Result<usize> {
+        let removed = self
+            .conn
+            .execute("DELETE FROM clips", [])
+            .context("清空剪贴板历史")?;
+        let entries = match fs::read_dir(&self.images_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+            Err(err) => {
+                return Err(err).with_context(|| format!("读取 {}", self.images_dir.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry.with_context(|| format!("读取 {}", self.images_dir.display()))?;
+            remove_image(&entry.path())?;
+        }
+        Ok(removed)
+    }
+
+    /// 条数与占用的磁盘字节数（数据库 + WAL + 图片目录），给设置窗口显示。
+    pub fn stats(&self, dir: &Path) -> Result<(usize, u64)> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM clips", [], |row| row.get(0))?;
+        let mut bytes = 0;
+        for name in [DB_FILE.to_string(), format!("{DB_FILE}-wal")] {
+            bytes += fs::metadata(dir.join(name)).map_or(0, |m| m.len());
+        }
+        if let Ok(entries) = fs::read_dir(&self.images_dir) {
+            for entry in entries.flatten() {
+                bytes += entry.metadata().map_or(0, |m| m.len());
+            }
+        }
+        Ok((usize::try_from(count).unwrap_or(0), bytes))
     }
 
     pub fn image_path(&self, entry: &Entry) -> PathBuf {
@@ -306,6 +366,16 @@ impl Store {
         fs::write(&tmp, bytes).with_context(|| format!("写剪贴板图片 {}", tmp.display()))?;
         fs::rename(&tmp, &path).with_context(|| format!("保存剪贴板图片 {}", path.display()))?;
         Ok(())
+    }
+}
+
+/// 删图片文件；文件已经不在（用户手动清过目录）不算错误，其他 IO 错误照常上报。
+fn remove_image(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            Err(err).with_context(|| format!("删除剪贴板图片 {}", path.display()))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -443,6 +513,48 @@ pub(crate) mod tests {
         assert_eq!(preview.content, "长".repeat(10));
         assert_eq!(preview.chars, 50);
         assert_eq!(store.get(entry.id).unwrap().unwrap().content, long);
+    }
+
+    fn image(bytes: &[u8]) -> NewClip {
+        NewClip::Image {
+            bytes: bytes.to_vec(),
+            format: ImageFormat::Png,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn prune_removes_only_expired_entries_and_their_images() {
+        // 「保留 N 天」是隐私承诺：过期内容（含图片文件）必须真的从磁盘消失，未过期的不能误删。
+        let dir = TempDir::new("prune");
+        let mut store = Store::open(&dir.0).unwrap();
+        let (old, _) = store.add(text("old"), None, 1_000).unwrap();
+        let (old_image, _) = store.add(image(b"img"), None, 1_500).unwrap();
+        let image_file = store.image_path(&old_image);
+        let (fresh, _) = store.add(text("fresh"), None, 5_000).unwrap();
+        assert!(image_file.exists());
+
+        let mut removed = store.prune_before(2_000).unwrap();
+        removed.sort();
+        assert_eq!(removed, vec![old.id, old_image.id]);
+        assert!(!image_file.exists(), "过期图片文件必须删掉");
+        let left: Vec<i64> = store.load_all(10).unwrap().iter().map(|e| e.id).collect();
+        assert_eq!(left, vec![fresh.id]);
+    }
+
+    #[test]
+    fn clear_wipes_rows_and_image_files() {
+        // 设置里的「清空全部历史」：库和图片目录都要清干净，否则旧截图还躺在磁盘上。
+        let dir = TempDir::new("clear");
+        let mut store = Store::open(&dir.0).unwrap();
+        store.add(text("a"), None, 1).unwrap();
+        let (img, _) = store.add(image(b"img"), None, 2).unwrap();
+        assert_eq!(store.stats(&dir.0).unwrap().0, 2);
+        assert_eq!(store.clear().unwrap(), 2);
+        assert!(store.load_all(10).unwrap().is_empty());
+        assert!(!store.image_path(&img).exists());
+        assert_eq!(store.stats(&dir.0).unwrap().0, 0);
     }
 
     #[test]
