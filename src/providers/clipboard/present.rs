@@ -184,6 +184,7 @@ pub fn detail(indexed: &Indexed, clock: Clock) -> Detail {
         }
     }
     Detail {
+        actions: Vec::new(),
         // 设计稿的剪贴板详情没有标题行，正文直接占满。
         icon: Icon::None,
         title: String::new(),

@@ -86,6 +86,7 @@ impl Script {
             metadata.push(("退出码".to_string(), code.to_string()));
         }
         Detail {
+            actions: Vec::new(),
             icon: ICON,
             title: header.title.clone(),
             tag: None,
@@ -506,7 +507,14 @@ fn form_for(arguments: &[Argument], initial: &[String]) -> Form {
                         .map(|option| (option.title.clone(), option.value.clone()))
                         .collect(),
                 },
-                ArgKind::Text | ArgKind::Password => FieldKind::Text {
+                ArgKind::Password => FieldKind::Secret {
+                    placeholder: if argument.optional {
+                        format!("{}（可选）", argument.placeholder)
+                    } else {
+                        argument.placeholder.clone()
+                    },
+                },
+                ArgKind::Text => FieldKind::Text {
                     placeholder: if argument.optional {
                         format!("{}（可选）", argument.placeholder)
                     } else {
@@ -889,6 +897,8 @@ pub mod tests {
             .map(|f| {
                 let kind = match &f.kind {
                     FieldKind::Text { .. } => "text",
+                    // password 参数用掩码输入：口令不该明文显示在面板上被旁人看到。
+                    FieldKind::Secret { .. } => "secret",
                     FieldKind::Select { .. } => "select",
                 };
                 (f.key.as_str(), f.label.as_str(), f.required, kind)
@@ -898,7 +908,7 @@ pub mod tests {
             shape,
             [
                 ("argument1", "出发地", true, "text"),
-                ("argument2", "口令", false, "text"),
+                ("argument2", "口令", false, "secret"),
                 ("argument3", "舱位", true, "select"),
             ]
         );

@@ -20,8 +20,9 @@ use anyhow::Result;
 
 use crate::engine::WAITING_SECTION;
 use crate::paths;
-use crate::provider::{Accessory, Block, Detail, Icon, Item, NamedAction, Provider, Scope, Tint};
-use crate::providers::apps::{copy_action, reveal_action};
+use crate::provider::{
+    Accessory, Action, Block, Detail, Icon, Item, NamedAction, Provider, Scope, Tint,
+};
 
 use self::state::{Session, Source};
 
@@ -192,19 +193,19 @@ fn actions(session: &Session) -> Vec<NamedAction> {
         actions.push(NamedAction::new(
             "在访达中显示项目",
             Some("⌘↵"),
-            reveal_action(cwd),
+            Action::reveal(cwd.to_string()),
         ));
         actions.push(NamedAction::new(
             "复制项目路径",
             Some("⌘⇧C"),
-            copy_action(cwd),
+            Action::copy(cwd.to_string()),
         ));
     }
     // 会话 ID 用于 `claude --resume <id>` / `codex resume <id>`，或者在日志里查这个会话。
     actions.push(NamedAction::new(
         "复制会话 ID",
         None,
-        copy_action(&session.session_id),
+        Action::copy(session.session_id.clone()),
     ));
     actions
 }
@@ -221,6 +222,7 @@ fn detail(session: &Session, icon: Icon, home: Option<&Path>, now: u64) -> Detai
     metadata.push(("来源".into(), session.origin().into()));
     metadata.push(("最后活动".into(), state::ago(now, session.last_activity_ms)));
     Detail {
+        actions: Vec::new(),
         icon,
         title: session.title.clone(),
         tag: Some((session.status.label(), session.status.tone())),

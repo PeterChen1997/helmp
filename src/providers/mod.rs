@@ -3,7 +3,7 @@
 mod agents;
 mod apps;
 mod builtin;
-mod clipboard;
+pub mod clipboard;
 mod screenshot;
 mod scripts;
 mod translate;

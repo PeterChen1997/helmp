@@ -12,7 +12,7 @@
 //!
 //! `query*()` 只读内存索引（每条最多 `PREVIEW_CHARS` 个字符的小写预览），不碰 SQLite。
 
-mod macos;
+pub mod macos;
 mod present;
 mod store;
 mod watcher;
@@ -107,11 +107,12 @@ impl Clipboard {
         actions.push(NamedAction::new(
             "删除",
             Some("⌘⌫"),
+            // 删除后面板不隐藏、原地刷新列表。
             Action::new(move || {
                 inner.delete(id)?;
-                // 回到剪贴板范围，让用户看到删除后的列表（面板执行动作时会先隐藏）。
-                Ok(Outcome::EnterScope(PROVIDER_ID))
-            }),
+                Ok(Outcome::Done)
+            })
+            .keep_open(),
         ));
         Item {
             id: format!("{PROVIDER_ID}:{id}"),
@@ -996,10 +997,9 @@ mod tests {
             .next()
             .unwrap();
         let delete = item.actions.iter().find(|a| a.title == "删除").unwrap();
-        assert_eq!(
-            delete.action.run().unwrap(),
-            Outcome::EnterScope("clipboard")
-        );
+        // 删除后面板原地刷新（keep_open），不再先隐藏再重开、也不清空查询。
+        assert!(delete.action.keeps_open());
+        assert_eq!(delete.action.run().unwrap(), Outcome::Done);
         assert_eq!(titles(&provider.query_scoped("", "全部")), ["keep"]);
         let store = Store::open(&dir.0).unwrap();
         let left: Vec<String> = store

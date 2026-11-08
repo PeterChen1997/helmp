@@ -263,11 +263,22 @@ impl Launcher {
 
     /// 唤起面板并直接进入某个范围（菜单栏「剪贴板历史」、⌘⇧V 等）。
     pub fn open_scope(&mut self, scope_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_scope_with(scope_id, String::new(), window, cx);
+    }
+
+    /// 唤起面板、进入范围，并把 `text` 作为范围里的初始输入（如把识别出的文字带进翻译）。
+    pub fn open_scope_with(
+        &mut self,
+        scope_id: &str,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.visible {
             self.show(window, cx);
         }
         match self.engine.scope(scope_id) {
-            Some(scope) => self.enter_scope(scope, String::new(), window, cx),
+            Some(scope) => self.enter_scope(scope, text, window, cx),
             None => eprintln!("helmp: 没有名为 {scope_id} 的范围（扩展可能被停用）"),
         }
     }
@@ -488,6 +499,17 @@ impl Launcher {
                         input
                     }))
                 }
+                FieldKind::Secret { placeholder } => {
+                    let placeholder = placeholder.clone();
+                    let value = field.value.clone();
+                    FieldState::Line(cx.new(|cx| {
+                        let mut input = InputState::new(window, cx)
+                            .placeholder(placeholder)
+                            .masked(true);
+                        input.set_value(value, window, cx);
+                        input
+                    }))
+                }
                 FieldKind::Select { options } => FieldState::Select(
                     options
                         .iter()
@@ -516,8 +538,20 @@ impl Launcher {
         let Some(item) = self.selected_item().cloned() else {
             return;
         };
-        let action = item.action.clone();
+        // 已经有结果（如译文、识别结果）时，回车执行结果的主操作（复制），而不是重新运行。
+        let action = match self.result_actions().and_then(|actions| actions.first()) {
+            Some(primary) => primary.action.clone(),
+            None => item.action.clone(),
+        };
         self.run(item, action, window, cx);
+    }
+
+    /// 选中项当前展示的结果自带的操作（第一个是回车的主操作）。
+    fn result_actions(&self) -> Option<&[NamedAction]> {
+        let result = self.result.as_ref()?;
+        let item = self.selected_item()?;
+        (result.item_id == item.id && !result.detail.actions.is_empty())
+            .then_some(result.detail.actions.as_slice())
     }
 
     fn run(
@@ -534,16 +568,20 @@ impl Launcher {
             crate::history::record(&item, &self.query, scope_id);
         }
 
-        let in_form = self
-            .form
-            .as_ref()
-            .is_some_and(|form| form.item_id == item.id);
+        // 只有提交表单本身（回车运行）才在原地显示结果；结果上的操作（复制、替换）要先隐藏面板，
+        // 让后续的 ⌘V 等落到用户原来的 App。
+        let in_form = action == item.action
+            && self
+                .form
+                .as_ref()
+                .is_some_and(|form| form.item_id == item.id);
         let input = match &self.form {
             Some(form) if in_form => form.values(cx),
             _ => ActionInput::default(),
         };
-        // 表单视图在原地显示结果，不隐藏面板；其他情况先隐藏再在后台执行。
-        if in_form {
+        // 表单视图在原地显示结果、标记了 keep_open 的动作原地刷新，都不隐藏面板；其他情况先隐藏再在后台执行。
+        let keep_open = action.keeps_open();
+        if in_form || keep_open {
             self.running = true;
             cx.notify();
         } else {
@@ -559,6 +597,10 @@ impl Launcher {
                 let _ = this.update(cx, |this, cx| {
                     this.running = false;
                     let detail = match outcome {
+                        Ok(Outcome::Done) if keep_open => {
+                            this.refresh(cx);
+                            return;
+                        }
                         Ok(Outcome::Done) => {
                             this.executed = true;
                             if this.visible {
@@ -568,6 +610,13 @@ impl Launcher {
                         }
                         Ok(Outcome::EnterScope(scope)) => {
                             this.open_scope(scope, window, cx);
+                            return;
+                        }
+                        Ok(Outcome::EnterScopeWith(scope, text)) => {
+                            if this.scope_id() == Some(scope) {
+                                this.exit_scope(window, cx);
+                            }
+                            this.open_scope_with(scope, text, window, cx);
                             return;
                         }
                         Ok(Outcome::OpenSettings) => {
@@ -609,11 +658,33 @@ impl Launcher {
         let Some(item) = self.selected_item() else {
             return Vec::new();
         };
-        let mut actions = vec![NamedAction::new(
-            item.action_title.clone(),
-            Some("↵"),
-            item.action.clone(),
-        )];
+        let mut actions = match self.result_actions() {
+            Some(result_actions) => {
+                let mut actions = result_actions.to_vec();
+                if let Some(primary) = actions.first_mut() {
+                    primary.shortcut = Some("↵".into());
+                }
+                // 原命令仍可再跑一次。
+                actions.push(NamedAction::new(
+                    format!(
+                        "再次{}",
+                        if item.form.is_some() {
+                            "运行"
+                        } else {
+                            item.action_title.as_str()
+                        }
+                    ),
+                    None,
+                    item.action.clone(),
+                ));
+                actions
+            }
+            None => vec![NamedAction::new(
+                item.action_title.clone(),
+                Some("↵"),
+                item.action.clone(),
+            )],
+        };
         actions.extend(item.actions.iter().cloned());
         actions
     }
@@ -677,12 +748,30 @@ impl Launcher {
             return;
         }
 
-        // 次级操作自带的快捷键（如 ⌘↵、⌘⇧C）。
+        let form_focused = self
+            .form
+            .as_ref()
+            .is_some_and(|form| form.focused(window, cx));
+        // ⌘C / ⌘X / ⌘V / ⌘A / ⌘Z 在有选中文字或焦点在表单里时属于文字编辑，不当作结果的快捷键。
+        let editing = mods.platform
+            && !mods.shift
+            && !mods.alt
+            && !mods.control
+            && matches!(key, "c" | "x" | "v" | "a" | "z")
+            && (form_focused || self.input.read(cx).is_copyable());
+
+        // 次级操作自带的快捷键（如 ⌘↵、⌘⇧C），结果的操作优先。
         if mods.modified()
+            && !editing
             && let Some(action) = self
-                .selected_item()
-                .into_iter()
-                .flat_map(|item| item.actions.iter())
+                .result_actions()
+                .unwrap_or_default()
+                .iter()
+                .chain(
+                    self.selected_item()
+                        .into_iter()
+                        .flat_map(|item| item.actions.iter()),
+                )
                 .find(|action| {
                     action
                         .shortcut
@@ -696,10 +785,6 @@ impl Launcher {
             return;
         }
 
-        let form_focused = self
-            .form
-            .as_ref()
-            .is_some_and(|form| form.focused(window, cx));
         match key {
             "up" if !mods.modified() && !form_focused => self.select(-1, cx),
             "down" if !mods.modified() && !form_focused => self.select(1, cx),
@@ -1235,7 +1320,7 @@ impl Launcher {
                 FieldState::Select(selected) => {
                     let options = match &field.kind {
                         FieldKind::Select { options } => options.clone(),
-                        FieldKind::Text { .. } => Vec::new(),
+                        FieldKind::Text { .. } | FieldKind::Secret { .. } => Vec::new(),
                     };
                     let label = options
                         .get(*selected)
@@ -1452,13 +1537,13 @@ impl Launcher {
         if self.running {
             footer = footer.child(div().ml_auto().text_color(pal.muted).child("正在运行…"));
         } else if let Some(item) = self.selected_item() {
-            let primary = if item.form.is_some() {
-                "运行".to_string()
-            } else {
-                item.action_title.clone()
+            let primary = match self.result_actions().and_then(|actions| actions.first()) {
+                Some(action) => action.title.clone(),
+                None if item.form.is_some() => "运行".to_string(),
+                None => item.action_title.clone(),
             };
             footer = footer.child(div().ml_auto().child(hint(primary.into(), "↵".into())));
-            if !item.actions.is_empty() {
+            if !item.actions.is_empty() || self.result_actions().is_some() {
                 footer = footer.child(hint("操作".into(), "⌘K".into()));
             }
         }

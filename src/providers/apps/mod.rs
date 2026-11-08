@@ -103,8 +103,8 @@ fn search(apps: &[App], query: &str, running: impl FnOnce() -> HashSet<String>) 
 
 fn item(app: &App, name: &str, hit: &Match, running: bool) -> Item {
     let mut actions = vec![
-        NamedAction::new("在访达中显示", Some("⌘↵"), reveal_action(&app.path)),
-        NamedAction::new("复制路径", Some("⌘⇧C"), copy_action(&app.path)),
+        NamedAction::new("在访达中显示", Some("⌘↵"), Action::reveal(app.path.clone())),
+        NamedAction::new("复制路径", Some("⌘⇧C"), Action::copy(app.path.clone())),
     ];
     if running {
         actions.push(NamedAction::new(
@@ -148,6 +148,7 @@ fn detail(app: &App, hit: &Match) -> Detail {
         .chain(app.version.iter().map(|v| format!("版本 {v}")))
         .collect();
     Detail {
+        actions: Vec::new(),
         icon: Icon::File(PathBuf::from(&app.path)),
         title: app.title.clone(),
         tag: None,
@@ -161,42 +162,6 @@ fn detail(app: &App, hit: &Match) -> Detail {
             ("匹配方式".into(), hit.kind.label().into()),
         ],
     }
-}
-
-/// 在访达中选中这个文件 / 目录。
-pub(crate) fn reveal_action(path: &str) -> Action {
-    let path = path.to_string();
-    Action::new(move || {
-        let status = std::process::Command::new("open")
-            .arg("-R")
-            .arg(&path)
-            .status()?;
-        anyhow::ensure!(status.success(), "在访达中显示 {path} 失败：{status}");
-        Ok(Outcome::Done)
-    })
-}
-
-/// 把文字写进系统剪贴板。
-pub(crate) fn copy_action(text: &str) -> Action {
-    let text = text.to_string();
-    Action::new(move || {
-        use std::io::Write as _;
-        // pbcopy 按 locale 解码输入：Helmp 可能从 LANG 为空的环境启动，中文路径会变成乱码。
-        let mut child = std::process::Command::new("pbcopy")
-            .env("LANG", "en_US.UTF-8")
-            .env("LC_ALL", "en_US.UTF-8")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .context("启动 pbcopy")?;
-        child
-            .stdin
-            .take()
-            .context("pbcopy 没有 stdin")?
-            .write_all(text.as_bytes())?;
-        let status = child.wait()?;
-        anyhow::ensure!(status.success(), "pbcopy 失败：{status}");
-        Ok(Outcome::Done)
-    })
 }
 
 /// 正在运行的应用的 bundle 路径。

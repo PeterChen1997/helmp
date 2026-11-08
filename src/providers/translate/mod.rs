@@ -106,7 +106,8 @@ impl Provider for Translate {
     }
 
     fn suggestions(&self) -> Vec<Item> {
-        vec![entry(COMMANDS_SECTION, 700)]
+        // 设计稿首页顺序：截图识别文字（720）、翻译（710）、剪贴板历史（700）。
+        vec![entry(COMMANDS_SECTION, 710)]
     }
 }
 
@@ -289,6 +290,15 @@ fn translate(model: &ModelConfig, source: &str, target: &str, text: &str) -> Res
 fn detail(model: &ModelConfig, target: &str, translation: String) -> Detail {
     let target_label = models::language_label(target).unwrap_or(target);
     Detail {
+        // 出结果后回车复制译文；⌘↵ 复制并替换前台 App 里的选中文字。
+        actions: vec![
+            NamedAction::new("复制译文", None, Action::copy(translation.clone())),
+            NamedAction::new(
+                "替换选中文字",
+                Some("⌘↵"),
+                replace_selection(translation.clone()),
+            ),
+        ],
         icon: ICON,
         title: format!("译文 · {target_label}"),
         tag: None,
@@ -298,6 +308,22 @@ fn detail(model: &ModelConfig, target: &str, translation: String) -> Detail {
             ("调用".into(), billing_note(model).into()),
         ],
     }
+}
+
+/// 复制译文并向前台 App 发送 ⌘V。面板执行这个动作前已经隐藏，按键会落到用户原来的 App。
+/// 没有辅助功能权限时只复制，并说明原因。
+fn replace_selection(text: String) -> Action {
+    Action::new(move || {
+        Action::copy(text.clone()).run()?;
+        if !crate::providers::clipboard::macos::accessibility_trusted() {
+            return Ok(Outcome::Message(
+                "译文已复制。没有辅助功能权限，无法自动替换，请手动粘贴（⌘V）。".into(),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        crate::providers::clipboard::macos::send_paste()?;
+        Ok(Outcome::Done)
+    })
 }
 
 fn billing_note(model: &ModelConfig) -> &'static str {

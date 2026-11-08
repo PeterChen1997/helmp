@@ -30,6 +30,8 @@ pub enum Outcome {
     Show(Detail),
     /// 进入某个插件的范围（如从首页的「剪贴板历史」进入剪贴板）。
     EnterScope(&'static str),
+    /// 进入范围并带上初始输入（如把识别出的文字带进翻译）。
+    EnterScopeWith(&'static str, String),
     /// 打开设置窗口（动作在后台线程执行，不能直接开窗口，交给界面线程做）。
     OpenSettings,
 }
@@ -44,17 +46,27 @@ type RunFn = dyn Fn(&ActionInput) -> Result<Outcome> + Send + Sync;
 
 /// 结果被选中时要做的事。启动器先隐藏面板（表单视图除外），再在后台线程执行它。
 #[derive(Clone)]
-pub struct Action(Arc<RunFn>);
+pub struct Action {
+    run: Arc<RunFn>,
+    /// 执行时不隐藏面板，完成后原地刷新列表（如删除一条剪贴板记录）。
+    keep_open: bool,
+}
 
 impl Action {
     /// 不需要输入的动作。
     pub fn new(f: impl Fn() -> Result<Outcome> + Send + Sync + 'static) -> Self {
-        Self(Arc::new(move |_| f()))
+        Self {
+            run: Arc::new(move |_| f()),
+            keep_open: false,
+        }
     }
 
     /// 需要表单输入的动作。
     pub fn with_input(f: impl Fn(&ActionInput) -> Result<Outcome> + Send + Sync + 'static) -> Self {
-        Self(Arc::new(f))
+        Self {
+            run: Arc::new(f),
+            keep_open: false,
+        }
     }
 
     /// 用 macOS `open` 打开文件、.app 或 URL（含 `claude://`、`codex://` 深链）。
@@ -72,14 +84,68 @@ impl Action {
         Self::new(move || Ok(Outcome::EnterScope(scope)))
     }
 
+    /// 标记为「执行时不隐藏面板、完成后原地刷新」。
+    pub fn keep_open(mut self) -> Self {
+        self.keep_open = true;
+        self
+    }
+
+    pub fn keeps_open(&self) -> bool {
+        self.keep_open
+    }
+
+    /// 把文字写进系统剪贴板。用 pbcopy 并强制 UTF-8：Helmp 可能从 LANG 为空的环境启动，
+    /// 那样 pbcopy 会按 C locale 把中文写成问号。
+    pub fn copy(text: impl Into<String>) -> Self {
+        let text = text.into();
+        Self::new(move || {
+            use std::io::Write as _;
+            let mut child = std::process::Command::new("pbcopy")
+                .env("LANG", "en_US.UTF-8")
+                .env("LC_ALL", "en_US.UTF-8")
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("pbcopy 没有 stdin"))?
+                .write_all(text.as_bytes())?;
+            let status = child.wait()?;
+            anyhow::ensure!(status.success(), "写入剪贴板失败：{status}");
+            Ok(Outcome::Done)
+        })
+    }
+
+    /// 在访达中选中这个文件或目录。
+    pub fn reveal(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self::new(move || {
+            let status = std::process::Command::new("open")
+                .arg("-R")
+                .arg(&path)
+                .status()?;
+            anyhow::ensure!(status.success(), "在访达中显示 {path} 失败：{status}");
+            Ok(Outcome::Done)
+        })
+    }
+
     pub fn run(&self) -> Result<Outcome> {
-        (self.0)(&ActionInput::default())
+        (self.run)(&ActionInput::default())
     }
 
     pub fn run_with(&self, input: &ActionInput) -> Result<Outcome> {
-        (self.0)(input)
+        (self.run)(input)
     }
 }
+
+/// 动作没有可比较的内容：同一个闭包（同一次构造的克隆）才算相等。
+impl PartialEq for Action {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.run, &other.run) && self.keep_open == other.keep_open
+    }
+}
+
+impl Eq for Action {}
 
 impl fmt::Debug for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -88,7 +154,7 @@ impl fmt::Debug for Action {
 }
 
 /// ⌘K 菜单里的次级操作。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NamedAction {
     pub title: String,
     /// 显示用的快捷键，如 `⌘↵`、`⌘⇧C`。框架按它绑定按键。
@@ -203,6 +269,8 @@ pub struct Detail {
     pub blocks: Vec<Block>,
     /// 底部的键值表，如 项目 / 分支 / 来源。
     pub metadata: Vec<(String, String)>,
+    /// 结果的操作（执行后展示的详情才用）：第一个是回车的主操作（如「复制译文」），其余进 ⌘K。
+    pub actions: Vec<NamedAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,6 +279,8 @@ pub enum FieldKind {
         placeholder: String,
         multiline: bool,
     },
+    /// 掩码输入（密码类参数）。
+    Secret { placeholder: String },
     /// (显示名, 值)
     Select { options: Vec<(String, String)> },
 }

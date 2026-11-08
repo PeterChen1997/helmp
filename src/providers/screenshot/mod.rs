@@ -187,11 +187,7 @@ fn ocr_actions() -> Vec<NamedAction> {
         NamedAction::new(
             "翻译识别结果",
             Some("⌘T"),
-            Action::new(|| {
-                // 识别结果已经在剪贴板里；翻译插件从那里取。
-                last_text()?;
-                Ok(Outcome::EnterScope(TRANSLATE_SCOPE))
-            }),
+            Action::new(|| Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, last_text()?))),
         ),
     ]
 }
@@ -367,7 +363,24 @@ fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> 
             format!("{} × {}", shown.width, shown.height),
         ));
     }
+    // 有结果时回车复制识别结果，⌘T 带着文字进入翻译。
+    let actions = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            NamedAction::new("复制识别结果", None, Action::copy(text)),
+            NamedAction::new(
+                "翻译识别结果",
+                Some("⌘T"),
+                Action::new({
+                    let text = text.to_string();
+                    move || Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, text.clone()))
+                }),
+            ),
+        ]
+    };
     Detail {
+        actions,
         icon: Icon::Symbol {
             name: "scan-text",
             tint: TINT,
