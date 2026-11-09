@@ -26,7 +26,7 @@ use anyhow::{Context as _, Result};
 use crate::config::ClipboardConfig;
 use crate::engine::{MAX_RESULTS, commands_section};
 use crate::i18n::{Lang, tr, trf};
-use crate::provider::{Accessory, Action, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint};
+use crate::provider::{Action, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint};
 use present::{Clock, TextKind};
 use store::{Entry, Kind, NewClip, Source, Store};
 use watcher::Read;
@@ -271,7 +271,7 @@ impl Provider for Clipboard {
                 name: "clipboard-list",
                 tint: Tint::Orange,
             },
-            accessories: vec![Accessory::keys("⌘⇧V")],
+            accessories: crate::hotkey::hint_keys(PROVIDER_ID),
             action: Action::enter_scope(PROVIDER_ID),
             action_title: tr("打开", "Open").into(),
             ..Item::blank()
@@ -1155,7 +1155,8 @@ mod tests {
         let item = &items[0];
         assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
-        assert_eq!(item.accessories, vec![Accessory::keys("⌘⇧V")]);
+        // 键帽只显示真正生效的全局快捷键（冲突未生效、被清除时按不出来）；单测里没有注册任何热键。
+        assert!(item.accessories.is_empty(), "{:?}", item.accessories);
         assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("clipboard"));
     }
 

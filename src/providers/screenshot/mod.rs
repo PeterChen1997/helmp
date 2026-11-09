@@ -25,9 +25,7 @@ use crate::engine::commands_section;
 use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::paths;
-use crate::provider::{
-    Accessory, Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint,
-};
+use crate::provider::{Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint};
 
 fn badge() -> &'static str {
     tr("截图", "Screenshot")
@@ -182,7 +180,7 @@ impl Provider for Screenshot {
             .iter()
             .filter(|cmd| cmd.key == "ocr-screen")
             .map(|cmd| Item {
-                accessories: vec![Accessory::keys("⌘⇧2")],
+                accessories: crate::hotkey::hint_keys("screenshot"),
                 ..command_item(cmd, OCR_SUGGESTION_SCORE, commands_section())
             })
             .collect()
@@ -620,13 +618,14 @@ mod tests {
     #[test]
     fn home_suggests_ocr_with_shortcut() {
         // 设计稿首页「快捷命令」第一条是「截图识别文字 ⌘⇧2」，分数要低于「最近使用」（850）。
+        // 右侧键帽取真正生效的全局快捷键（`hotkey::hint_keys`）；单测里没有注册热键，所以为空。
         let items = Screenshot.suggestions();
         assert_eq!(items.len(), 1);
         let item = &items[0];
         assert_eq!(item.id, "screenshot:ocr-screen");
         assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
-        assert_eq!(item.accessories, vec![Accessory::keys("⌘⇧2")]);
+        assert!(item.accessories.is_empty(), "{:?}", item.accessories);
         assert_eq!(
             item.icon,
             Icon::Symbol {

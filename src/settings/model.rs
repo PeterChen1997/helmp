@@ -453,6 +453,16 @@ pub fn set_extension_hotkey(config: &mut Config, provider_id: &str, hotkey: Opti
         .hotkey = hotkey;
 }
 
+/// 清除扩展的快捷键：写成空字符串（`None` 表示「用默认值」，清除后就又绑回默认了）。
+pub fn clear_extension_hotkey(config: &mut Config, provider_id: &str) {
+    set_extension_hotkey(config, provider_id, Some(String::new()));
+}
+
+/// 恢复扩展的默认快捷键：不再记自定义值，以后默认值变了也跟着变。
+pub fn reset_extension_hotkey(config: &mut Config, provider_id: &str) {
+    set_extension_hotkey(config, provider_id, None);
+}
+
 /// 加入脚本目录；默认目录或已存在的目录不重复加入。返回是否有变化。
 pub fn add_script_dir(config: &mut Config, dir: &str, default_dir: &str) -> bool {
     let dir = dir.trim_end_matches('/');
@@ -890,6 +900,29 @@ mod tests {
         assert!(remove_custom_engine(&mut config, &id));
         assert!(!config.web_search.order.contains(&id));
         assert!(config.web_search.engines().iter().all(|e| e.id != id));
+    }
+
+    #[test]
+    fn cleared_extension_hotkey_is_not_triggered_anymore() {
+        // 用户在设置里清除了剪贴板历史的快捷键：之后按 ⇧⌘V 不能再打开它。
+        // 写成 None 会悄悄退回默认的 ⇧⌘V，等于没清除。
+        use crate::hotkey::{Command, wanted};
+        let clipboard = Command::Scope("clipboard");
+        let spec_of = |config: &Config| {
+            wanted(config)
+                .into_iter()
+                .find(|want| want.command == clipboard)
+                .and_then(|want| want.spec)
+        };
+
+        let mut config = Config::default();
+        set_extension_hotkey(&mut config, "clipboard", Some("ctrl-alt-v".into()));
+        clear_extension_hotkey(&mut config, "clipboard");
+        assert_eq!(spec_of(&config), None);
+
+        // 恢复默认则回到出厂组合。
+        reset_extension_hotkey(&mut config, "clipboard");
+        assert_eq!(spec_of(&config).as_deref(), Some("cmd-shift-v"));
     }
 
     #[test]

@@ -9,16 +9,17 @@ use crate::config::{self, Config};
 use crate::i18n::{tr, trf};
 use crate::providers::websearch;
 use crate::settings::SettingsView;
+use crate::settings::hotkey;
 use crate::settings::model;
 use crate::settings::system;
 use crate::settings::widgets;
 use crate::style::Palette;
 
 // 表格列宽，照设计稿 `grid-template-columns: 1fr 64px 64px 96px 46px`；
-// 快捷键列放录制框，比设计稿略宽。
+// 快捷键列放录制框（键帽 + 清除 + 恢复默认），比设计稿宽。
 const COL_KIND: Pixels = px(48.);
 const COL_ALIAS: Pixels = px(64.);
-const COL_HOTKEY: Pixels = px(118.);
+const COL_HOTKEY: Pixels = px(140.);
 const COL_SWITCH: Pixels = px(46.);
 
 impl SettingsView {
@@ -110,31 +111,55 @@ impl SettingsView {
                 .font_family("Menlo")
                 .text_size(px(12.))
                 .child(Input::new(&row.alias).appearance(false));
-            rows.push(
-                cells(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .child(widgets::tinted_icon(meta.icon, meta.tint, px(24.)))
-                        .child(title)
-                        .into_any_element(),
-                    widgets::help_text(meta.kind, pal).into_any_element(),
-                    alias.into_any_element(),
-                    row.hotkey.clone().into_any_element(),
-                    widgets::switch(
-                        SharedString::from(format!("ext-enabled-{id}")),
-                        enabled,
-                        &trf!("启用{name}", "Enable {name}"),
-                        pal,
-                        cx.listener(move |this, on: &bool, _, cx| {
-                            let on = *on;
-                            this.save(cx, |c| model::set_extension_enabled(c, id, on));
-                        }),
-                    )
+            let hotkey_cell = match &row.hotkey {
+                Some(recorder) => recorder.clone().into_any_element(),
+                // 这个扩展没有全局快捷键命令：不给录制框，录了也不会生效。
+                None => widgets::help_text("—", pal).into_any_element(),
+            };
+            // 录制被拒的原因 / 已保存却没生效的原因：表格列太窄，放在整行下方。
+            let note = row
+                .hotkey
+                .as_ref()
+                .and_then(|recorder| recorder.read(cx).note());
+            let line = cells(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(widgets::tinted_icon(meta.icon, meta.tint, px(24.)))
+                    .child(title)
                     .into_any_element(),
+                widgets::help_text(meta.kind, pal).into_any_element(),
+                alias.into_any_element(),
+                hotkey_cell,
+                widgets::switch(
+                    SharedString::from(format!("ext-enabled-{id}")),
+                    enabled,
+                    &trf!("启用{name}", "Enable {name}"),
+                    pal,
+                    cx.listener(move |this, on: &bool, _, cx| {
+                        let on = *on;
+                        this.save(cx, |c| model::set_extension_enabled(c, id, on));
+                    }),
                 )
                 .into_any_element(),
+            );
+            rows.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(line)
+                    .when_some(note, |el, note| {
+                        // 与名称文字左对齐（14 边距 + 24 图标 + 10 间距）。
+                        el.child(
+                            div()
+                                .pl(px(48.))
+                                .pr(px(14.))
+                                .pb(px(8.))
+                                .child(hotkey::note_line(&note, pal)),
+                        )
+                    })
+                    .into_any_element(),
             );
         }
         // 别名为空时显示的是插件默认前缀（占位提示），这里说明一下。

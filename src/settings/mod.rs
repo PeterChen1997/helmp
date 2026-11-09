@@ -17,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::config::{self, Config};
+use crate::hotkey::Command;
 use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
@@ -130,7 +131,9 @@ struct ExtensionRow {
     /// 插件声明的范围前缀（去掉空格），别名为空时作为占位提示。
     default_alias: Option<String>,
     alias: Entity<InputState>,
-    hotkey: Entity<HotkeyRecorder>,
+    /// 只有带全局快捷键命令的扩展（`hotkey::EXTENSION_SHORTCUTS`）才有录制框；
+    /// 其他扩展录了也不会生效，显示「—」。
+    hotkey: Option<Entity<HotkeyRecorder>>,
 }
 
 pub struct SettingsView {
@@ -178,7 +181,8 @@ impl SettingsView {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder()));
         let hotkey = cx.new(|cx| {
             HotkeyRecorder::new(
-                || Some(config::get().general.hotkey.clone()).filter(|hotkey| !hotkey.is_empty()),
+                Command::Toggle,
+                || crate::hotkey::assigned_spec(&config::get(), Command::Toggle),
                 false,
                 false,
                 window,
@@ -204,14 +208,19 @@ impl SettingsView {
                     }
                 },
             ),
-            cx.subscribe(&hotkey, |this, _, event: &HotkeyEvent, cx| {
-                let HotkeyEvent::Changed(Some(hotkey)) = event else {
-                    // 唤起快捷键不能清空，录制框也不提供清除按钮。
-                    return;
-                };
-                let hotkey = hotkey.clone();
-                this.save(cx, move |config| config.general.hotkey = hotkey);
+            cx.subscribe(&hotkey, |this, _, event: &HotkeyEvent, cx| match event {
+                HotkeyEvent::Changed(Some(hotkey)) => {
+                    let hotkey = hotkey.clone();
+                    this.save(cx, move |config| config.general.hotkey = hotkey);
+                }
+                // 唤起快捷键不能清空，录制框也不提供清除。
+                HotkeyEvent::Changed(None) => {}
+                HotkeyEvent::Reset => this.save(cx, |config| {
+                    config.general.hotkey = crate::hotkey::DEFAULT_TOGGLE.into()
+                }),
             }),
+            // 录制框下方的提示由页面渲染：录制框状态一变就重绘页面。
+            cx.observe(&hotkey, |_, _, cx| cx.notify()),
             // 跟随系统外观时，系统切换明暗要同步组件主题。
             cx.observe_window_appearance(window, |_, window, cx| {
                 sync_component_theme(window, cx);
@@ -225,6 +234,7 @@ impl SettingsView {
             InputState::new(window, cx).placeholder("https://example.com/search?q={query}")
         });
         let models = crate::models::settings_pane(window, cx);
+        Self::watch_hotkey_registry(cx);
 
         // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
         let page = std::env::var("HELMP_SETTINGS_PAGE")
@@ -304,29 +314,37 @@ impl SettingsView {
                     }
                 },
             ));
-            let hotkey = cx.new(|cx| {
-                HotkeyRecorder::new(
-                    move || {
-                        config::get()
-                            .extensions
-                            .get(id)
-                            .and_then(|e| e.hotkey.clone())
+            let hotkey = crate::hotkey::extension_command(id).map(|command| {
+                let recorder = cx.new(|cx| {
+                    HotkeyRecorder::new(
+                        command,
+                        move || crate::hotkey::assigned_spec(&config::get(), command),
+                        true,
+                        true,
+                        window,
+                        cx,
+                    )
+                });
+                subscriptions.push(cx.subscribe(
+                    &recorder,
+                    move |this, _, event: &HotkeyEvent, cx| match event {
+                        HotkeyEvent::Changed(Some(hotkey)) => {
+                            let hotkey = hotkey.clone();
+                            this.save(cx, move |config| {
+                                model::set_extension_hotkey(config, id, Some(hotkey))
+                            });
+                        }
+                        HotkeyEvent::Changed(None) => {
+                            this.save(cx, |config| model::clear_extension_hotkey(config, id))
+                        }
+                        HotkeyEvent::Reset => {
+                            this.save(cx, |config| model::reset_extension_hotkey(config, id))
+                        }
                     },
-                    true,
-                    true,
-                    window,
-                    cx,
-                )
+                ));
+                subscriptions.push(cx.observe(&recorder, |_, _, cx| cx.notify()));
+                recorder
             });
-            subscriptions.push(
-                cx.subscribe(&hotkey, move |this, _, event: &HotkeyEvent, cx| {
-                    let HotkeyEvent::Changed(hotkey) = event;
-                    let hotkey = hotkey.clone();
-                    this.save(cx, move |config| {
-                        model::set_extension_hotkey(config, id, hotkey)
-                    });
-                }),
-            );
             rows.push(ExtensionRow {
                 id,
                 default_alias,
@@ -335,6 +353,28 @@ impl SettingsView {
             });
         }
         rows
+    }
+
+    /// 全局快捷键在后台重新注册（改配置后 ≤50ms、或别的 App 抢占后），结果不经过本窗口：
+    /// 轮询注册表的代数，变了就重绘，各行的「未生效」警示才跟得上。窗口关闭后自行结束。
+    fn watch_hotkey_registry(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let mut seen = crate::hotkey::generation();
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let Some(this) = this.upgrade() else {
+                    break;
+                };
+                let now = crate::hotkey::generation();
+                if now != seen {
+                    seen = now;
+                    this.update(cx, |_, cx| cx.notify());
+                }
+            }
+        })
+        .detach();
     }
 
     /// 修改配置并落盘；失败时记下原因显示在页面底部（不吞掉）。
