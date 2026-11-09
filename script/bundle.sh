@@ -41,6 +41,20 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# ad-hoc 签名：TCC 权限在每次重签后会失效，正式分发需换成 Developer ID。
-codesign --force --sign - "$app" >/dev/null
+# 签名身份要稳定：系统按签名识别 App 来记录辅助功能 / 录屏授权。ad-hoc 签名每次打包都不同，
+# 授过的权限会对不上新版本。优先 HELMP_SIGN_IDENTITY，其次本机的 Developer ID、Apple Development，
+# 都没有才退回 ad-hoc（并提醒）。
+identity="${HELMP_SIGN_IDENTITY:-}"
+if [[ -z "$identity" ]]; then
+  for kind in "Developer ID Application" "Apple Development"; do
+    identity="$(security find-identity -v -p codesigning | awk -v k="$kind" 'index($0, k) { print $2; exit }')"
+    [[ -n "$identity" ]] && break
+  done
+fi
+if [[ -n "$identity" ]]; then
+  codesign --force --timestamp=none --sign "$identity" "$app" >/dev/null
+else
+  echo "警告：没有找到代码签名证书，改用 ad-hoc 签名；每次重新打包后需要重新授权。" >&2
+  codesign --force --sign - "$app" >/dev/null
+fi
 echo "$root/$app"

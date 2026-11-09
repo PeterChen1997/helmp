@@ -23,11 +23,6 @@ use crate::style::{self, Palette};
 
 const WINDOW_SIZE: Size<Pixels> = size(px(640.), px(580.));
 
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
-}
-
 /// 一项权限的当前状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -105,14 +100,15 @@ impl Permission {
         match self {
             // SAFETY: 无参数的只读查询。
             Permission::Accessibility => {
-                if unsafe { AXIsProcessTrusted() } {
+                if crate::permissions::accessibility_trusted() {
                     Status::Granted
                 } else {
                     Status::NotGranted
                 }
             }
             Permission::ScreenRecording => {
-                if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+                // 实时判定：系统的预检接口在 App 重启前不会变，授权后会一直显示「前往授权」。
+                if crate::permissions::screen_recording_granted() {
                     Status::Granted
                 } else {
                     Status::NotGranted

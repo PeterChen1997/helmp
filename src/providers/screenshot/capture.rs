@@ -7,7 +7,6 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use anyhow::{Context as _, Result};
-use objc2_core_graphics::CGPreflightScreenCaptureAccess;
 
 use super::pasteboard;
 
@@ -15,7 +14,7 @@ pub const NO_SCREEN_ACCESS: &str = "Helmp 没有屏幕录制权限，无法截�
 请到「系统设置 → 隐私与安全性 → 录屏与系统录音」里允许 Helmp（从终端运行时是允许该终端），然后重试。";
 
 pub fn has_screen_access() -> bool {
-    CGPreflightScreenCaptureAccess()
+    crate::permissions::screen_recording_granted()
 }
 
 /// 交互区域截图写入 `path`。返回 `Ok(false)` 表示用户按 Esc 取消。

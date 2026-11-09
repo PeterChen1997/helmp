@@ -18,6 +18,7 @@ mod models;
 mod onboarding;
 mod panel;
 mod paths;
+mod permissions;
 mod provider;
 mod providers;
 mod settings;
