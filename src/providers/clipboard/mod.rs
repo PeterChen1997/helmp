@@ -171,6 +171,17 @@ impl Clipboard {
     }
 }
 
+/// 采集时生效的剪贴板设置。在设置 › 扩展里关掉「剪贴板历史」也等于关闭记录：
+/// 用户关掉这个扩展后，剪贴板内容不能还在悄悄写进历史库。
+fn recording(config: &crate::config::Config) -> ClipboardConfig {
+    let mut clipboard = config.clipboard.clone();
+    clipboard.enabled &= config
+        .extensions
+        .get(PROVIDER_ID)
+        .is_none_or(|ext| ext.enabled);
+    clipboard
+}
+
 impl Provider for Clipboard {
     fn id(&self) -> &'static str {
         PROVIDER_ID
@@ -195,7 +206,7 @@ impl Provider for Clipboard {
         let mut last = None;
         // 启动时采集一次当前剪贴板。来源未知（此时前台是终端或启动器自己），记为空。
         self.inner.handle(
-            watcher::poll(&pasteboard, &mut last, &config.clipboard, None),
+            watcher::poll(&pasteboard, &mut last, &recording(&config), None),
             None,
         )?;
 
@@ -205,8 +216,8 @@ impl Provider for Clipboard {
             .spawn(move || {
                 loop {
                     std::thread::sleep(watcher::POLL_INTERVAL);
-                    let config = crate::config::get();
-                    let config = &config.clipboard;
+                    let full = crate::config::get();
+                    let config = &full.clipboard;
                     if retention != config.retention_days || pruned_at.elapsed() >= PRUNE_INTERVAL {
                         if let Err(err) = inner.prune(config) {
                             eprintln!("helmp: 清理过期剪贴板历史失败：{err:#}");
@@ -224,7 +235,8 @@ impl Provider for Clipboard {
                         continue;
                     }
                     let source = macos::frontmost_app();
-                    let read = watcher::poll(&pasteboard, &mut last, config, source.as_ref());
+                    let read =
+                        watcher::poll(&pasteboard, &mut last, &recording(&full), source.as_ref());
                     if let Err(err) = inner.handle(read, source) {
                         eprintln!("helmp: 剪贴板采集失败：{err:#}");
                     }
@@ -807,6 +819,29 @@ mod tests {
 
     fn titles(items: &[Item]) -> Vec<&str> {
         items.iter().map(|item| item.title.as_str()).collect()
+    }
+
+    #[test]
+    fn turning_off_the_extension_stops_recording() {
+        // 用户在设置 › 扩展里关掉「剪贴板历史」，期待的是不再记录，而不只是搜不到：
+        // 之前轮询线程只看剪贴板页的开关，扩展关了照样把复制的内容写进历史库。
+        let mut config = crate::config::Config::default();
+        assert!(recording(&config).enabled);
+        config.extensions.insert(
+            PROVIDER_ID.into(),
+            crate::config::ExtensionConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+        let pb = FakePasteboard::default();
+        pb.set_text("copied while the extension is off", &[]);
+        let mut last = None;
+        assert!(matches!(
+            watcher::poll(&pb, &mut last, &recording(&config), None),
+            Read::Ignored(_)
+        ));
+        assert_eq!(pb.content_reads.get(), 0, "关掉后连内容都不该读");
     }
 
     fn png(provider: &Clipboard, bytes: &[u8], width: u32, height: u32, source: Option<Source>) {
