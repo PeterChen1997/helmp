@@ -3,12 +3,15 @@
 //! 880 × 540：顶部 60 搜索栏，底部 40 状态栏，中间三种视图之一——
 //! 列表 / 列表 + 详情 / 表单 + 详情。插件只给数据（`provider.rs`），这里负责全部渲染与按键。
 //!
-//! 按键：↑↓ 选择，↵ 主操作，⌘K 操作菜单，次级操作自带快捷键，⇥ 切换范围内的筛选，
-//! esc 依次关闭操作菜单 → 清掉结果 → 退出范围 → 隐藏面板。
+//! 按键：↑↓ 选择，↵ 主操作，⌘K 操作菜单，次级操作自带快捷键，⇥ 进入选中项的扩展 / 切换范围内的筛选，
+//! 范围内 ↑ 调出历史输入（如翻译过的原文），esc 依次关闭操作菜单 → 清掉结果 → 退出范围 → 隐藏面板。
+//!
+//! 表单项标了 `auto_run` 时（翻译），输入停顿 `AUTO_RUN_DELAY` 后自动执行，等待和执行期间详情区显示加载占位。
 
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -25,6 +28,9 @@ const SIDE_WIDTH: Pixels = px(380.);
 
 /// 面板可见时定期重查，让 agent 状态、剪贴板等后台变化与新生成的图标反映到界面。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 输入即译：输入停顿这么久才自动执行，避免每敲一个字就调一次模型。
+const AUTO_RUN_DELAY: Duration = Duration::from_millis(400);
 
 /// 隐藏超过这么久再唤起，就清空上次输入回到空白搜索（参考 Raycast「Pop to Root Search」默认 90 秒）。
 /// `HELMP_RESET_AFTER_SECS` 优先于设置里的值，0 表示每次唤起都清空。
@@ -63,6 +69,9 @@ impl ActiveScope {
 struct ResultView {
     item_id: String,
     detail: Detail,
+    /// 结果来自列表之外（全局快捷键、菜单栏直接执行）：列表只显示这一项，后台刷新不替换它，
+    /// 否则结果会被当前查询的列表顶掉，回车也会落到别的项上。
+    pinned: bool,
 }
 
 enum FieldState {
@@ -76,6 +85,7 @@ struct FormState {
     item_id: String,
     form: Form,
     states: Vec<FieldState>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl FormState {
@@ -94,6 +104,15 @@ impl FormState {
             input.form.insert(field.key.clone(), value);
         }
         input
+    }
+
+    /// 文本字段里有没有字（输入即译：全空就不必执行）。
+    fn has_text(&self, cx: &App) -> bool {
+        self.states.iter().any(|state| match state {
+            FieldState::Line(input) => !input.read(cx).value().trim().is_empty(),
+            FieldState::Area(area) => !area.read(cx).value().trim().is_empty(),
+            FieldState::Select(_) => false,
+        })
     }
 
     fn focused(&self, window: &Window, cx: &App) -> bool {
@@ -136,15 +155,27 @@ pub struct Launcher {
     row_children: Vec<usize>,
     /// 上次取文案时的语言代数（见 `sync_language`）。
     lang_generation: u64,
+    window_handle: AnyWindowHandle,
+    /// 搜索框当前的占位文字（随范围、索引状态变化，见 `placeholder_for`）。
+    placeholder: String,
+    /// 等待防抖结束的自动执行（输入即译）。被替换或丢弃即取消。
+    auto_task: Option<Task<()>>,
+    /// 自动执行已排队、还没开始：详情区显示加载占位。
+    auto_pending: bool,
+    /// 每次在表单里原地执行加一；结果回来时不是最新一次就丢弃（输入即译时旧请求可能晚到）。
+    form_run: u64,
+    /// 范围内 ↑ 调出的历史：(历史输入，最近的在前；当前下标)。
+    recall: Option<(Vec<String>, usize)>,
+    /// 主结果文字的只读文本框（可选中复制），按文字缓存。
+    result_text: Option<(String, Entity<TextareaState>)>,
     _refresh: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Launcher {
     pub fn new(engine: Engine, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(root_placeholder())
-        });
+        let placeholder = placeholder_for(None, engine.is_started(APPS_PROVIDER));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.clone()));
 
         let subscriptions = vec![
             cx.subscribe_in(&input, window, {
@@ -168,16 +199,27 @@ impl Launcher {
             }),
         ];
 
+        let window_handle = window.window_handle();
         let refresh = cx.spawn(async move |this, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
-                let Ok(()) = this.update(cx, |this, cx| {
-                    if this.visible && !this.running {
-                        this.refresh(cx);
-                    }
-                }) else {
+                let alive = window_handle
+                    .update(cx, |_, window, cx| {
+                        this.update(cx, |this, cx| {
+                            if this.visible {
+                                // 应用索引建完后占位文字从「正在建立应用索引…」换回常规提示。
+                                this.sync_placeholder(window, cx);
+                                if !this.running {
+                                    this.refresh(cx);
+                                }
+                            }
+                        })
+                        .is_ok()
+                    })
+                    .unwrap_or(false);
+                if !alive {
                     break;
-                };
+                }
             }
         });
 
@@ -201,6 +243,13 @@ impl Launcher {
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
             lang_generation: crate::i18n::generation(),
+            window_handle,
+            placeholder,
+            auto_task: None,
+            auto_pending: false,
+            form_run: 0,
+            recall: None,
+            result_text: None,
             _refresh: refresh,
             _subscriptions: subscriptions,
         }
@@ -231,7 +280,10 @@ impl Launcher {
                 .blocks
                 .iter()
                 .map(|block| match block {
-                    Block::Text(text) | Block::Code(text) => text.clone(),
+                    Block::Text(text)
+                    | Block::Code(text)
+                    | Block::Caption(text)
+                    | Block::Result { text, .. } => text.clone(),
                     Block::Quote { text, .. } => text.clone(),
                     Block::Image(path) => path.display().to_string(),
                 })
@@ -284,6 +336,10 @@ impl Launcher {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // 面板显示之前、用户的 App 还在前台时通知插件（翻译在这里取词）。带着文字进入的不需要取词。
+        if text.is_empty() {
+            self.engine.will_enter(scope_id, !self.visible);
+        }
         if !self.visible {
             self.show(window, cx);
         }
@@ -343,12 +399,22 @@ impl Launcher {
         {
             active.scope = scope;
         }
-        let placeholder = match &self.scope {
-            Some(active) => active.scope.placeholder.clone(),
-            None => root_placeholder().to_string(),
-        };
-        self.input
-            .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+        self.sync_placeholder(window, cx);
+    }
+
+    /// 按当前范围和索引状态更新搜索框占位文字；没变就不动输入框。
+    fn sync_placeholder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let want = placeholder_for(
+            self.scope
+                .as_ref()
+                .map(|active| active.scope.placeholder.as_str()),
+            self.engine.is_started(APPS_PROVIDER),
+        );
+        if want != self.placeholder {
+            self.placeholder = want.clone();
+            self.input
+                .update(cx, |input, cx| input.set_placeholder(want, window, cx));
+        }
     }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -360,6 +426,9 @@ impl Launcher {
         self.result = None;
         self.form = None;
         self.actions_open = false;
+        self.recall = None;
+        self.cancel_auto_run();
+        self.sync_placeholder(window, cx);
     }
 
     fn on_query_changed(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -370,9 +439,12 @@ impl Launcher {
             && let Some((scope, rest)) = self.engine.resolve_prefix(&value)
         {
             // 输入了范围前缀（如「cb 」）：进入范围，把前缀从输入框里拿掉。
+            self.engine.will_enter(scope.id, false);
             self.enter_scope(scope, rest, window, cx);
             return;
         }
+        // 用户自己改了输入，就不再处于「↑ 翻历史」中。
+        self.recall = None;
         self.query = value;
         self.result = None;
         self.actions_open = false;
@@ -388,17 +460,16 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) {
         crate::trace::log(format!("enter scope {}", scope.id));
-        let placeholder = scope.placeholder.clone();
         self.scope = Some(ActiveScope { scope, filter: 0 });
         self.result = None;
         self.form = None;
         self.actions_open = false;
         self.selected = 0;
+        self.recall = None;
         self.query = rest.clone();
-        self.input.update(cx, |input, cx| {
-            input.set_placeholder(placeholder, window, cx);
-            input.set_value(rest, window, cx);
-        });
+        self.sync_placeholder(window, cx);
+        self.input
+            .update(cx, |input, cx| input.set_value(rest, window, cx));
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
     }
@@ -409,12 +480,59 @@ impl Launcher {
         self.result = None;
         self.form = None;
         self.selected = 0;
+        self.recall = None;
+        self.cancel_auto_run();
         self.query.clear();
-        self.input.update(cx, |input, cx| {
-            input.set_placeholder(root_placeholder(), window, cx);
-            input.set_value("", window, cx);
-        });
+        self.sync_placeholder(window, cx);
+        self.input
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.refresh(cx);
+    }
+
+    /// Tab：进入选中项所属插件的范围（如在首页选中「翻译」「剪贴板历史」，或某条剪贴板记录）。
+    fn tab_scope(&self) -> Option<Scope> {
+        self.engine.scope(provider_of(&self.selected_item()?.id)?)
+    }
+
+    /// 范围内 ↑（`older = true`）/ ↓ 翻历史输入。返回是否处理了这次按键。
+    fn step_recall(&mut self, older: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(scope_id) = self.scope_id() else {
+            return false;
+        };
+        let next = match (&self.recall, older) {
+            // 只在输入框为空时开始翻：已经打了字，↑ 还是普通的上移。
+            (None, true) if self.query.is_empty() => {
+                let list = self.engine.recall(scope_id);
+                if list.is_empty() {
+                    return false;
+                }
+                self.recall = Some((list, 0));
+                Some(0)
+            }
+            (None, _) => return false,
+            (Some((list, at)), true) => Some((at + 1).min(list.len() - 1)),
+            (Some((_, 0)), false) => None,
+            (Some((_, at)), false) => Some(at - 1),
+        };
+        let text = match (next, &mut self.recall) {
+            (Some(at), Some((list, current))) => {
+                *current = at;
+                list[at].clone()
+            }
+            _ => {
+                // 翻回最新之后再 ↓：回到空输入。
+                self.recall = None;
+                String::new()
+            }
+        };
+        // 先改 query 再改输入框：输入框的 Change 事件看到值没变，不会把翻历史的状态清掉。
+        self.query = text.clone();
+        self.result = None;
+        self.selected = 0;
+        self.input
+            .update(cx, |input, cx| input.set_value(text, window, cx));
+        self.refresh(cx);
+        true
     }
 
     /// 后台查询；结果回来时若 revision 已过期则丢弃。
@@ -427,6 +545,7 @@ impl Launcher {
             .scope
             .as_ref()
             .map(|active| (active.scope.id, active.filter_name().to_string()));
+        let window_handle = self.window_handle;
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let items = cx
                 .background_spawn(async move {
@@ -436,8 +555,12 @@ impl Launcher {
                     }
                 })
                 .await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = window_handle.update(cx, |_, window, cx| this.update(cx, |this, cx| {
                 if this.revision != revision {
+                    return;
+                }
+                if this.result.as_ref().is_some_and(|result| result.pinned) {
+                    // 正在展示列表外的结果（见 `ResultView::pinned`），不替换列表。
                     return;
                 }
                 crate::trace::log(format!(
@@ -453,8 +576,10 @@ impl Launcher {
                     .and_then(|id| this.items.iter().position(|item| item.id == id))
                     .unwrap_or(0)
                     .min(this.items.len().saturating_sub(1));
+                // 结果一到就建表单状态（不等下一帧渲染）：输入即译的防抖从这里开始计时。
+                this.sync_form(window, cx);
                 cx.notify();
-            });
+            }));
         })
         .detach();
     }
@@ -503,7 +628,7 @@ impl Launcher {
         {
             return;
         }
-        let states = form
+        let states: Vec<FieldState> = form
             .fields
             .iter()
             .map(|field| match &field.kind {
@@ -550,11 +675,102 @@ impl Launcher {
                 ),
             })
             .collect();
+        // 输入即译：多行文本框里改字也要防抖重跑（搜索框的变化走 on_query_changed → 表单重建）。
+        let auto_run = item.auto_run;
+        let item_id = item.id.clone();
+        let subscriptions = if auto_run {
+            states
+                .iter()
+                .filter_map(|state| match state {
+                    FieldState::Area(area) => Some(cx.subscribe_in(
+                        area,
+                        window,
+                        |this, _, event: &InputEvent, window, cx| {
+                            if let InputEvent::Change = event {
+                                this.schedule_auto_run(window, cx);
+                                cx.notify();
+                            }
+                        },
+                    )),
+                    FieldState::Line(_) | FieldState::Select(_) => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.form = Some(FormState {
-            item_id: item.id.clone(),
+            item_id,
             form,
             states,
+            _subscriptions: subscriptions,
         });
+        if auto_run {
+            self.schedule_auto_run(window, cx);
+        }
+    }
+
+    /// 输入即译：（重新）开始防抖计时，到点后在表单里原地执行主操作。表单里没有字就只清掉旧结果。
+    fn schedule_auto_run(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_auto_run();
+        let Some(item) = self.selected_item().filter(|item| item.auto_run) else {
+            return;
+        };
+        let Some(form) = self.form.as_ref().filter(|form| form.item_id == item.id) else {
+            return;
+        };
+        let item_id = item.id.clone();
+        if self
+            .result
+            .as_ref()
+            .is_some_and(|result| result.item_id == item_id)
+        {
+            self.result = None;
+        }
+        if !form.has_text(cx) {
+            return;
+        }
+        crate::trace::log(format!("auto-run scheduled {item_id}"));
+        self.auto_pending = true;
+        let window_handle = window.window_handle();
+        self.auto_task = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
+            cx.background_executor().timer(AUTO_RUN_DELAY).await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if !this.auto_pending {
+                        return;
+                    }
+                    this.auto_pending = false;
+                    let Some(item) = this
+                        .selected_item()
+                        .filter(|item| item.id == item_id)
+                        .cloned()
+                    else {
+                        return;
+                    };
+                    crate::trace::log(format!("auto-run {}", item.id));
+                    let action = item.action.clone();
+                    this.run(item, action, false, window, cx);
+                });
+            });
+        }));
+    }
+
+    fn cancel_auto_run(&mut self) {
+        self.auto_task = None;
+        self.auto_pending = false;
+    }
+
+    /// 详情区该不该显示加载占位：选中的表单项正在（或即将）原地执行，还没有结果。
+    fn loading(&self) -> bool {
+        let Some(item) = self.selected_item() else {
+            return false;
+        };
+        item.form.is_some()
+            && (self.auto_pending || self.running)
+            && !self
+                .result
+                .as_ref()
+                .is_some_and(|result| result.item_id == item.id)
     }
 
     // ---------- 执行 ----------
@@ -563,7 +779,7 @@ impl Launcher {
     /// 需要展示的结果（Message / Show / 出错）会打开面板显示。
     pub fn run_item(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
         let action = item.action.clone();
-        self.run(item, action, window, cx);
+        self.run(item, action, true, window, cx);
     }
 
     pub fn execute_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -575,7 +791,9 @@ impl Launcher {
             Some(primary) => primary.action.clone(),
             None => item.action.clone(),
         };
-        self.run(item, action, window, cx);
+        // 还在等防抖就按了回车：不等了，马上执行。
+        self.cancel_auto_run();
+        self.run(item, action, true, window, cx);
     }
 
     /// 选中项当前展示的结果自带的操作（第一个是回车的主操作）。
@@ -586,17 +804,25 @@ impl Launcher {
             .then_some(result.detail.actions.as_slice())
     }
 
+    /// 执行一个动作。`record`：记进「最近使用」（输入即译的自动执行不记，否则每敲一句都是一条）。
     fn run(
         &mut self,
         item: Item,
         action: crate::provider::Action,
+        record: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         crate::trace::log(format!("execute {} ({})", item.title, item.id));
         self.actions_open = false;
+        // 「重试」「再试一次」：重新执行这个结果的主操作（表单里带着当前表单值原地重跑）。
+        let action = if action.is_rerun() {
+            item.action.clone()
+        } else {
+            action
+        };
         let scope_id = self.scope_id();
-        if !item.id.starts_with("recent:") {
+        if record && !item.id.starts_with("recent:") {
             crate::history::record(&item, &self.query, scope_id);
         }
 
@@ -619,6 +845,12 @@ impl Launcher {
         } else {
             self.hide(window, cx);
         }
+        if in_form {
+            self.form_run += 1;
+        }
+        let form_run = self.form_run;
+        // 结果要展示在列表之外的项上（全局快捷键、菜单栏直接执行）。
+        let foreign = !self.items.iter().any(|listed| listed.id == item.id);
 
         let window_handle = window.window_handle();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -627,6 +859,10 @@ impl Launcher {
                 .await;
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |this, cx| {
+                    if in_form && form_run != this.form_run {
+                        // 输入即译：这是被后来的输入取代的旧请求，结果作废。
+                        return;
+                    }
                     this.running = false;
                     let detail = match outcome {
                         Ok(Outcome::Done) if keep_open => {
@@ -674,9 +910,15 @@ impl Launcher {
                     if !this.visible {
                         this.show_inner(false, window, cx);
                     }
+                    let pinned = foreign && !this.items.iter().any(|listed| listed.id == item.id);
+                    if pinned {
+                        this.items = vec![item.clone()];
+                        this.selected = 0;
+                    }
                     this.result = Some(ResultView {
                         item_id: item.id.clone(),
                         detail,
+                        pinned,
                     });
                     // 看完结果再关掉面板，下次唤起就是新任务。
                     this.executed = true;
@@ -727,7 +969,8 @@ impl Launcher {
         let Some(item) = self.selected_item().cloned() else {
             return;
         };
-        self.run(item, action.action, window, cx);
+        self.cancel_auto_run();
+        self.run(item, action.action, true, window, cx);
     }
 
     // ---------- 按键 ----------
@@ -820,6 +1063,17 @@ impl Launcher {
             return;
         }
 
+        // 范围内输入框为空时 ↑ 调出历史输入（翻译过的原文），↓ 往回翻。
+        if !mods.modified()
+            && !form_focused
+            && self.selected == 0
+            && matches!(key, "up" | "down")
+            && self.step_recall(key == "up", window, cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
+
         match key {
             "up" if !mods.modified() && !form_focused => self.select(-1, cx),
             "down" if !mods.modified() && !form_focused => self.select(1, cx),
@@ -827,6 +1081,14 @@ impl Launcher {
             "enter" if mods.shift && form_focused => return,
             "enter" if !mods.platform && !mods.alt && !mods.control => {
                 self.execute_selected(window, cx)
+            }
+            // 首页 / 全局搜索：Tab 进入选中项所属的扩展（如「翻译」「剪贴板历史」）。
+            "tab" if !mods.modified() && !form_focused && self.scope.is_none() => {
+                let Some(scope) = self.tab_scope() else {
+                    return;
+                };
+                self.engine.will_enter(scope.id, false);
+                self.enter_scope(scope, String::new(), window, cx);
             }
             "tab" if !mods.modified() && !form_focused => {
                 let Some(active) = self
@@ -841,7 +1103,11 @@ impl Launcher {
                 self.refresh(cx);
             }
             "escape" if !mods.modified() => {
-                if self.result.take().is_some() {
+                if let Some(result) = self.result.take() {
+                    if result.pinned {
+                        // 列表里只剩那一项，回到当前查询的正常结果。
+                        self.refresh(cx);
+                    }
                     cx.notify();
                 } else if self.scope.is_some() {
                     self.exit_scope(window, cx);
@@ -906,12 +1172,31 @@ impl LauncherHandle {
 
 // ======================= 渲染 =======================
 
+/// 结果 id（`<provider>:<…>`，「最近使用」再带 `recent:` 前缀）所属的插件。
+fn provider_of(id: &str) -> Option<&str> {
+    let id = id.strip_prefix(RECENT_ID_PREFIX).unwrap_or(id);
+    id.split_once(':').map(|(provider, _)| provider)
+}
+
+/// 应用搜索插件的 id：它的索引没建完时，搜索框提示「正在建立应用索引…」。
+const APPS_PROVIDER: &str = "apps";
+
 /// 根视图（不在任何范围里）搜索框的占位文字。
 fn root_placeholder() -> &'static str {
     tr(
-        "搜索应用、Agent 会话、剪贴板、命令…",
-        "Search apps, agent sessions, clipboard, and commands…",
+        "搜索应用、Agent 会话、剪贴板、命令… · Tab 进入扩展",
+        "Search apps, agent sessions, clipboard, and commands… · Tab to open an extension",
     )
+}
+
+/// 搜索框占位文字：范围里用范围自己的提示；首页在应用索引建好之前说明正在建索引
+/// （此时搜不到应用是正常的，不说明的话用户会以为坏了）。
+fn placeholder_for(scope_placeholder: Option<&str>, apps_indexed: bool) -> String {
+    match scope_placeholder {
+        Some(placeholder) => placeholder.to_string(),
+        None if !apps_indexed => tr("正在建立应用索引…", "Indexing apps…").to_string(),
+        None => root_placeholder().to_string(),
+    }
 }
 
 /// 首页「最近使用」的结果（平铺成图标）。
@@ -1015,7 +1300,45 @@ fn brand_icon(size: Pixels) -> Img {
     .size(size)
 }
 
-fn render_detail(detail: &Detail, pal: &Palette) -> Div {
+/// 正在执行（输入即译的防抖 / 等模型）时详情区的加载占位：标题 + 几条骨架，而不是一片空白。
+fn render_loading(item: &Item, pal: &Palette) -> Div {
+    let bar = |width: f32| {
+        Skeleton::new()
+            .w(relative(width))
+            .h(px(18.))
+            .rounded(px(6.))
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .flex_1()
+        .min_w_0()
+        .px(px(26.))
+        .py(px(22.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(icon_element(&item.icon, px(40.), pal))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .text_color(pal.muted)
+                        .child(trf!("正在{}…", "{}…", item.action_title)),
+                ),
+        )
+        .child(bar(0.92))
+        .child(bar(0.78))
+        .child(bar(0.55))
+}
+
+fn render_detail(
+    detail: &Detail,
+    pal: &Palette,
+    result_text: Option<&Entity<TextareaState>>,
+) -> Div {
     let mut pane = div()
         .flex()
         .flex_col()
@@ -1051,6 +1374,31 @@ fn render_detail(detail: &Detail, pal: &Palette) -> Div {
                 .text_size(px(15.))
                 .line_height(px(24.))
                 .text_color(pal.fg)
+                .child(text.clone()),
+            // 主结果用只读文本框：能用鼠标选中一部分复制，长文可滚动，换行原样保留。
+            Block::Result { text, large } => {
+                let (size, line) = if *large { (20., 30.) } else { (15., 23.) };
+                let body = div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(line * 2.))
+                    .text_size(px(size))
+                    .line_height(px(line))
+                    .text_color(pal.fg);
+                match result_text {
+                    Some(state) => body.child(
+                        Textarea::new(state)
+                            .appearance(false)
+                            .readonly(true)
+                            .h_full(),
+                    ),
+                    None => body.child(text.clone()),
+                }
+            }
+            Block::Caption(text) => div()
+                .text_size(px(12.))
+                .text_color(pal.muted)
                 .child(text.clone()),
             Block::Code(text) => div()
                 .px(px(16.))
@@ -1329,6 +1677,47 @@ impl Launcher {
         }))
     }
 
+    /// 详情区：加载中显示占位，否则显示当前详情（主结果文字放进可选中的只读文本框）。
+    fn render_current_detail(
+        &mut self,
+        pal: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        if self.loading() {
+            return self.selected_item().map(|item| render_loading(item, pal));
+        }
+        let detail = self.current_detail()?;
+        let text = detail.blocks.iter().find_map(|block| match block {
+            Block::Result { text, .. } => Some(text.clone()),
+            _ => None,
+        });
+        let state = text.map(|text| self.result_text_state(text, window, cx));
+        Some(render_detail(&detail, pal, state.as_ref()))
+    }
+
+    /// 主结果文字的只读文本框；文字变了才重建（保留用户的选区）。
+    fn result_text_state(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        if let Some((cached, state)) = &self.result_text
+            && *cached == text
+        {
+            return state.clone();
+        }
+        let value = text.clone();
+        let state = cx.new(|cx| {
+            let mut area = TextareaState::new(window, cx);
+            area.set_value(value, window, cx);
+            area
+        });
+        self.result_text = Some((text, state.clone()));
+        state
+    }
+
     fn render_form(&mut self, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = &self.form else {
             return div().into_any_element();
@@ -1388,12 +1777,14 @@ impl Launcher {
                         .text_color(pal.fg)
                         .child(label)
                         .child(div().text_color(pal.muted).child("⌄"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                        .on_click(cx.listener(move |this, _, window, cx| {
                             // 点一下切到下一个选项（菜单式下拉留待后续）。
                             if let Some(form) = &mut this.form
                                 && let Some(FieldState::Select(ix)) = form.states.get_mut(fx)
                             {
                                 *ix = (*ix + 1) % options.len().max(1);
+                                // 输入即译：换了目标语言 / 模型就按新选项重新翻译。
+                                this.schedule_auto_run(window, cx);
                                 cx.notify();
                             }
                         }))
@@ -1611,9 +2002,7 @@ impl Render for Launcher {
             Layout::List => self.render_list(&pal, cx),
             Layout::Split => {
                 let list = self.render_list(&pal, cx);
-                let detail = self
-                    .current_detail()
-                    .map(|detail| render_detail(&detail, &pal));
+                let detail = self.render_current_detail(&pal, window, cx);
                 div()
                     .flex()
                     .flex_1()
@@ -1633,9 +2022,7 @@ impl Render for Launcher {
             }
             Layout::Form => {
                 let form = self.render_form(&pal, cx);
-                let detail = self
-                    .current_detail()
-                    .map(|detail| render_detail(&detail, &pal));
+                let detail = self.render_current_detail(&pal, window, cx);
                 div()
                     .flex()
                     .flex_1()
@@ -1672,7 +2059,7 @@ mod tests {
     // 不用 `super::*`：那会把 gpui 的 `test` 宏一起导进来，盖掉标准 `#[test]`。
     use std::time::Duration;
 
-    use super::should_reset;
+    use super::{placeholder_for, provider_of, should_reset};
 
     const LIMIT: Duration = Duration::from_secs(90);
 
@@ -1704,5 +2091,33 @@ mod tests {
     #[test]
     fn first_show_has_nothing_to_clear() {
         assert!(!should_reset(None, LIMIT, false));
+    }
+
+    #[test]
+    fn placeholder_explains_the_current_state() {
+        // 刚启动时搜不到应用是因为索引还没建完：不说明，用户会以为坏了。
+        assert_eq!(placeholder_for(None, false), "正在建立应用索引…");
+        // 首页提示能搜什么，以及 Tab 能进入扩展（否则这个功能没人知道）。
+        let home = placeholder_for(None, true);
+        assert!(home.starts_with("搜索应用、Agent 会话、剪贴板、命令…"), "{home}");
+        assert!(home.contains("Tab 进入扩展"), "{home}");
+        // 进入范围后提示这个范围能做什么，与索引状态无关。
+        assert_eq!(
+            placeholder_for(Some("输入要翻译的文字"), false),
+            "输入要翻译的文字"
+        );
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            assert_eq!(placeholder_for(None, false), "Indexing apps…");
+            assert!(placeholder_for(None, true).contains("Tab to open an extension"));
+        });
+    }
+
+    #[test]
+    fn tab_finds_the_extension_of_the_selected_item() {
+        // Tab 进入选中项所属的扩展：首页「最近使用」里的项也要认得出来源。
+        assert_eq!(provider_of("translate:open"), Some("translate"));
+        assert_eq!(provider_of("recent:clipboard:open"), Some("clipboard"));
+        assert_eq!(provider_of("screenshot:ocr-file:/tmp/a:b.png"), Some("screenshot"));
+        assert_eq!(provider_of("no-provider"), None);
     }
 }

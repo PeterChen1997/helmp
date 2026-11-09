@@ -4,7 +4,7 @@
 //! - `complete(model, system, user)`：阻塞调用一次模型（30 秒超时），在后台线程用。
 //! - `test_connection`：设置页「测试连接」发的极小请求。
 //! - `api_key` / `set_api_key` / `delete_api_key`：钥匙串里的 Key。
-//! - `selected_text()`：前台应用选中的文字（AX；无权限返回 None）。
+//! - `capture_selection()`：取词，前台应用选中的文字（AX，必要时模拟 ⌘C 并还原剪贴板）。
 //! - `settings_pane`：设置窗口「模型」页。
 
 pub(crate) mod client;
@@ -18,9 +18,11 @@ use gpui_kit::*;
 use crate::config::{Config, ModelConfig, ModelKind};
 use crate::i18n::tr;
 
-pub use client::{default_base_url, needs_key, ollama_online};
+pub use client::{
+    FailureKind, ModelError, default_base_url, failure_kind, needs_key, ollama_online,
+};
 pub use keychain::{api_key, delete_api_key, set_api_key};
-pub use selection::selected_text;
+pub use selection::capture as capture_selection;
 
 /// 一次普通调用最多生成的 token 数（翻译一段文字绰绰有余）。
 const MAX_TOKENS: u32 = 4096;
@@ -28,7 +30,8 @@ const MAX_TOKENS: u32 = 4096;
 /// 用模型配置里的 Key（钥匙串）调用一次。阻塞，别在界面线程调。
 pub fn complete(model: &ModelConfig, system: &str, user: &str) -> Result<String> {
     let key = if needs_key(model.kind) {
-        api_key(model)?
+        // 钥匙串读不出来也是「配置问题」：界面要引导去设置里重新填 Key。
+        api_key(model).map_err(|err| ModelError::new(FailureKind::Setup, format!("{err:#}")))?
     } else {
         None
     };

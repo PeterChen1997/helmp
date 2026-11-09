@@ -80,7 +80,10 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
             println!("{}", detail.title);
             for block in detail.blocks {
                 match block {
-                    Block::Text(text) | Block::Code(text) => println!("{text}"),
+                    Block::Text(text)
+                    | Block::Code(text)
+                    | Block::Caption(text)
+                    | Block::Result { text, .. } => println!("{text}"),
                     Block::Quote { label, text } => println!("{label}{}{text}", tr("：", ": ")),
                     Block::Image(path) => {
                         println!("{}", trf!("[图片 {}]", "[Image {}]", path.display()))

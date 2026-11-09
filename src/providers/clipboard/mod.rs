@@ -66,6 +66,36 @@ const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
 /// 已启动的实例，供设置窗口「清空全部历史」使用（它拿不到 provider 对象）。
 static SHARED: OnceLock<Arc<Inner>> = OnceLock::new();
 
+/// 在这个时刻之前不记录剪贴板变化（见 `pause_recording`）。
+static PAUSED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// 暂停记录剪贴板变化，直到返回的守卫被丢弃后再过两个轮询周期。
+/// 翻译取词会模拟 ⌘C 再还原用户剪贴板：中间态是别人的选中文字，还原也不是用户的新复制，都不该进历史。
+pub fn pause_recording(at_most: Duration) -> PauseGuard {
+    set_paused_until(Instant::now() + at_most);
+    PauseGuard
+}
+
+pub struct PauseGuard;
+
+impl Drop for PauseGuard {
+    fn drop(&mut self) {
+        // 多留两个周期：保证轮询线程在暂停期内至少看到一次还原后的 changeCount，并把它当作已处理。
+        set_paused_until(Instant::now() + watcher::POLL_INTERVAL * 2);
+    }
+}
+
+fn set_paused_until(at: Instant) {
+    *PAUSED_UNTIL.lock().expect("clipboard pause poisoned") = Some(at);
+}
+
+fn recording_paused() -> bool {
+    PAUSED_UNTIL
+        .lock()
+        .expect("clipboard pause poisoned")
+        .is_some_and(|until| Instant::now() < until)
+}
+
 pub struct Clipboard {
     inner: Arc<Inner>,
 }
@@ -184,7 +214,13 @@ impl Provider for Clipboard {
                         retention = config.retention_days;
                         pruned_at = Instant::now();
                     }
-                    if last == Some(watcher::Pasteboard::change_count(&pasteboard)) {
+                    let count = watcher::Pasteboard::change_count(&pasteboard);
+                    if last == Some(count) {
+                        continue;
+                    }
+                    if recording_paused() {
+                        // 暂停期间的变化当作已处理：恢复记录后不会把还原的内容再记一遍。
+                        last = Some(count);
                         continue;
                     }
                     let source = macos::frontmost_app();

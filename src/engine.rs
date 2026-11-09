@@ -1,6 +1,7 @@
 //! 汇总所有 provider：启动、查询、范围（Scope）解析、首页内容与结果分组。
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use crate::history;
 use crate::i18n::{self, tr};
@@ -43,25 +44,47 @@ impl gpui_kit::Global for EngineGlobal {}
 #[derive(Clone)]
 pub struct Engine {
     providers: Arc<Vec<Arc<dyn Provider>>>,
+    /// `start` 已经返回（成功或失败）的 provider。搜索框据此提示「正在建立应用索引…」。
+    started: Arc<Mutex<HashSet<&'static str>>>,
 }
 
 impl Engine {
     pub fn new(providers: Vec<Arc<dyn Provider>>) -> Self {
         Self {
             providers: Arc::new(providers),
+            started: Arc::default(),
         }
+    }
+
+    fn mark_started(&self, id: &'static str) {
+        self.started
+            .lock()
+            .expect("engine started set poisoned")
+            .insert(id);
+    }
+
+    /// 某个 provider 的 `start` 是否已经返回。没有这个 provider（或被停用）时视为已完成。
+    pub fn is_started(&self, id: &str) -> bool {
+        !self.enabled().any(|provider| provider.id() == id)
+            || self
+                .started
+                .lock()
+                .expect("engine started set poisoned")
+                .contains(id)
     }
 
     /// 每个 provider 一个后台线程跑 `start`；失败打印到 stderr，不拖垮其他模块。
     pub fn start_in_background(&self) {
         for provider in self.providers.iter() {
             let provider = Arc::clone(provider);
+            let engine = self.clone();
             std::thread::Builder::new()
                 .name(format!("helmp-{}", provider.id()))
                 .spawn(move || {
                     if let Err(err) = provider.start() {
                         eprintln!("helmp: provider {} 启动失败：{err:#}", provider.id());
                     }
+                    engine.mark_started(provider.id());
                 })
                 .expect("spawn provider thread");
         }
@@ -77,12 +100,11 @@ impl Engine {
             .collect();
         handles
             .into_iter()
-            .filter_map(
-                |handle| match handle.join().expect("provider start panicked") {
-                    (id, Err(err)) => Some((id, err)),
-                    (_, Ok(())) => None,
-                },
-            )
+            .filter_map(|handle| {
+                let (id, result) = handle.join().expect("provider start panicked");
+                self.mark_started(id);
+                result.err().map(|err| (id, err))
+            })
             .collect()
     }
 
@@ -179,6 +201,25 @@ impl Engine {
 
     pub fn scope(&self, id: &str) -> Option<Scope> {
         self.scopes().into_iter().find(|scope| scope.id == id)
+    }
+
+    fn scope_provider(&self, scope: &str) -> Option<&Arc<dyn Provider>> {
+        self.enabled()
+            .find(|provider| provider.scope().is_some_and(|s| s.id == scope))
+    }
+
+    /// 进入范围之前通知对应插件（见 `Provider::will_enter`）。
+    pub fn will_enter(&self, scope: &str, app_in_front: bool) {
+        if let Some(provider) = self.scope_provider(scope) {
+            i18n::pinned(|| provider.will_enter(app_in_front));
+        }
+    }
+
+    /// 范围内 ↑ 能调出的历史输入（见 `Provider::recall`）。
+    pub fn recall(&self, scope: &str) -> Vec<String> {
+        self.scope_provider(scope)
+            .map(|provider| provider.recall())
+            .unwrap_or_default()
     }
 
     /// 查询是否以某个范围的前缀开头（如 `cb `），返回范围与去掉前缀后的文本。
@@ -298,6 +339,29 @@ mod tests {
         let en = with_lang(Lang::En, names);
         assert_eq!(en, ["Recent", "Waiting for You", "Commands"]);
         assert!(en[0] != en[1] && en[1] != en[2] && en[0] != en[2]);
+    }
+
+    struct Slow;
+
+    impl Provider for Slow {
+        fn id(&self) -> &'static str {
+            "slow-index"
+        }
+        fn query(&self, _: &str) -> Vec<Item> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn reports_when_a_provider_has_started() {
+        // 搜索框据此提示「正在建立应用索引…」：start 返回前必须报未完成，返回后（哪怕失败）必须报完成，
+        // 否则提示要么从不出现，要么永远不消失。
+        let engine = Engine::new(vec![Arc::new(Slow)]);
+        assert!(!engine.is_started("slow-index"));
+        assert!(engine.start_blocking().is_empty());
+        assert!(engine.is_started("slow-index"));
+        // 没有这个插件（如被停用）时不能一直显示「正在索引」。
+        assert!(engine.is_started("not-registered"));
     }
 
     #[test]
