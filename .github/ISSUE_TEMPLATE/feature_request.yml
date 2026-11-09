@@ -1,0 +1,34 @@
+name: Feature request / 功能建议
+description: Suggest an idea or improvement. / 提一个想法或改进。
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the Roadmap in the README and existing issues first.
+        提交前请先看看 README 里的 Roadmap 和已有的 issue。
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve? / 想解决什么问题？
+      description: Describe the situation, not just the solution. / 描述你遇到的场景，而不只是解决方案。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen? / 你希望怎么做？
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / 其他方案
+      description: Workarounds you use today, or how other launchers handle it. / 你现在怎么绕过，或者别的启动器是怎么做的。
+  - type: checkboxes
+    id: script
+    attributes:
+      label: Could this be a script command? / 能不能用脚本命令实现？
+      description: Many ideas work fine as a script command and don't need to be built in. / 很多想法写成脚本命令就够了，不一定要内置。
+      options:
+        - label: I checked, and a script command isn't enough. / 我看过了，脚本命令做不到。

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test & Clippy (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本以 rust-toolchain.toml 为准，这里只负责装上它和 clippy。
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: |
+          toolchain="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          test -n "$toolchain" || { echo "rust-toolchain.toml 里没有 channel" >&2; exit 1; }
+          rustup toolchain install "$toolchain" --profile minimal --component clippy
+          rustc --version
+          cargo clippy --version
+
+      # GPUI 的 build.rs 用 `xcrun metal` 编译着色器；新版 Xcode 把 Metal 工具链拆成了单独组件。
+      - name: Ensure Metal toolchain
+        run: |
+          if ! xcrun -f metal >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun -f metal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings

@@ -1,0 +1,72 @@
+name: Bug report / 问题反馈
+description: Something doesn't work as expected. / 有功能没有按预期工作。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please search existing issues first. English or Chinese, either is fine.
+        感谢反馈！提交前请先搜一下有没有相同的 issue。中文、英文都可以。
+
+        **Don't paste API keys, clipboard contents or anything private.** / **请不要贴 API Key、剪贴板内容或任何隐私信息。**
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / 发生了什么？
+      description: What did you do, what did you expect, and what happened instead? / 你做了什么、预期是什么、实际发生了什么？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: |
+        1. Press ⌥Space / 按 ⌥Space
+        2. Type ... / 输入 ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 模块
+      options:
+        - App search / 应用搜索
+        - Agent sessions / Agent 会话
+        - Clipboard history / 剪贴板历史
+        - Screenshot & OCR / 截图识别
+        - Translate & models / 翻译与模型
+        - Script commands / 脚本命令
+        - Menu bar & hotkeys / 菜单栏与快捷键
+        - Settings & onboarding / 设置与引导
+        - Build & packaging / 构建与打包
+        - Other / 其他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Helmp version or commit / Helmp 版本或 commit
+      placeholder: "0.1.0 / git rev-parse --short HEAD"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip / macOS 版本与芯片
+      placeholder: "macOS 26.1, Apple M3"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: |
+        Run Helmp from a terminal with `HELMP_TRACE=1` and paste the relevant stderr output.
+        在终端里用 `HELMP_TRACE=1` 启动 Helmp，贴出相关的 stderr 输出。
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else? / 其他补充
+      description: Screenshots, related settings, input method, terminal app... / 截图、相关设置、输入法、所用终端等。
