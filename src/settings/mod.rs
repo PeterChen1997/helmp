@@ -17,7 +17,6 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::config::{self, Config};
-use crate::launcher::LauncherHandle;
 use crate::style::{self, Palette};
 
 use hotkey::{HotkeyEvent, HotkeyRecorder};
@@ -229,11 +228,11 @@ impl SettingsView {
         cx: &mut Context<Self>,
         subscriptions: &mut Vec<Subscription>,
     ) -> Vec<ExtensionRow> {
-        let Some(handle) = cx.try_global::<LauncherHandle>() else {
-            eprintln!("helmp: 设置窗口找不到启动器，扩展列表为空");
+        let Some(global) = cx.try_global::<crate::engine::EngineGlobal>() else {
+            eprintln!("helmp: 设置窗口找不到搜索引擎，扩展列表为空");
             return Vec::new();
         };
-        let engine = handle.launcher.read(cx).engine();
+        let engine = global.0.clone();
         let scopes = engine.scopes();
         let mut rows = Vec::new();
         for id in engine.provider_ids() {

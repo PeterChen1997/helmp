@@ -88,6 +88,7 @@ fn run_gui(engine: Engine) {
                 window,
                 launcher: launcher.clone(),
             });
+            cx.set_global(engine::EngineGlobal(launcher.read(cx).engine()));
 
             if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
                 // 大声失败：热键注册不上整个 App 就没有意义。

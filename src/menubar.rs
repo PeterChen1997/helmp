@@ -24,8 +24,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSEventModifierFlags,
-    NSFont, NSImage, NSImageView, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemBadge,
-    NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSTextField, NSView, NSWorkspace,
+    NSFont, NSImage, NSImageView, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemBadge, NSStatusBar,
+    NSStatusItem, NSTextField, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -78,6 +78,7 @@ pub fn install(cx: &mut App) {
 
     let mut bar = MenuBar::new(tx, mtm);
     bar.apply_visibility();
+    let mut placement_logged = false;
 
     // 自检：`HELMP_MENU_SELF_TEST=<菜单项标题>` 在菜单首次建好后程序化点击这一项，
     // 走完整的 target/action → channel → GPUI 链路（无法模拟真实鼠标点击时用）。
@@ -96,6 +97,10 @@ pub fn install(cx: &mut App) {
             }
             if hotkey::generation() != bar.hotkey_generation {
                 bar.dirty = true;
+            }
+            if !placement_logged && last_refresh.is_some() {
+                placement_logged = true;
+                bar.log_placement();
             }
             let due = last_refresh.is_none_or(|at| at.elapsed() >= REFRESH_INTERVAL);
             if due && bar.visible {
@@ -313,7 +318,9 @@ struct MenuBar {
 
 impl MenuBar {
     fn new(tx: mpsc::Sender<MenuCommand>, mtm: MainThreadMarker) -> Self {
-        let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSSquareStatusItemLength);
+        // 按图标宽度占位（约 24 pt），比方形（约 38 pt）省地方：带刘海的屏幕上菜单栏放不下时，
+        // 系统会把最左边的状态项藏起来。
+        let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
         let menu = NSMenu::new(mtm);
         menu.setAutoenablesItems(false);
         menu.setMinimumWidth(MENU_WIDTH);
@@ -355,6 +362,37 @@ impl MenuBar {
             hotkey_generation: u64::MAX,
             visible: true,
             dirty: true,
+        }
+    }
+
+    /// 诊断：状态项按钮所在窗口的位置与是否真的可见。带刘海的屏幕上菜单栏放不下时，
+    /// 系统会把最左边的状态项藏到刘海后面，且不给任何提示。
+    fn log_placement(&self) {
+        let Some(button) = self.item.button(self.mtm) else {
+            crate::trace::log("menubar placement：没有按钮");
+            return;
+        };
+        match button.window() {
+            Some(window) => {
+                let frame = window.frame();
+                let visible = window
+                    .occlusionState()
+                    .contains(objc2_app_kit::NSWindowOcclusionState::Visible);
+                if frame.size.height < 1.0 {
+                    eprintln!(
+                        "helmp: 菜单栏放不下 Helmp 的图标（被刘海或其他状态项挤掉），可用 ⌥Space 或面板里的 ⌘, 进入设置"
+                    );
+                }
+                crate::trace::log(format!(
+                    "menubar placement：x={:.0} y={:.0} w={:.0} h={:.0} occlusion_visible={visible} item_visible={}",
+                    frame.origin.x,
+                    frame.origin.y,
+                    frame.size.width,
+                    frame.size.height,
+                    self.item.isVisible()
+                ));
+            }
+            None => crate::trace::log("menubar placement：按钮没有窗口（未被放进菜单栏）"),
         }
     }
 

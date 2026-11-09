@@ -585,8 +585,8 @@ pub fn execute(command: Command, cx: &mut App) {
 
 /// 启动器的引擎（菜单栏、快捷键查询用，结果与面板一致）。
 pub fn engine(cx: &App) -> Option<crate::engine::Engine> {
-    match cx.try_global::<LauncherHandle>() {
-        Some(handle) => Some(handle.launcher.read(cx).engine()),
+    match cx.try_global::<crate::engine::EngineGlobal>() {
+        Some(global) => Some(global.0.clone()),
         None => {
             eprintln!("helmp: 启动器还没创建");
             None

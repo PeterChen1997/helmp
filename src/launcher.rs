@@ -627,7 +627,8 @@ impl Launcher {
                         }
                         Ok(Outcome::OpenSettings) => {
                             this.executed = true;
-                            crate::settings::open(cx);
+                            // 推迟到本次更新结束：设置窗口会读引擎等全局状态，不能在启动器更新中途打开。
+                            cx.defer(crate::settings::open);
                             return;
                         }
                         Ok(Outcome::Show(detail)) => detail,
@@ -739,7 +740,8 @@ impl Launcher {
 
         if key == "," && mods.platform && !mods.shift && !mods.alt && !mods.control {
             self.hide(window, cx);
-            crate::settings::open(cx);
+            // 推迟到本次更新结束：设置窗口会读引擎等全局状态，不能在启动器更新中途打开。
+            cx.defer(crate::settings::open);
             cx.stop_propagation();
             return;
         }

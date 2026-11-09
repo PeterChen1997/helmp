@@ -173,7 +173,7 @@ impl NamedAction {
 }
 
 /// 图标底块颜色，对应设计稿里的系统色。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tint {
     Blue,
     Indigo,

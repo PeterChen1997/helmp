@@ -20,6 +20,12 @@ pub const WAITING_SECTION: &str = "等你处理";
 /// 首页「快捷命令」：各插件的入口命令，score 应 < 800。
 pub const COMMANDS_SECTION: &str = "快捷命令";
 
+/// 全局可达的引擎：设置窗口、菜单栏、快捷键查询用。
+/// 不要经由启动器实体去拿：在启动器自身更新期间读它会让 GPUI 直接中止进程。
+pub struct EngineGlobal(pub Engine);
+
+impl gpui_kit::Global for EngineGlobal {}
+
 #[derive(Clone)]
 pub struct Engine {
     providers: Arc<Vec<Arc<dyn Provider>>>,

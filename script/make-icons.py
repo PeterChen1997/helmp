@@ -1,41 +1,53 @@
 """从设计稿图标（白底方块）生成 macOS 正式图标与菜单栏模板图。
 
-用法：python3 -I script/make-icons.py design/assets/helmp-icon-b.png resources/
-产物：AppIcon.icns、menubar-template.png（18px）、menubar-template@2x.png（36px）
+用法：python3 -I script/make-icons.py design/assets/helmp-icon-b-fullbleed.png resources/
+产物：AppIcon.icns、AppIcon-1024.png、AppIcon-64.png、menubar-template.png（18px）、menubar-template@2x.png（36px）
 """
+import math
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 src, out = Path(sys.argv[1]), Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
 
-# 1. 找到方块边界：与纯白差异明显的像素。
-img = Image.open(src).convert("RGBA")
-diff = ImageChops.difference(img.convert("RGB"), Image.new("RGB", img.size, (255, 255, 255)))
-bbox = diff.convert("L").point(lambda v: 255 if v > 24 else 0).getbbox()
-tile = img.crop(bbox)
-
-# 2. 按 macOS 图标网格：1024 画布、824 方块、圆角约 22.4%，内缩 2px 去掉白边。
+# 1. 源图是满版方图（背景铺满四边，没有圆角和白边），这里统一按 macOS 图标网格裁切：
+#    1024 画布、824 方块，连续曲率圆角（超椭圆 n=5，接近 Apple 的 squircle）。
+#    不再从白底图里抠方块：那样圆角形状对不上，深色背景下会漏出一圈白边。
 SIZE, BODY = 1024, 824
-tile = tile.resize((BODY + 8, BODY + 8), Image.LANCZOS).crop((4, 4, BODY + 4, BODY + 4))
-mask = Image.new("L", (BODY * 4, BODY * 4), 0)
-ImageDraw.Draw(mask).rounded_rectangle((0, 0, BODY * 4 - 1, BODY * 4 - 1), radius=int(BODY * 4 * 0.224), fill=255)
-mask = mask.resize((BODY, BODY), Image.LANCZOS)
+tile = Image.open(src).convert("RGBA").resize((BODY, BODY), Image.LANCZOS)
+
+def squircle_mask(size: int, n: float = 5.0, oversample: int = 4) -> Image.Image:
+    big = size * oversample
+    r = big / 2
+    points = []
+    steps = 2048
+    for i in range(steps):
+        t = 2 * math.pi * i / steps
+        c, s_ = math.cos(t), math.sin(t)
+        x = r + r * math.copysign(abs(c) ** (2 / n), c)
+        y = r + r * math.copysign(abs(s_) ** (2 / n), s_)
+        points.append((x, y))
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).polygon(points, fill=255)
+    return mask.resize((size, size), Image.LANCZOS)
+
+mask = squircle_mask(BODY)
 tile.putalpha(mask)
 
 canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
 offset = (SIZE - BODY) // 2
-shadow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
 shadow_mask = Image.new("L", (SIZE, SIZE), 0)
-shadow_mask.paste(mask, (offset, offset + 12))
-shadow.putalpha(shadow_mask.point(lambda v: v * 0.28).filter(ImageFilter.GaussianBlur(18)))
+shadow_mask.paste(mask, (offset, offset + 10))
+shadow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+shadow.putalpha(shadow_mask.point(lambda v: int(v * 0.30)).filter(ImageFilter.GaussianBlur(16)))
 canvas = Image.alpha_composite(canvas, shadow)
-canvas.paste(tile, (offset, offset), tile)
+canvas.alpha_composite(tile, (offset, offset))
 canvas.save(out / "AppIcon-1024.png")
+canvas.resize((64, 64), Image.LANCZOS).save(out / "AppIcon-64.png")
 
 # 3. iconset → icns
 with tempfile.TemporaryDirectory() as tmp:
