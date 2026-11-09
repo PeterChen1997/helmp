@@ -64,9 +64,9 @@ pub enum MatchKind {
     Subsequence,
     /// 每个音节只打了首字母（`wx` → 微信）。
     PinyinInitials,
-    /// 每个音节都打了完整的默认读音（`weixin` → 微信）。
+    /// 每个音节都打了完整读音（`weixin` → 微信，`yinyue` → 音乐）。
     PinyinFull,
-    /// 全拼与首字母混打，或用了多音字的其他读音（`wxin` → 微信）。
+    /// 全拼与首字母混打（`wxin` → 微信）。
     PinyinMixed,
     /// 默认读音全拼的子序列。
     PinyinFuzzy,
@@ -89,7 +89,7 @@ impl MatchKind {
     }
 }
 
-/// 拼音命中的那一段音节（默认读音）。
+/// 拼音命中的那一段音节（多音字取用户实际打的读音）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinyinSpan {
     /// 全拼，如 `weixin`。
@@ -224,16 +224,10 @@ impl Syllables {
                 (0, _) => PINYIN_PREFIX,
                 _ => PINYIN_INNER,
             };
-            let span = self.tokens.get(start..end).unwrap_or_default();
-            let full: String = span
-                .iter()
-                .filter_map(|t| t.first())
-                .map(String::as_str)
-                .collect();
-            let initials: String = span
-                .iter()
-                .filter_map(|t| t.first()?.chars().next())
-                .collect();
+            // 多音字按用户实际打的读音展示：打 yinyue 命中「音乐」时不能告诉他「拼音 yinle」。
+            let used = self.readings_used(query.as_bytes(), start, end);
+            let full: String = used.concat();
+            let initials: String = used.iter().filter_map(|r| r.chars().next()).collect();
             // 每个音节至少吃一个字符，长度相等说明每个音节恰好只打了首字母。
             let kind = if query.len() == end - start {
                 MatchKind::PinyinInitials
@@ -257,6 +251,46 @@ impl Syllables {
             kind: MatchKind::PinyinFuzzy,
             pinyin: None,
         })
+    }
+
+    /// `start..end` 每个音节在命中路径上用到的读音：同一音节有多个读音都走得通时，
+    /// 取吃掉查询更多的那个，一样多时取靠前的（默认读音在最前）。走不通的音节退回默认读音。
+    fn readings_used(&self, query: &[u8], start: usize, end: usize) -> Vec<&str> {
+        let width = self.tokens.len() + 1;
+        let mut memo: Vec<Option<Option<usize>>> = vec![None; (query.len() + 1) * width];
+        let mut used = Vec::new();
+        let mut pos = 0;
+        for token in start..end {
+            let readings = self
+                .tokens
+                .get(token)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let mut choice: Option<(&str, usize)> = None;
+            for reading in readings {
+                let shared = reading
+                    .bytes()
+                    .zip(query.get(pos..).unwrap_or_default())
+                    .take_while(|(a, b)| a == *b)
+                    .count();
+                let fits = (1..=shared).rev().find(|&len| {
+                    self.consume_from(query, pos + len, token + 1, &mut memo, width) == Some(end)
+                });
+                if let Some(len) = fits
+                    && choice.is_none_or(|(_, best)| len > best)
+                {
+                    choice = Some((reading.as_str(), len));
+                }
+            }
+            match choice {
+                Some((reading, len)) => {
+                    used.push(reading);
+                    pos += len;
+                }
+                None => used.extend(readings.first().map(String::as_str)),
+            }
+        }
+        used
     }
 
     /// 从第 `start` 个音节起，每个音节吃掉查询的一段非空前缀，直到查询吃完。
@@ -400,6 +434,32 @@ mod tests {
         let span = head.pinyin.unwrap();
         assert_eq!(span.full, "weixin");
         assert!(!span.whole);
+    }
+
+    #[test]
+    fn heteronym_hits_explain_the_reading_the_user_typed() {
+        // 「匹配方式」和应用副标题直接展示 span：打 yinyue 找到「音乐」，却显示「拼音 yinle」，
+        // 用户会以为搜错了或者软件不懂拼音。多音字要按用户实际打的读音回显。
+        let m = match_candidate("yinyue", &Candidate::new("音乐")).unwrap();
+        assert_eq!(m.kind, MatchKind::PinyinFull);
+        let span = m.pinyin.unwrap();
+        assert_eq!(span.full, "yinyue");
+        assert_eq!(span.initials, "yy");
+        // 首字母只认得出另一个读音时（cq → 重庆），首字母也要跟着变。
+        let span = match_candidate("cq", &Candidate::new("重庆"))
+            .unwrap()
+            .pinyin
+            .unwrap();
+        assert_eq!(
+            (span.full.as_str(), span.initials.as_str()),
+            ("chongqing", "cq")
+        );
+        // 默认读音能走通时仍用默认读音。
+        let span = match_candidate("yl", &Candidate::new("音乐"))
+            .unwrap()
+            .pinyin
+            .unwrap();
+        assert_eq!(span.full, "yinle");
     }
 
     #[test]
