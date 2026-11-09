@@ -76,6 +76,7 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
         Outcome::EnterScope(scope) => println!("enter scope {scope}"),
         Outcome::EnterScopeWith(scope, text) => println!("enter scope {scope}: {text}"),
         Outcome::OpenSettings => println!("open settings"),
+        Outcome::Dismiss => println!("dismiss"),
         Outcome::Show(detail) => {
             println!("{}", detail.title);
             for block in detail.blocks {
@@ -89,6 +90,11 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
             }
             for (key, value) in detail.metadata {
                 println!("{key}{}{value}", tr("：", ": "));
+            }
+            // 确认页这类带操作的详情：列出可选操作，第一个是回车。
+            if !detail.actions.is_empty() {
+                let titles: Vec<_> = detail.actions.iter().map(|a| a.title.as_str()).collect();
+                println!("{}{}", tr("操作：", "Actions: "), titles.join(" / "));
             }
         }
     }

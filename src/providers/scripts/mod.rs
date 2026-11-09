@@ -6,9 +6,10 @@
 //! - 参数：有参数的脚本返回表单（每个参数一个字段）；查询以脚本标题或 packageName 开头时，
 //!   余下文本作为表单初值（见 `args`）。
 //! - 输出：compact / fullOutput / inline 在详情里展示（等宽），silent 跑完不打扰。
-//! - `needsConfirmation: true` 的脚本只有查询以 ` !` 结尾才执行。
+//! - `needsConfirmation: true` 的脚本回车后先显示确认页（`Detail::confirm`），再回车才运行；
+//!   查询以 ` !` 结尾时视为已确认，直接运行（兼容老习惯）。
 
-mod args;
+pub(super) mod args;
 mod header;
 mod runner;
 
@@ -49,12 +50,6 @@ const TITLE_PREFIX_SCORE: u32 = 1000;
 const PACKAGE_PREFIX_SCORE: u32 = 850;
 /// packageName 模糊匹配相对标题匹配的降权。
 const PACKAGE_PENALTY: u32 = 100;
-fn confirm_hint() -> &'static str {
-    tr(
-        "该脚本需要确认，在查询末尾加 ! 后回车执行",
-        "This script needs confirmation. Add ! to the end of your query, then press Return.",
-    )
-}
 
 #[derive(Debug)]
 pub struct Script {
@@ -494,13 +489,21 @@ fn item_for(
         icon: ICON,
         form: (!header.arguments.is_empty()).then(|| form_for(&header.arguments, &initial)),
         detail: Some(script.detail(&display, None)),
-        action: action(
-            Arc::clone(script),
-            initial,
-            confirmed,
-            display,
-            Arc::clone(outputs),
-        ),
+        action: {
+            let action = action(
+                Arc::clone(script),
+                initial,
+                confirmed,
+                display,
+                Arc::clone(outputs),
+            );
+            // 要确认时回车只出确认页：不收起面板，直接在原地显示。
+            if header.needs_confirmation && !confirmed {
+                action.keep_open()
+            } else {
+                action
+            }
+        },
         action_title: tr("运行", "Run").into(),
         actions: vec![NamedAction::new(
             tr("复制输出", "Copy Output"),
@@ -585,20 +588,35 @@ fn action(
             }
         };
         if header.needs_confirmation && !confirmed {
-            return Ok(Outcome::Message(confirm_hint().into()));
+            let (script, display, outputs) =
+                (Arc::clone(&script), display.clone(), Arc::clone(&outputs));
+            return Ok(Outcome::Show(Detail::confirm(
+                ICON,
+                trf!("确定要运行「{title}」吗？", "Run “{title}”?"),
+                tr(
+                    "这个脚本标记为需要确认（needsConfirmation），通常意味着操作不可撤销。",
+                    "This script is marked as needing confirmation (needsConfirmation), which usually means it can’t be undone.",
+                )
+                .into(),
+                tr("运行", "Run").into(),
+                Action::new(move || run_now(&script, &args, &display, &outputs)),
+            )));
         }
-        let (shown, code) = script.run(&args, runner::TIMEOUT)?;
-        let Some(output) = shown else {
-            return Ok(Outcome::Done);
-        };
-        outputs
-            .lock()
-            .expect("script outputs poisoned")
-            .insert(script.path.clone(), output.clone());
-        Ok(Outcome::Show(
-            script.detail(&display, Some((&output, code))),
-        ))
+        run_now(&script, &args, &display, &outputs)
     })
+}
+
+/// 运行脚本并展示输出（silent 跑完不打扰）。
+fn run_now(script: &Script, args: &[String], display: &str, outputs: &Outputs) -> Result<Outcome> {
+    let (shown, code) = script.run(args, runner::TIMEOUT)?;
+    let Some(output) = shown else {
+        return Ok(Outcome::Done);
+    };
+    outputs
+        .lock()
+        .expect("script outputs poisoned")
+        .insert(script.path.clone(), output.clone());
+    Ok(Outcome::Show(script.detail(display, Some((&output, code)))))
 }
 
 #[cfg(test)]
@@ -838,8 +856,9 @@ pub mod tests {
     }
 
     #[test]
-    fn needs_confirmation_requires_trailing_bang() {
-        // needsConfirmation 用于清空废纸篓、关机这类不可逆操作，误触回车不能直接执行。
+    fn needs_confirmation_shows_a_confirmation_page_first() {
+        // needsConfirmation 用于清空废纸篓、关机这类不可逆操作：第一次回车只出确认页，脚本不能运行；
+        // 确认页上回车才运行，「取消」只回到列表。
         let dir = TempDir::new("confirm");
         let marker = dir.path().join("ran");
         write_script(
@@ -853,13 +872,34 @@ pub mod tests {
         );
         let scripts = provider(&dir);
         let blocked = only(scripts.query("empty trash"));
-        assert_eq!(
-            blocked.action.run().unwrap(),
-            Outcome::Message(confirm_hint().into())
-        );
+        assert!(blocked.action.keeps_open(), "确认页应直接出现在面板里");
+        let Outcome::Show(page) = blocked.action.run().unwrap() else {
+            panic!("未确认时应显示确认页");
+        };
+        assert_eq!(page.title, "确定要运行「Empty Trash」吗？");
         assert!(!marker.exists(), "未确认时不应运行");
+        assert_eq!(page.actions[1].action.run().unwrap(), Outcome::Dismiss);
+        assert!(!marker.exists(), "取消后不应运行");
+        assert_eq!(page.actions[0].action.run().unwrap(), Outcome::Done);
+        assert!(marker.exists(), "确认后应运行");
+    }
 
-        let confirmed = only(scripts.query("empty trash !"));
+    #[test]
+    fn trailing_bang_still_confirms_directly() {
+        // 老用户习惯在末尾加 ` !` 直接运行，加了确认页后不能失效。
+        let dir = TempDir::new("confirm-bang");
+        let marker = dir.path().join("ran");
+        write_script(
+            &dir,
+            "danger.sh",
+            &format!(
+                "#!/bin/sh\n# @raycast.title Empty Trash\n# @raycast.mode silent\n# @raycast.needsConfirmation true\ntouch '{}'\n",
+                marker.display()
+            ),
+            true,
+        );
+        let confirmed = only(provider(&dir).query("empty trash !"));
+        assert!(!confirmed.action.keeps_open());
         assert_eq!(confirmed.action.run().unwrap(), Outcome::Done);
         assert!(marker.exists(), "确认后应运行");
     }

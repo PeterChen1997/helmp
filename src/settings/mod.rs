@@ -157,7 +157,19 @@ pub struct SettingsView {
     scroll: ScrollHandle,
     /// 上次取界面文案时的 `i18n::generation()`；不同说明语言切换了，要刷新建窗口时写死的文案。
     lang_generation: u64,
+    /// 扩展页「网页搜索」的自定义引擎表单：名称、网址模板。
+    web_engine_name: Entity<InputState>,
+    web_engine_url: Entity<InputState>,
+    /// 正在编辑的自定义引擎 id；None = 表单用于添加。
+    web_engine_editing: Option<String>,
+    /// 表单填写有误的原因（显示时按语言取文案）。
+    web_engine_error: Option<model::EngineError>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// 自定义引擎名称框的占位（随语言变，语言切换时刷新）。
+fn web_engine_name_placeholder() -> &'static str {
+    tr("名称，如 知乎", "Name, e.g. DuckDuckGo")
 }
 
 impl SettingsView {
@@ -207,6 +219,11 @@ impl SettingsView {
         ];
 
         let extensions = Self::extension_rows(window, cx, &mut subscriptions);
+        let web_engine_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder(web_engine_name_placeholder()));
+        let web_engine_url = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("https://example.com/search?q={query}")
+        });
         let models = crate::models::settings_pane(window, cx);
 
         // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
@@ -231,6 +248,10 @@ impl SettingsView {
             icon_refresh_pending: false,
             scroll: ScrollHandle::new(),
             lang_generation: crate::i18n::generation(),
+            web_engine_name,
+            web_engine_url,
+            web_engine_editing: None,
+            web_engine_error: None,
             _subscriptions: subscriptions,
         }
     }
@@ -354,6 +375,9 @@ impl SettingsView {
         window.set_window_title(window_title());
         self.search.update(cx, |search, cx| {
             search.set_placeholder(search_placeholder(), window, cx)
+        });
+        self.web_engine_name.update(cx, |input, cx| {
+            input.set_placeholder(web_engine_name_placeholder(), window, cx)
         });
         cx.notify();
     }

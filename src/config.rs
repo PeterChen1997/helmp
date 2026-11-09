@@ -22,6 +22,11 @@ pub struct Config {
     pub translate: TranslateConfig,
     pub clipboard: ClipboardConfig,
     pub screenshot: ScreenshotConfig,
+    /// 网页搜索兜底：引擎列表的顺序就是结果里的顺序。
+    #[serde(default)]
+    pub web_search: WebSearchConfig,
+    #[serde(default)]
+    pub system_commands: SystemCommandsConfig,
     pub appearance: Appearance,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
@@ -38,6 +43,8 @@ impl Default for Config {
             translate: TranslateConfig::default(),
             clipboard: ClipboardConfig::default(),
             screenshot: ScreenshotConfig::default(),
+            web_search: WebSearchConfig::default(),
+            system_commands: SystemCommandsConfig::default(),
             appearance: Appearance::System,
             script_dirs: Vec::new(),
             onboarding_done: false,
@@ -205,6 +212,155 @@ impl Default for ScreenshotConfig {
     }
 }
 
+/// 内置网页搜索引擎：(id, 网址模板, 默认是否启用)，顺序即默认顺序。
+/// 以后新增的引擎默认关闭，会自动出现在老用户列表的末尾。显示名随界面语言，见 `providers::websearch::engine_name`。
+pub const BUILTIN_SEARCH_ENGINES: &[(&str, &str, bool)] = &[
+    ("google", "https://www.google.com/search?q={query}", true),
+    ("baidu", "https://www.baidu.com/s?wd={query}", true),
+    ("github", "https://github.com/search?q={query}", true),
+    ("bing", "https://www.bing.com/search?q={query}", false),
+    (
+        "bing-translate",
+        "https://www.bing.com/translator?text={query}",
+        false,
+    ),
+];
+
+/// 网页搜索设置：只存用户的改动（内置引擎的开关、整体顺序）和自定义引擎，内置引擎本身在代码里。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "RawWebSearchConfig")]
+pub struct WebSearchConfig {
+    /// 用户排过的顺序（引擎 id，内置与自定义混排）；不在里面的引擎按默认顺序排在后面。
+    pub order: Vec<String>,
+    /// 内置引擎的开关（id → 是否启用）；没写的用默认值。
+    pub builtin: BTreeMap<String, bool>,
+    pub custom: Vec<CustomSearchEngine>,
+}
+
+/// 用户自己加的引擎。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CustomSearchEngine {
+    /// 稳定 id（`custom-<n>`），也是结果 id 的后缀。
+    pub id: String,
+    pub name: String,
+    /// 网址模板，`{query}` 换成 URL 编码后的查询。
+    pub url: String,
+    pub enabled: bool,
+}
+
+impl Default for CustomSearchEngine {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            url: String::new(),
+            enabled: true,
+        }
+    }
+}
+
+/// 读配置时的中间形态：兼容旧格式（一整份 `engines` 列表）。
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawWebSearchConfig {
+    order: Vec<String>,
+    builtin: BTreeMap<String, bool>,
+    custom: Vec<CustomSearchEngine>,
+    /// 旧格式：内置与自定义混在一起、带网址的完整列表。
+    engines: Option<Vec<CustomSearchEngine>>,
+}
+
+impl From<RawWebSearchConfig> for WebSearchConfig {
+    fn from(raw: RawWebSearchConfig) -> Self {
+        let mut config = Self {
+            order: raw.order,
+            builtin: raw.builtin,
+            custom: raw.custom,
+        };
+        // 旧格式迁移：顺序照搬，内置引擎只留开关（网址以代码为准），其余当自定义引擎。
+        if let Some(engines) = raw.engines
+            && config == Self::default()
+        {
+            for engine in engines {
+                config.order.push(engine.id.clone());
+                if is_builtin_search_engine(&engine.id) {
+                    config.builtin.insert(engine.id, engine.enabled);
+                } else {
+                    config.custom.push(engine);
+                }
+            }
+        }
+        config
+    }
+}
+
+pub fn is_builtin_search_engine(id: &str) -> bool {
+    BUILTIN_SEARCH_ENGINES
+        .iter()
+        .any(|(builtin, _, _)| *builtin == id)
+}
+
+/// 合并了用户改动后的一个引擎（不落盘）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebSearchEngine {
+    /// 稳定 id，也是结果 id 的后缀（`websearch:<id>`）。
+    pub id: String,
+    /// 自定义引擎的名字；内置引擎为空，显示名按界面语言取。
+    pub name: String,
+    pub url: String,
+    pub enabled: bool,
+    pub builtin: bool,
+}
+
+impl WebSearchConfig {
+    /// 所有引擎，按用户的顺序；没排过的（含新增的内置引擎）按默认顺序排在后面。
+    pub fn engines(&self) -> Vec<WebSearchEngine> {
+        self.resolve(BUILTIN_SEARCH_ENGINES)
+    }
+
+    fn resolve(&self, catalog: &[(&str, &str, bool)]) -> Vec<WebSearchEngine> {
+        let builtin = catalog.iter().map(|(id, url, enabled)| WebSearchEngine {
+            id: id.to_string(),
+            name: String::new(),
+            url: url.to_string(),
+            enabled: self.builtin.get(*id).copied().unwrap_or(*enabled),
+            builtin: true,
+        });
+        let custom = self.custom.iter().map(|engine| WebSearchEngine {
+            id: engine.id.clone(),
+            name: engine.name.clone(),
+            url: engine.url.clone(),
+            enabled: engine.enabled,
+            builtin: false,
+        });
+        let mut all: Vec<_> = builtin.chain(custom).collect();
+        // 稳定排序：不在 order 里的保持「内置在前、自定义在后」的默认顺序。
+        all.sort_by_key(|engine| {
+            self.order
+                .iter()
+                .position(|id| *id == engine.id)
+                .unwrap_or(usize::MAX)
+        });
+        all
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SystemCommandsConfig {
+    /// 清空废纸篓、重启、关机、注销、退出所有应用：查询末尾加 ` !` 才执行。
+    pub confirm_dangerous: bool,
+}
+
+impl Default for SystemCommandsConfig {
+    fn default() -> Self {
+        Self {
+            confirm_dangerous: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Appearance {
@@ -316,6 +472,16 @@ mod tests {
         assert!(config.clipboard.skip_concealed);
         // 加语言设置之前的配置：跟随系统，而不是读失败。
         assert_eq!(config.general.language, Language::System);
+        // 加网页搜索与系统命令之前的配置：默认引擎照常出现，危险命令仍要确认。
+        let enabled: Vec<_> = config
+            .web_search
+            .engines()
+            .iter()
+            .filter(|engine| engine.enabled)
+            .map(|engine| engine.id.clone())
+            .collect();
+        assert_eq!(enabled, ["google", "baidu", "github"]);
+        assert!(config.system_commands.confirm_dangerous);
     }
 
     #[test]
@@ -327,6 +493,76 @@ mod tests {
         assert!(text.contains(r#""language":"zh_hans""#), "{text}");
         let parsed: Config = serde_json::from_str(r#"{"general":{"language":"en"}}"#).unwrap();
         assert_eq!(parsed.general.language, Language::En);
+    }
+
+    #[test]
+    fn migrates_the_old_engine_list() {
+        // 旧格式把整份引擎列表连网址一起存着：升级后用户调过的顺序、开关和自定义引擎都不能丢。
+        let config: Config = serde_json::from_str(
+            r#"{"web_search":{"engines":[
+                {"id":"github","url":"https://github.com/search?q={query}","enabled":true},
+                {"id":"google","url":"https://www.google.com/search?q={query}","enabled":false},
+                {"id":"zhihu","name":"知乎","url":"https://www.zhihu.com/search?q={query}","enabled":true},
+                {"id":"baidu","url":"https://www.baidu.com/s?wd={query}","enabled":true}
+            ]}}"#,
+        )
+        .unwrap();
+        let engines = config.web_search.engines();
+        let summary: Vec<_> = engines
+            .iter()
+            .map(|e| (e.id.as_str(), e.enabled, e.builtin))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("github", true, true),
+                ("google", false, true),
+                ("zhihu", true, false),
+                ("baidu", true, true),
+                // 旧列表里没有的内置引擎补在末尾，用默认开关。
+                ("bing", false, true),
+                ("bing-translate", false, true),
+            ]
+        );
+        assert_eq!(engines[2].name, "知乎");
+        // 迁移后按新格式保存，再读回来一样。
+        let text = serde_json::to_string(&config).unwrap();
+        assert!(!text.contains(r#""engines""#), "{text}");
+        let again: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(again.web_search.engines(), engines);
+    }
+
+    #[test]
+    fn new_builtin_engines_show_up_at_the_end_for_existing_users() {
+        // 只存用户的改动，所以以后新增的内置引擎会自动出现在老用户列表末尾（默认关闭），不会被吞掉。
+        let config = WebSearchConfig {
+            order: vec!["github".into(), "custom-1".into(), "google".into()],
+            builtin: BTreeMap::from([("baidu".to_string(), false)]),
+            custom: vec![CustomSearchEngine {
+                id: "custom-1".into(),
+                name: "知乎".into(),
+                url: "https://www.zhihu.com/search?q={query}".into(),
+                enabled: true,
+            }],
+        };
+        let mut catalog = BUILTIN_SEARCH_ENGINES.to_vec();
+        catalog.push(("duckduckgo", "https://duckduckgo.com/?q={query}", false));
+        let summary: Vec<_> = config
+            .resolve(&catalog)
+            .into_iter()
+            .map(|e| (e.id, e.enabled))
+            .collect();
+        let expected = [
+            ("github", true),
+            ("custom-1", true),
+            ("google", true),
+            ("baidu", false),
+            ("bing", false),
+            ("bing-translate", false),
+            ("duckduckgo", false),
+        ]
+        .map(|(id, on)| (id.to_string(), on));
+        assert_eq!(summary, expected);
     }
 
     #[test]
