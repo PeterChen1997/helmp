@@ -76,6 +76,7 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
         Outcome::EnterScope(scope) => println!("enter scope {scope}"),
         Outcome::EnterScopeWith(scope, text) => println!("enter scope {scope}: {text}"),
         Outcome::OpenSettings => println!("open settings"),
+        Outcome::OpenSettingsPage(page) => println!("open settings: {page:?}"),
         Outcome::Dismiss => println!("dismiss"),
         Outcome::Show(detail) => {
             println!("{}", detail.title);

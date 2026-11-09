@@ -36,6 +36,8 @@ pub enum Outcome {
     EnterScopeWith(&'static str, String),
     /// 打开设置窗口（动作在后台线程执行，不能直接开窗口，交给界面线程做）。
     OpenSettings,
+    /// 打开设置窗口并直接翻到某一页（如翻译出错时的「打开模型设置」）。
+    OpenSettingsPage(crate::settings::Page),
     /// 关掉正在展示的详情（如确认页的「取消」），回到结果列表，同按 Esc。
     Dismiss,
 }

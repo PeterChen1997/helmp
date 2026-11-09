@@ -898,6 +898,11 @@ impl Launcher {
                             cx.defer(crate::settings::open);
                             return;
                         }
+                        Ok(Outcome::OpenSettingsPage(page)) => {
+                            this.executed = true;
+                            cx.defer(move |cx| crate::settings::open_page(cx, page));
+                            return;
+                        }
                         Ok(Outcome::Show(detail)) => detail,
                         Ok(Outcome::Message(message)) => Detail {
                             title: item.title.clone(),

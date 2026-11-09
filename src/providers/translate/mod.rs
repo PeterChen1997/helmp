@@ -30,6 +30,7 @@ use crate::provider::{
     Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction, Outcome,
     Provider, Scope, Tint,
 };
+use crate::settings::Page;
 
 const SCOPE: &str = "translate";
 const ICON: Icon = Icon::Symbol {
@@ -188,7 +189,7 @@ fn no_model_item() -> Item {
         badge: badge().into(),
         score: 1000,
         icon: ICON,
-        action: Action::new(|| Ok(Outcome::OpenSettings)),
+        action: Action::new(|| Ok(Outcome::OpenSettingsPage(Page::Models))),
         action_title: tr("打开设置", "Open Settings").into(),
         detail: Some(Detail {
             icon: ICON,
@@ -313,7 +314,7 @@ fn form_item(
         actions: vec![NamedAction::new(
             tr("打开模型设置", "Open Model Settings"),
             None,
-            Action::new(|| Ok(Outcome::OpenSettings)),
+            Action::new(|| Ok(Outcome::OpenSettingsPage(Page::Models))),
         )],
         // 还没有原文时，右侧说明怎么用（有原文时框架显示加载占位，随后是译文）。
         detail: text.is_empty().then(hint_detail),
@@ -378,7 +379,7 @@ type Complete<'a> = &'a dyn Fn(&ModelConfig, &str, &str) -> Result<String>;
 fn run(defaults: &Defaults, input: &ActionInput, history: &History) -> Outcome {
     let config = config::get();
     if config.models.is_empty() {
-        return Outcome::OpenSettings;
+        return Outcome::OpenSettingsPage(Page::Models);
     }
     let text = value(input, "text", &defaults.text).trim();
     if text.is_empty() {
@@ -391,7 +392,7 @@ fn run(defaults: &Defaults, input: &ActionInput, history: &History) -> Outcome {
         .find(|model| model.id == model_id)
         .or_else(|| models::translate_model(&config))
     else {
-        return Outcome::OpenSettings;
+        return Outcome::OpenSettingsPage(Page::Models);
     };
     let source = value(input, "source", &defaults.source);
     let target = value(input, "target", &defaults.target);
@@ -605,7 +606,7 @@ fn failure_detail(model: &ModelConfig, err: &anyhow::Error) -> Detail {
     let settings = NamedAction::new(
         tr("打开设置", "Open Settings"),
         Some("⌘,"),
-        Action::new(|| Ok(Outcome::OpenSettings)),
+        Action::new(|| Ok(Outcome::OpenSettingsPage(Page::Models))),
     );
     let retry = NamedAction::new(tr("重试", "Try Again"), Some("⌘R"), Action::rerun());
     let fix_in_settings = matches!(
@@ -950,7 +951,11 @@ mod tests {
         assert_eq!(item.subtitle, no_model());
         assert!(item.form.is_none());
         assert_eq!(item.action_title, "打开设置");
-        assert_eq!(item.action.run().unwrap(), Outcome::OpenSettings);
+        // 说明里写的是「打开设置 › 模型」：回车要直接落在模型页，而不是设置首页让用户自己找。
+        assert_eq!(
+            item.action.run().unwrap(),
+            Outcome::OpenSettingsPage(Page::Models)
+        );
         assert!(item.detail.is_some(), "右侧要用人话说明");
     }
 
@@ -1040,7 +1045,10 @@ mod tests {
             let d = translate(&m, "auto", "auto", "hi", &history(), &fail(kind));
             assert_eq!(titles(&d), ["重试", "打开设置"], "{kind:?}");
             assert!(d.actions[0].action.is_rerun());
-            assert_eq!(d.actions[1].action.run().unwrap(), Outcome::OpenSettings);
+            assert_eq!(
+                d.actions[1].action.run().unwrap(),
+                Outcome::OpenSettingsPage(Page::Models)
+            );
         }
         let timeout = translate(&m, "auto", "auto", "hi", &history(), &fail(FailureKind::Timeout));
         assert_eq!(timeout.title, "网络超时");
