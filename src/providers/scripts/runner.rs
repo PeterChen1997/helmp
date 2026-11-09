@@ -152,10 +152,14 @@ pub fn execute(path: &Path, args: &[String], cwd: &Path, timeout: Duration) -> R
         if now >= deadline {
             kill_group(pgid);
             let _ = child.wait();
+            // 这句话直接显示在面板上：用文件名而不是一长串绝对路径，也不提「进程组」这种实现细节。
+            let name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy();
             bail!(trf!(
-                "脚本 {} 超过 {} 秒未结束，已终止其进程组",
-                "Script {} didn’t finish within {} seconds, so its process group was killed",
-                path.display(),
+                "脚本 {name} 运行超过 {} 秒，已强制停止",
+                "Script {name} ran for more than {} seconds and was stopped",
                 timeout.as_secs_f32()
             ));
         }
@@ -398,6 +402,12 @@ mod tests {
         let started = Instant::now();
         let err = execute(&path, &[], dir.path(), Duration::from_millis(500)).unwrap_err();
         assert!(format!("{err}").contains("超过"), "{err}");
+        // 报错直接显示在面板上：只写文件名，不把一长串绝对路径甩给用户。
+        assert!(format!("{err}").contains("hang.sh"), "{err}");
+        assert!(
+            !format!("{err}").contains(&dir.path().display().to_string()),
+            "{err}"
+        );
         assert!(started.elapsed() < Duration::from_secs(5));
 
         let child_pid: i32 = fs::read_to_string(&pid_file)
