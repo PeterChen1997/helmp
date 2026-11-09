@@ -250,15 +250,26 @@ impl Provider for Clipboard {
     }
 
     fn query(&self, query: &str) -> Vec<Item> {
+        // 首页「快捷命令」里有「剪贴板历史」，全局搜它的名字也得能找到入口（与「翻译」一致）。
+        let mut items: Vec<Item> = ENTRY_KEYWORDS
+            .iter()
+            .filter(|_| !query.trim().is_empty())
+            .filter_map(|keyword| crate::matcher::score(query, keyword))
+            .max()
+            .map(|score| entry(badge(), score))
+            .into_iter()
+            .collect();
         let index = self.inner.index.read().expect("clipboard index poisoned");
         let hits = ambient(&index, query);
         if hits.is_empty() {
-            return Vec::new();
+            return items;
         }
         let view = View::now();
-        hits.into_iter()
-            .map(|(position, score)| self.item(&index[position], score, badge().into(), &view))
-            .collect()
+        items
+            .extend(hits.into_iter().map(|(position, score)| {
+                self.item(&index[position], score, badge().into(), &view)
+            }));
+        items
     }
 
     fn scope(&self) -> Option<Scope> {
@@ -309,21 +320,29 @@ impl Provider for Clipboard {
     }
 
     fn suggestions(&self) -> Vec<Item> {
-        vec![Item {
-            id: format!("{PROVIDER_ID}:open"),
-            title: tr("剪贴板历史", "Clipboard History").into(),
-            subtitle: tr("Clipboard History", "Browse and paste what you’ve copied").into(),
-            badge: commands_section().into(),
-            score: SUGGESTION_SCORE,
-            icon: Icon::Symbol {
-                name: "clipboard-list",
-                tint: Tint::Orange,
-            },
-            accessories: crate::hotkey::hint_keys(PROVIDER_ID),
-            action: Action::enter_scope(PROVIDER_ID),
-            action_title: tr("打开", "Open").into(),
-            ..Item::blank()
-        }]
+        vec![entry(commands_section(), SUGGESTION_SCORE)]
+    }
+}
+
+/// 全局搜索能找到「剪贴板历史」入口的词。范围前缀（`cb `）由框架处理，这里是不带空格时的搜索。
+const ENTRY_KEYWORDS: [&str; 4] = ["剪贴板历史", "剪切板", "clipboard history", "cb"];
+
+/// 首页 / 全局搜索里的「剪贴板历史」入口：进入剪贴板范围。
+fn entry(badge: &str, score: u32) -> Item {
+    Item {
+        id: format!("{PROVIDER_ID}:open"),
+        title: tr("剪贴板历史", "Clipboard History").into(),
+        subtitle: tr("Clipboard History", "Browse and paste what you’ve copied").into(),
+        badge: badge.into(),
+        score,
+        icon: Icon::Symbol {
+            name: "clipboard-list",
+            tint: Tint::Orange,
+        },
+        accessories: crate::hotkey::hint_keys(PROVIDER_ID),
+        action: Action::enter_scope(PROVIDER_ID),
+        action_title: tr("打开", "Open").into(),
+        ..Item::blank()
     }
 }
 
@@ -961,8 +980,39 @@ mod tests {
         // 新的在前。
         assert_eq!(items[0].title, "safari tips 4");
         assert!(items[0].score > items[1].score && items[1].score > items[2].score);
-        // 前缀由框架剥掉，全局搜索里不再自己认 `cb `。
-        assert!(provider.query("cb ").is_empty());
+        // 前缀由框架剥掉，全局搜索里不再自己认 `cb `：最多只有「剪贴板历史」入口，没有记录。
+        let ids: Vec<_> = provider
+            .query("cb ")
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(ids, ["clipboard:open"]);
+    }
+
+    #[test]
+    fn global_search_finds_the_clipboard_history_entry() {
+        // 首页「快捷命令」里写着「剪贴板历史」，用户照着名字搜却找不到入口，只能靠记住 `cb `。
+        let dir = TempDir::new("entry");
+        let provider = provider_with(&dir, &[]);
+        let entry = |query: &str| {
+            provider
+                .query(query)
+                .into_iter()
+                .find(|item| item.id == "clipboard:open")
+        };
+        for query in [
+            "剪贴板",
+            "剪切板",
+            "jtb",
+            "clipboard",
+            "Clipboard History",
+            "cb",
+        ] {
+            let item = entry(query).unwrap_or_else(|| panic!("{query} 应找到剪贴板历史入口"));
+            assert_eq!(item.badge, badge(), "{query}");
+        }
+        assert!(entry("safari").is_none());
+        assert!(entry("  ").is_none());
     }
 
     #[test]
