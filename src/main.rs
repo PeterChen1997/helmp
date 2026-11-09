@@ -6,6 +6,7 @@
 
 mod cli;
 mod config;
+mod deeplink;
 mod dock;
 mod engine;
 mod history;
@@ -53,9 +54,10 @@ fn main() {
 
 fn run_gui(engine: Engine) {
     // 完整 Lucide 图标集：插件按名字引用符号图标（`Icon::Symbol { name: "scan-text", .. }`）。
-    gpui_kit::application()
-        .with_assets(AllAssets)
-        .run(move |cx| {
+    let app = gpui_kit::application().with_assets(AllAssets);
+    // 系统在 App 启动前就可能送来 URL（用 helmp:// 链接冷启动），必须在 run 之前注册。
+    let links = deeplink::listen(&app);
+    app.run(move |cx| {
             // 菜单栏工具型 App：不进 Dock、不参与 ⌘Tab。
             cx.set_activation_policy(ActivationPolicy::Accessory);
             gpui_kit::init(cx);
@@ -103,6 +105,7 @@ fn run_gui(engine: Engine) {
             }
             menubar::install(cx);
             onboarding::maybe_show(cx);
+            deeplink::install(links, cx);
 
             if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
                 self_test(cx, window, launcher, query.to_string_lossy().into_owned());

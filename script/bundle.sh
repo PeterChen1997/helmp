@@ -36,6 +36,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>dev.helmp.launcher</string>
+      <key>CFBundleURLSchemes</key><array><string>helmp</string></array>
+    </dict>
+  </array>
   <key>NSAppleEventsUsageDescription</key><string>Helmp 需要控制终端 App，才能跳转到对应的 Agent 会话。</string>
 </dict>
 </plist>

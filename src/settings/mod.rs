@@ -22,7 +22,7 @@ use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
 use hotkey::{HotkeyEvent, HotkeyRecorder};
-use model::Page;
+pub use model::Page;
 
 const WINDOW_SIZE: Size<Pixels> = size(px(840.), px(640.));
 const SIDEBAR_WIDTH: Pixels = px(220.);
@@ -31,6 +31,23 @@ const SIDEBAR_WIDTH: Pixels = px(220.);
 struct SettingsWindow(AnyWindowHandle);
 
 impl Global for SettingsWindow {}
+
+/// 打开设置并切到指定页（深链接 `helmp://settings/<页面>`）。
+pub fn open_page(cx: &mut App, page: Page) {
+    open(cx);
+    let Some(handle) = cx.try_global::<SettingsWindow>().map(|global| global.0) else {
+        return;
+    };
+    let _ = handle.update(cx, |_, window, cx| {
+        let view = window
+            .root::<base::Root>()
+            .flatten()
+            .and_then(|root| root.read(cx).view().clone().downcast::<SettingsView>().ok());
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.select_page(page, cx));
+        }
+    });
+}
 
 /// 打开（或前置）设置窗口。菜单栏「设置…」与面板里的 ⌘, 调用它。
 pub fn open(cx: &mut App) {
