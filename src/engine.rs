@@ -149,6 +149,21 @@ impl Engine {
             .flat_map(|provider| provider.suggestions())
             .collect();
         for entry in history::recent().into_iter().take(RECENT_ON_HOME) {
+            let replayable = !(entry.query.is_empty() && entry.scope.is_none());
+            let (title, subtitle) = tile_text(
+                &entry,
+                history::lang_code(),
+                || {
+                    let item = self.find(&entry.id, &entry.query, entry.scope.as_deref());
+                    let (title, subtitle) = match &item {
+                        Some(item) => (item.title.as_str(), item.subtitle.as_str()),
+                        None => (entry.title.as_str(), entry.subtitle.as_str()),
+                    };
+                    history::backfill_text(&entry.id, title, subtitle);
+                    item
+                },
+                replayable,
+            );
             let icon = tile_icon(entry.icon(), || {
                 // 空查询且不在范围里时重查会回到首页本身，跳过。
                 if entry.query.is_empty() && entry.scope.is_none() {
@@ -164,8 +179,8 @@ impl Engine {
             let (id, query, scope) = (entry.id.clone(), entry.query.clone(), entry.scope.clone());
             items.push(Item {
                 id: format!("{RECENT_ID_PREFIX}{}", entry.id),
-                title: entry.title.clone(),
-                subtitle: entry.subtitle.clone(),
+                title,
+                subtitle,
                 badge: recent_section().into(),
                 // 位于「等你处理」（900+）与「快捷命令」（<800）之间。
                 score: 850,
@@ -259,6 +274,23 @@ impl Engine {
 
 /// 「最近使用」格子的图标：记录里存的优先；旧记录没存就按原结果现查一次（查到后写回历史）；
 /// 都没有时用通用图标，格子里不能是一块空白。
+/// 「最近使用」格子的标题与副标题。记录是另一种界面语言写下的（切换过语言，或旧记录没记语言）时，
+/// 按当前语言把原结果重新查一次；查不到或不能重放就用记录里的。
+fn tile_text(
+    entry: &history::Entry,
+    current: &str,
+    live: impl FnOnce() -> Option<Item>,
+    replayable: bool,
+) -> (String, String) {
+    if entry.lang.as_deref() != Some(current)
+        && replayable
+        && let Some(item) = live()
+    {
+        return (item.title, item.subtitle);
+    }
+    (entry.title.clone(), entry.subtitle.clone())
+}
+
 fn tile_icon(stored: Icon, live: impl FnOnce() -> Option<Icon>) -> Icon {
     if stored != Icon::None {
         return stored;
@@ -316,6 +348,46 @@ mod tests {
             score,
             ..Item::blank()
         }
+    }
+
+    #[test]
+    fn recent_tiles_follow_the_interface_language() {
+        // 「最近使用」存的是执行时的标题：中文界面下用过「锁屏」，切到英文后首页还写着「锁屏 /
+        // 锁定屏幕，回来时需要密码」，就是英文界面里漏翻的中文。语言不同时按当前语言重取。
+        let entry = |lang: Option<&str>| history::Entry {
+            id: "system:lock".into(),
+            title: "锁屏".into(),
+            subtitle: "锁定屏幕，回来时需要密码".into(),
+            badge: "系统命令".into(),
+            icon: None,
+            icon_is_file: false,
+            symbol: None,
+            query: "lock".into(),
+            scope: None,
+            at_ms: 0,
+            lang: lang.map(Into::into),
+        };
+        let live = || {
+            let mut item = item("Lock Screen", "System", 900);
+            item.subtitle = "Lock the screen".into();
+            Some(item)
+        };
+        let english = ("Lock Screen".to_string(), "Lock the screen".to_string());
+        assert_eq!(tile_text(&entry(Some("zh")), "en", live, true), english);
+        // 旧记录没有语言字段，也按当前语言重取。
+        assert_eq!(tile_text(&entry(None), "en", live, true), english);
+        // 语言没变就用记录里的，不重查。
+        let stored = ("锁屏".to_string(), "锁定屏幕，回来时需要密码".to_string());
+        assert_eq!(
+            tile_text(&entry(Some("zh")), "zh", || panic!("不该重查"), true),
+            stored
+        );
+        // 查不到（应用被卸载）或不能重放时，退回记录里的标题。
+        assert_eq!(tile_text(&entry(Some("zh")), "en", || None, true), stored);
+        assert_eq!(
+            tile_text(&entry(Some("zh")), "en", || panic!("不能重放"), false),
+            stored
+        );
     }
 
     #[test]

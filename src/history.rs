@@ -28,6 +28,18 @@ pub struct Entry {
     pub query: String,
     pub scope: Option<String>,
     pub at_ms: u64,
+    /// 记录时的界面语言（`zh` / `en`）。旧记录没有这个字段。标题和副标题是按这个语言存的，
+    /// 切换语言后首页要按当前语言重新取一次。
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+/// 当前界面语言的代号，与 [`Entry::lang`] 对应。
+pub fn lang_code() -> &'static str {
+    match crate::i18n::lang() {
+        crate::i18n::Lang::Zh => "zh",
+        crate::i18n::Lang::En => "en",
+    }
 }
 
 impl Entry {
@@ -101,6 +113,7 @@ pub fn record(item: &Item, query: &str, scope: Option<&str>) {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or_default(),
+        lang: Some(lang_code().into()),
     };
     let snapshot = {
         let mut entries = entries().lock().expect("history poisoned");
@@ -120,6 +133,21 @@ pub fn backfill_icon(id: &str, icon: &Icon) {
             return;
         };
         (entry.icon, entry.icon_is_file, entry.symbol) = stored(icon);
+        entries.clone()
+    };
+    save(&snapshot);
+}
+
+/// 按当前语言重新取到的标题回写进记录，下次首页不必再查。查不到时也记下语言，免得每次都重查。
+pub fn backfill_text(id: &str, title: &str, subtitle: &str) {
+    let snapshot = {
+        let mut entries = entries().lock().expect("history poisoned");
+        let Some(entry) = entries.iter_mut().find(|e| e.id == id) else {
+            return;
+        };
+        entry.title = title.to_string();
+        entry.subtitle = subtitle.to_string();
+        entry.lang = Some(lang_code().into());
         entries.clone()
     };
     save(&snapshot);
@@ -167,6 +195,7 @@ mod tests {
             query: "时间".into(),
             scope: None,
             at_ms: 0,
+            lang: Some("zh".into()),
         };
         let back: Entry = serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
         assert_eq!(
@@ -187,5 +216,7 @@ mod tests {
             entries[0].icon(),
             Icon::File("/Applications/WeChat.app".into())
         );
+        // 也没有语言字段：当作未知，首页会按当前语言重取一次标题。
+        assert_eq!(entries[0].lang, None);
     }
 }
