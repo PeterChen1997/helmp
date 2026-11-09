@@ -466,14 +466,19 @@ pub const AGENT_SOURCES: [(&str, &str, &str, &str); 2] = [
 
 // ---------------------------------------------------------------- 截图
 
-/// Vision 支持的常用识别语言：(代码, 中文名, 英文名)。
-pub const OCR_LANGUAGES: [(&str, &str, &str); 6] = [
+/// Vision 支持的常用识别语言：(代码, 中文名, 英文名)。默认只开中英文，其余按需打开。
+pub const OCR_LANGUAGES: [(&str, &str, &str); 11] = [
     ("zh-Hans", "简体中文", "Chinese, Simplified"),
     ("zh-Hant", "繁体中文", "Chinese, Traditional"),
     ("en-US", "英语", "English"),
     ("ja-JP", "日语", "Japanese"),
     ("ko-KR", "韩语", "Korean"),
     ("fr-FR", "法语", "French"),
+    ("de-DE", "德语", "German"),
+    ("es-ES", "西班牙语", "Spanish"),
+    ("it-IT", "意大利语", "Italian"),
+    ("pt-BR", "葡萄牙语", "Portuguese"),
+    ("ru-RU", "俄语", "Russian"),
 ];
 
 /// 开关某个识别语言。至少保留一个：全关掉 Vision 会退回默认语言，和界面显示不符。
