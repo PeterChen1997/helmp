@@ -6,6 +6,7 @@
 
 mod cli;
 mod config;
+mod dock;
 mod engine;
 mod history;
 mod hotkey;

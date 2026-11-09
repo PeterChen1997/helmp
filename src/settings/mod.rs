@@ -151,6 +151,7 @@ pub struct SettingsView {
 
 impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::dock::track_window(cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
         let hotkey = cx.new(|cx| {
             HotkeyRecorder::new(

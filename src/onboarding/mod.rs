@@ -227,6 +227,7 @@ pub struct Onboarding {
 
 impl Onboarding {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        crate::dock::track_window(cx);
         let subscriptions = vec![
             // 用户去系统设置授权后切回来：重新查询状态。
             cx.observe_window_activation(window, |this, window, cx| {
@@ -247,8 +248,10 @@ impl Onboarding {
                 }
             }
         });
+        let statuses = Permission::ALL.map(Permission::status);
+        crate::trace::log(format!("引导页权限状态（初始）：{statuses:?}"));
         Self {
-            statuses: Permission::ALL.map(Permission::status),
+            statuses,
             error: None,
             _subscriptions: subscriptions,
             _refresh: refresh,
@@ -258,6 +261,15 @@ impl Onboarding {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let statuses = Permission::ALL.map(Permission::status);
         if statuses != self.statuses {
+            crate::trace::log(format!("引导页权限状态：{statuses:?}"));
+            // 刚在系统设置里授权完：把引导窗口拉回前台，用户不用自己切回来。
+            let newly_granted = statuses
+                .iter()
+                .zip(&self.statuses)
+                .any(|(now, before)| *now == Status::Granted && *before != Status::Granted);
+            if newly_granted {
+                cx.activate(true);
+            }
             self.statuses = statuses;
             cx.notify();
         }
