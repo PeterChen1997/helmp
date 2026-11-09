@@ -8,6 +8,10 @@
 //! - `screenshot:ocr-file:<绝对路径>`  查询 `ocr /绝对路径` 时出现，只展示结果、不写剪贴板
 //!
 //! OCR 语言读 `config.screenshot.ocr_languages`。详情里展示的截图存在 `<data_dir>/ocr/`，只保留最近几张。
+//!
+//! 识别结果（对标 HapiGo 文本识别）：标题「识别到 N 行 · 语言」，保留换行与段落；回车复制全部，
+//! ⌘T 翻译，⌘⇧C 复制为单行，⌘⌥C 去掉换行后复制；图里有二维码时列出内容并给「打开链接」。
+//! 识别为空时明确说「没有识别到文字」。按 Esc 取消截图安静返回；没有录屏权限时给「前往授权」。
 
 mod capture;
 mod ocr;
@@ -25,7 +29,9 @@ use crate::engine::commands_section;
 use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::paths;
-use crate::provider::{Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint};
+use crate::provider::{
+    Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint, Tone,
+};
 
 fn badge() -> &'static str {
     tr("截图", "Screenshot")
@@ -290,7 +296,7 @@ fn save_dir(configured: Option<&str>) -> Result<PathBuf> {
 
 fn screenshot_to_clipboard() -> Result<Outcome> {
     if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::no_screen_access().into()));
+        return Ok(Outcome::Show(permission_detail()));
     }
     capture::to_clipboard()?;
     Ok(Outcome::Done)
@@ -298,7 +304,7 @@ fn screenshot_to_clipboard() -> Result<Outcome> {
 
 fn screenshot_and_save() -> Result<Outcome> {
     if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::no_screen_access().into()));
+        return Ok(Outcome::Show(permission_detail()));
     }
     let dir = save_dir(crate::config::get().screenshot.save_dir.as_deref())?;
     std::fs::create_dir_all(&dir)
@@ -320,21 +326,43 @@ fn screenshot_and_save() -> Result<Outcome> {
 }
 
 fn ocr_screen() -> Result<Outcome> {
-    if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::no_screen_access().into()));
-    }
-    let dir = ocr_dir()?;
-    let path = new_image_path(&dir)?;
-    if !capture::to_file(&path)? {
-        return Ok(Outcome::Done);
-    }
-    prune_images(&dir)?;
+    let path = match capture_for_ocr(capture::has_screen_access(), &capture::to_file, &ocr_dir()?)? {
+        Captured::Image(path) => path,
+        Captured::NoPermission => return Ok(Outcome::Show(permission_detail())),
+        // 用户按 Esc：安静返回，什么也不弹。
+        Captured::Cancelled => return Ok(Outcome::Done),
+    };
     let image = std::fs::read(&path)
         .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
     let png = ocr::to_png(&image)?;
-    let text = ocr::recognize(&image, &languages())?;
+    let found = ocr::recognize(&image, &languages())?;
     let size_label = tr("区域尺寸", "Selection Size");
-    copy_and_show(text, Shown::new(path, &png, size_label), &languages())
+    copy_and_show(found, Shown::new(path, &png, size_label), &languages())
+}
+
+/// 为 OCR 截图的结果。
+#[derive(Debug, PartialEq)]
+enum Captured {
+    Image(PathBuf),
+    NoPermission,
+    Cancelled,
+}
+
+/// 截一张图给 OCR 用。没有权限、用户取消都不是错误；只有截图本身失败才报错。
+fn capture_for_ocr(
+    has_access: bool,
+    capture: &dyn Fn(&Path) -> Result<bool>,
+    dir: &Path,
+) -> Result<Captured> {
+    if !has_access {
+        return Ok(Captured::NoPermission);
+    }
+    let path = new_image_path(dir)?;
+    if !capture(&path)? {
+        return Ok(Captured::Cancelled);
+    }
+    prune_images(dir)?;
+    Ok(Captured::Image(path))
 }
 
 fn ocr_clipboard() -> Result<Outcome> {
@@ -346,20 +374,44 @@ fn ocr_clipboard() -> Result<Outcome> {
     })?;
     let png = ocr::to_png(&image)?;
     let path = keep_image(&ocr_dir()?, &png.bytes)?;
-    let text = ocr::recognize(&image, &languages())?;
+    let found = ocr::recognize(&image, &languages())?;
     let size_label = tr("图片尺寸", "Image Size");
-    copy_and_show(text, Shown::new(path, &png, size_label), &languages())
+    copy_and_show(found, Shown::new(path, &png, size_label), &languages())
 }
 
 fn ocr_file(path: &Path, dir: &Path, languages: &[String]) -> Result<Outcome> {
     let image =
         std::fs::read(path).with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
-    let text = ocr::recognize(&image, languages)?;
+    let found = ocr::recognize(&image, languages)?;
     let png = ocr::to_png(&image)?;
     let size_label = tr("图片尺寸", "Image Size");
     let shown = Shown::new(keep_image(dir, &png.bytes)?, &png, size_label);
-    remember(&text);
-    Ok(Outcome::Show(ocr_detail(&text, &shown, false, languages)))
+    remember(&found.text);
+    Ok(Outcome::Show(ocr_detail(&found, &shown, false, languages)))
+}
+
+/// 没有录屏权限时的详情：说明原因，回车直达「系统设置 › 录屏与系统录音」。
+fn permission_detail() -> Detail {
+    Detail {
+        icon: Icon::Symbol {
+            name: "shield-alert",
+            tint: Tint::Orange,
+        },
+        title: tr("需要录屏权限", "Screen Recording permission needed").into(),
+        tag: None,
+        blocks: vec![Block::Text(capture::no_screen_access().into())],
+        metadata: Vec::new(),
+        actions: vec![NamedAction::new(
+            tr("前往授权", "Open Privacy Settings"),
+            None,
+            Action::open(screen_recording_settings()),
+        )],
+    }
+}
+
+/// 系统设置里「录屏与系统录音」面板，与权限引导窗口用同一个地址。
+fn screen_recording_settings() -> &'static str {
+    crate::onboarding::Permission::ScreenRecording.settings_url()
 }
 
 /// 详情里展示的那张图。
@@ -382,38 +434,148 @@ impl Shown {
 }
 
 /// OCR 后把文字写进剪贴板并展示；没识别出文字时不覆盖剪贴板。
-fn copy_and_show(text: String, shown: Shown, languages: &[String]) -> Result<Outcome> {
-    let copied = !text.is_empty();
+fn copy_and_show(found: ocr::Recognition, shown: Shown, languages: &[String]) -> Result<Outcome> {
+    let copied = !found.text.is_empty();
     if copied {
-        pasteboard::write_text(&pasteboard::general(), &text)?;
+        pasteboard::write_text(&pasteboard::general(), &found.text)?;
     }
-    remember(&text);
-    Ok(Outcome::Show(ocr_detail(&text, &shown, copied, languages)))
+    remember(&found.text);
+    Ok(Outcome::Show(ocr_detail(&found, &shown, copied, languages)))
 }
 
 fn remember(text: &str) {
     *LAST_TEXT.lock().expect("ocr last text poisoned") = Some(text.to_string());
 }
 
-/// 设计稿「截图识别」：标题说明识别了几行、是否已复制；截图在上，识别结果在下；元数据 语言 / 尺寸。
-fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> Detail {
+/// 是不是东亚文字（中日韩、全角标点）：这些字之间换行时不该补空格。
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+}
+
+/// 把几行接成一行：中文与中文之间直接相连，其余交界补一个空格。
+fn join_smart<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
+    let mut out = String::new();
+    for line in lines.into_iter().map(str::trim).filter(|line| !line.is_empty()) {
+        // 两边都是中文才直接相连；中英文交界照常留一个空格。
+        let tight = out.chars().last().is_some_and(is_cjk)
+            && line.chars().next().is_some_and(is_cjk);
+        if !out.is_empty() && !tight {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// 「复制为单行」：所有行接成一行。
+fn single_line(text: &str) -> String {
+    join_smart(text.lines())
+}
+
+/// 「去掉换行后复制」：去掉段落内部的换行（截图里被版面折断的句子接回去），段落之间仍然换行。
+fn unwrap_lines(text: &str) -> String {
+    text.split("\n\n")
+        .map(|paragraph| join_smart(paragraph.lines()))
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 识别出的文字是什么语言（只看字符，给标题用）：中文 / 英文 / 中英混合 / 日文 / 韩文……
+fn script_label(text: &str) -> Option<&'static str> {
+    let count = |f: fn(u32) -> bool| text.chars().filter(|c| f(*c as u32)).count();
+    let han = count(|c| matches!(c, 0x4E00..=0x9FFF | 0x3400..=0x4DBF));
+    let kana = count(|c| matches!(c, 0x3040..=0x30FF));
+    let hangul = count(|c| matches!(c, 0xAC00..=0xD7AF));
+    let cyrillic = count(|c| matches!(c, 0x0400..=0x04FF));
+    let is_latin = |c: char| c.is_alphabetic() && (c as u32) < 0x0250;
+    let latin = text.chars().filter(|c| is_latin(*c)).count();
+    // 拉丁字母按单词数和汉字比：一个英文单词大致相当于一两个汉字。
+    let words = text
+        .split(|c: char| !is_latin(c))
+        .filter(|word| !word.is_empty())
+        .count();
+    Some(if kana > 0 {
+        tr("日文", "Japanese")
+    } else if hangul > 0 {
+        tr("韩文", "Korean")
+    } else if cyrillic > latin {
+        tr("俄文", "Russian")
+    } else if han > 0 && words * 5 >= han {
+        tr("中英混合", "Chinese & English")
+    } else if han > 0 {
+        tr("中文", "Chinese")
+    } else if latin > 0 && text.chars().filter(char::is_ascii_alphabetic).count() == latin {
+        tr("英文", "English")
+    } else if latin > 0 {
+        tr("拉丁字母", "Latin script")
+    } else {
+        return None;
+    })
+}
+
+/// 二维码内容里的链接（http / https 及其他 `scheme://` 深链）。
+fn links(codes: &[String]) -> Vec<&str> {
+    codes
+        .iter()
+        .map(|code| code.trim())
+        .filter(|code| {
+            code.split_once("://").is_some_and(|(scheme, rest)| {
+                !rest.is_empty()
+                    && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && scheme
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            })
+        })
+        .collect()
+}
+
+/// 设计稿「截图识别」：标题「识别到 N 行 · 语言」，已复制时带标签；截图在上，可选中的识别结果在下；
+/// 有二维码时列出内容并给「打开链接」；元数据 识别语言 / 尺寸。没识别到时明确说没有，并给「再试一次」。
+fn ocr_detail(
+    found: &ocr::Recognition,
+    shown: &Shown,
+    copied: bool,
+    languages: &[String],
+) -> Detail {
+    let text = found.text.as_str();
     let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
     // 英文按单复数说 line / lines。
     let unit = if lines == 1 { "line" } else { "lines" };
-    let title = match (lines, copied) {
+    let links = links(&found.codes);
+    let title = match (lines, script_label(text)) {
+        (0, _) if !found.codes.is_empty() => tr("识别到二维码", "Found a QR code").to_string(),
         (0, _) => tr("没有识别到文字", "No text found").to_string(),
-        (n, true) => trf!(
-            "已识别 {n} 行文字，已复制到剪贴板",
-            "Recognized {n} {unit} and copied to clipboard"
-        ),
-        (n, false) => trf!("已识别 {n} 行文字", "Recognized {n} {unit}"),
+        (n, Some(script)) => trf!("识别到 {n} 行 · {script}", "{n} {unit} · {script}"),
+        (n, None) => trf!("识别到 {n} 行", "{n} {unit}"),
     };
     let mut blocks = vec![Block::Image(shown.path.clone())];
     if !text.is_empty() {
-        blocks.push(Block::Text(text.to_string()));
+        blocks.push(Block::Result {
+            text: text.to_string(),
+            large: false,
+        });
+    } else if found.codes.is_empty() {
+        blocks.push(Block::Text(
+            tr(
+                "这张图里没有可识别的文字。可以把选区框得更紧一些再试；如果是日文、韩文等，\
+                 到设置 › 截图里打开对应的识别语言。",
+                "There’s no readable text in this image. Try a tighter selection; for Japanese, \
+                 Korean and other languages, turn them on in Settings › Screenshot.",
+            )
+            .into(),
+        ));
+    }
+    if !found.codes.is_empty() {
+        blocks.push(Block::Quote {
+            label: tr("二维码", "QR Code").into(),
+            text: found.codes.join("\n"),
+        });
     }
     let mut metadata = vec![(
-        tr("语言", "Languages").to_string(),
+        tr("识别语言", "Languages").to_string(),
         language_names(languages),
     )];
     if shown.width > 0 && shown.height > 0 {
@@ -422,26 +584,56 @@ fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> 
             format!("{} × {}", shown.width, shown.height),
         ));
     }
-    // 有结果时回车复制识别结果，⌘T 带着文字进入翻译。
-    let actions = if text.is_empty() {
-        Vec::new()
-    } else {
-        vec![
-            NamedAction::new(
-                tr("复制识别结果", "Copy Recognized Text"),
-                None,
-                Action::copy(text),
-            ),
-            NamedAction::new(
-                tr("翻译识别结果", "Translate Recognized Text"),
-                Some("⌘T"),
-                Action::new({
-                    let text = text.to_string();
-                    move || Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, text.clone()))
-                }),
-            ),
-        ]
+    let open_link = |url: &str, shortcut: Option<&str>| {
+        NamedAction::new(tr("打开链接", "Open Link"), shortcut, Action::open(url))
     };
+    let mut actions = Vec::new();
+    if !text.is_empty() {
+        // 回车复制全部，⌘T 带着文字进入翻译。
+        actions.push(NamedAction::new(
+            tr("复制全部", "Copy All"),
+            None,
+            Action::copy(text),
+        ));
+        actions.push(NamedAction::new(
+            tr("翻译", "Translate"),
+            Some("⌘T"),
+            Action::new({
+                let text = text.to_string();
+                move || Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, text.clone()))
+            }),
+        ));
+        actions.push(NamedAction::new(
+            tr("复制为单行", "Copy as One Line"),
+            Some("⌘⇧C"),
+            Action::copy(single_line(text)),
+        ));
+        actions.push(NamedAction::new(
+            tr("去掉换行后复制", "Copy Without Line Breaks"),
+            Some("⌘⌥C"),
+            Action::copy(unwrap_lines(text)),
+        ));
+        if let Some(url) = links.first() {
+            actions.push(open_link(url, Some("⌘O")));
+        }
+    } else if let Some(url) = links.first() {
+        // 只有二维码：回车打开链接。
+        actions.push(open_link(url, None));
+    }
+    for code in &found.codes {
+        actions.push(NamedAction::new(
+            trf!("复制二维码内容：{}", "Copy QR Content: {}", clip(code)),
+            None,
+            Action::copy(code.clone()),
+        ));
+    }
+    if text.is_empty() && found.codes.is_empty() {
+        actions.push(NamedAction::new(
+            tr("再试一次", "Try Again"),
+            None,
+            Action::rerun(),
+        ));
+    }
     Detail {
         actions,
         icon: Icon::Symbol {
@@ -449,9 +641,18 @@ fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> 
             tint: TINT,
         },
         title,
-        tag: None,
+        tag: copied.then(|| (tr("已复制", "Copied").to_string(), Tone::Done)),
         blocks,
         metadata,
+    }
+}
+
+/// 菜单里显示的短内容：压成一行，最多 40 个字符。
+fn clip(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(40) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
     }
 }
 
@@ -481,6 +682,9 @@ fn language_names(languages: &[String]) -> String {
                 "it-IT" | "it" => tr("意大利文", "Italian"),
                 "pt-BR" | "pt" => tr("葡萄牙文", "Portuguese"),
                 "ru-RU" | "ru" => tr("俄文", "Russian"),
+                "uk-UA" | "uk" => tr("乌克兰文", "Ukrainian"),
+                "th-TH" | "th" => tr("泰文", "Thai"),
+                "vi-VT" | "vi" => tr("越南文", "Vietnamese"),
                 other if other.starts_with("en") => tr("英文", "English"),
                 other => other,
             };
@@ -652,21 +856,23 @@ mod tests {
 
     #[test]
     fn ocr_file_shows_image_text_and_metadata() {
-        // 设计稿「截图识别」：标题说明行数，图在上、文字在下，元数据 语言 / 尺寸；
-        // 指定文件的识别不碰剪贴板，所以标题里不能说「已复制」。
+        // 设计稿「截图识别」：标题「识别到 N 行 · 语言」，图在上、可选中的文字在下，元数据 语言 / 尺寸；
+        // 指定文件的识别不碰剪贴板，所以不能标「已复制」。
         let dir = TempDir::new("file");
         let languages = ["zh-Hans".to_string(), "en-US".to_string()];
         let outcome = ocr_file(Path::new(ocr::tests::FIXTURE), &dir.0, &languages).unwrap();
         let Outcome::Show(detail) = outcome else {
             panic!("应返回详情：{outcome:?}");
         };
-        assert_eq!(detail.title, "已识别 2 行文字");
-        let [Block::Image(image), Block::Text(text)] = detail.blocks.as_slice() else {
+        assert_eq!(detail.title, "识别到 2 行 · 中英混合");
+        assert_eq!(detail.tag, None);
+        let [Block::Image(image), Block::Result { text, large: false }] = detail.blocks.as_slice()
+        else {
             panic!("{:?}", detail.blocks);
         };
         ocr::tests::assert_fixture_text(text);
         assert!(image.starts_with(&dir.0) && image.exists());
-        assert_eq!(detail.metadata[0], ("语言".into(), "简体中文、英文".into()));
+        assert_eq!(detail.metadata[0], ("识别语言".into(), "简体中文、英文".into()));
         assert_eq!(detail.metadata[1].0, "图片尺寸");
         assert!(detail.metadata[1].1.contains(" × "));
         // 次级操作「复制识别结果」读的就是这次的文字。
@@ -680,30 +886,157 @@ mod tests {
         assert!(ocr_file(Path::new("/nonexistent/helmp-ocr.png"), &dir.0, &[]).is_err());
     }
 
-    #[test]
-    fn detail_title_reflects_copy_and_empty_results() {
-        let shown = Shown {
+    fn shown() -> Shown {
+        Shown {
             path: PathBuf::from("/tmp/x.png"),
             size_label: "区域尺寸",
             width: 640,
             height: 220,
-        };
-        let detail = ocr_detail("你好 Huan 2026\nThe quick brown fox", &shown, true, &[]);
-        assert_eq!(detail.title, "已识别 2 行文字，已复制到剪贴板");
+        }
+    }
+
+    fn found(text: &str, codes: &[&str]) -> ocr::Recognition {
+        ocr::Recognition {
+            text: text.into(),
+            codes: codes.iter().map(|code| code.to_string()).collect(),
+        }
+    }
+
+    fn action_titles(detail: &Detail) -> Vec<&str> {
+        detail.actions.iter().map(|a| a.title.as_str()).collect()
+    }
+
+    #[test]
+    fn detail_offers_copy_variants_and_translation() {
+        // 回车复制全部；⌘T 翻译；截图里的文字常被版面折行，要能一键复制成单行或去掉段内换行。
+        let detail = ocr_detail(
+            &found("你好 Huan 2026\nThe quick brown fox", &[]),
+            &shown(),
+            true,
+            &[],
+        );
+        assert_eq!(detail.title, "识别到 2 行 · 中英混合");
+        assert_eq!(detail.tag, Some(("已复制".into(), Tone::Done)));
+        assert_eq!(
+            action_titles(&detail),
+            ["复制全部", "翻译", "复制为单行", "去掉换行后复制"]
+        );
+        let shortcuts: Vec<_> = detail
+            .actions
+            .iter()
+            .map(|a| a.shortcut.as_deref())
+            .collect();
+        assert_eq!(shortcuts, [None, Some("⌘T"), Some("⌘⇧C"), Some("⌘⌥C")]);
+        assert_eq!(
+            detail.actions[1].action.run().unwrap(),
+            Outcome::EnterScopeWith("translate", "你好 Huan 2026\nThe quick brown fox".into())
+        );
         assert_eq!(
             detail.metadata,
             [
-                ("语言".to_string(), "简体中文、英文".to_string()),
+                ("识别语言".to_string(), "简体中文、英文".to_string()),
                 ("区域尺寸".to_string(), "640 × 220".to_string())
             ]
         );
-        // 没识别到文字时不能说「已复制」，详情里只有截图。
-        let empty = ocr_detail("", &shown, false, &["ja-JP".to_string()]);
+    }
+
+    #[test]
+    fn empty_result_says_so_instead_of_blank() {
+        // 没识别到文字时空白一片，用户分不清是没识别到还是卡住了：要明确说「没有识别到文字」、给建议，
+        // 不能说「已复制」，回车「再试一次」。
+        let empty = ocr_detail(&found("", &[]), &shown(), false, &["ja-JP".to_string()]);
         assert_eq!(empty.title, "没有识别到文字");
-        assert_eq!(empty.blocks, [Block::Image(PathBuf::from("/tmp/x.png"))]);
+        assert_eq!(empty.tag, None);
+        assert!(matches!(&empty.blocks[..], [Block::Image(_), Block::Text(advice)] if advice.contains("没有可识别的文字")));
+        assert_eq!(action_titles(&empty), ["再试一次"]);
+        assert!(empty.actions[0].action.is_rerun());
         assert_eq!(empty.metadata[0].1, "日文");
     }
 
+    #[test]
+    fn qr_code_links_can_be_opened() {
+        // 截图里有二维码：读出的链接要能直接打开；只有二维码没有文字时，回车就是打开链接。
+        let both = ocr_detail(
+            &found("扫码打开 Helmp", &["https://example.com/helmp"]),
+            &shown(),
+            true,
+            &[],
+        );
+        assert!(action_titles(&both).contains(&"打开链接"));
+        assert!(matches!(
+            both.blocks.last(),
+            Some(Block::Quote { text, .. }) if text == "https://example.com/helmp"
+        ));
+        let only = ocr_detail(&found("", &["https://example.com/helmp"]), &shown(), false, &[]);
+        assert_eq!(only.title, "识别到二维码");
+        assert_eq!(action_titles(&only)[0], "打开链接");
+        // 不是链接的码（如纯文本、条码数字）只给复制，不给打开。
+        let plain = ocr_detail(&found("", &["6901234567892"]), &shown(), false, &[]);
+        assert!(!action_titles(&plain).contains(&"打开链接"));
+        assert_eq!(action_titles(&plain), ["复制二维码内容：6901234567892"]);
+    }
+
+    #[test]
+    fn qr_fixture_end_to_end() {
+        // 真实图片走一遍：二维码链接和旁边的文字都要出来，并给「打开链接」。
+        let dir = TempDir::new("qr");
+        let Outcome::Show(detail) = ocr_file(Path::new(ocr::tests::QR_FIXTURE), &dir.0, &[]).unwrap()
+        else {
+            panic!("应返回详情");
+        };
+        assert!(action_titles(&detail).contains(&"打开链接"), "{:?}", action_titles(&detail));
+    }
+
+    #[test]
+    fn copy_variants_join_lines_sensibly() {
+        // 中文行之间直接相连、英文单词之间补空格；「去掉换行」保留段落。
+        let text = "截图里的文字被\n折成了两行\nand English words\nwrap too\n\n第二段";
+        assert_eq!(
+            single_line(text),
+            "截图里的文字被折成了两行 and English words wrap too 第二段"
+        );
+        assert_eq!(
+            unwrap_lines(text),
+            "截图里的文字被折成了两行 and English words wrap too\n第二段"
+        );
+        assert_eq!(single_line("   "), "");
+    }
+
+    #[test]
+    fn script_label_names_the_recognized_language() {
+        assert_eq!(script_label("你好世界，今天天气不错"), Some("中文"));
+        assert_eq!(script_label("The quick brown fox"), Some("英文"));
+        assert_eq!(script_label("你好 Huan 2026\nThe quick brown fox"), Some("中英混合"));
+        assert_eq!(script_label("こんにちは"), Some("日文"));
+        assert_eq!(script_label("안녕하세요"), Some("韩文"));
+        assert_eq!(script_label("2026 / 11 / 09"), None);
+    }
+
+    #[test]
+    fn cancelled_capture_is_quiet() {
+        // 用户按 Esc 取消截图是正常操作：不能弹错误，也不能说没权限。
+        let dir = TempDir::new("cancel");
+        let got = capture_for_ocr(true, &|_| Ok(false), &dir.0).unwrap();
+        assert_eq!(got, Captured::Cancelled);
+        // 截图本身失败（显示器异常等）才是错误。
+        assert!(capture_for_ocr(true, &|_| Err(anyhow::anyhow!("boom")), &dir.0).is_err());
+    }
+
+    #[test]
+    fn missing_permission_leads_to_system_settings() {
+        // 没有录屏权限时不能去截（会截到一片空白或报错），而要给「前往授权」，直达对应的系统设置面板。
+        let dir = TempDir::new("perm");
+        let got = capture_for_ocr(false, &|_| panic!("没权限时不该截图"), &dir.0).unwrap();
+        assert_eq!(got, Captured::NoPermission);
+        let detail = permission_detail();
+        assert_eq!(detail.title, "需要录屏权限");
+        assert_eq!(action_titles(&detail), ["前往授权"]);
+        assert!(
+            screen_recording_settings().ends_with("Privacy_ScreenCapture"),
+            "{}",
+            screen_recording_settings()
+        );
+    }
     #[test]
     fn english_ui_still_finds_ocr_by_chinese_query() {
         // 全局快捷键 ⌘⇧2 和菜单栏用 `RunItem { id: "screenshot:ocr-screen", query: "截图识别文字" }`
@@ -736,7 +1069,7 @@ mod tests {
 
     #[test]
     fn english_detail_counts_lines_and_names_languages() {
-        // 识别结果详情是用户最常看的界面：英文下要说清行数（单复数）、是否已复制，语言名也要是英文。
+        // 识别结果详情是用户最常看的界面：英文下要说清行数（单复数）、语言、是否已复制，语言名也要是英文。
         use crate::i18n::{Lang, with_lang};
         with_lang(Lang::En, || {
             let shown = Shown {
@@ -745,8 +1078,9 @@ mod tests {
                 width: 640,
                 height: 220,
             };
-            let detail = ocr_detail("a\nb", &shown, true, &[]);
-            assert_eq!(detail.title, "Recognized 2 lines and copied to clipboard");
+            let detail = ocr_detail(&found("a\nb", &[]), &shown, true, &[]);
+            assert_eq!(detail.title, "2 lines · English");
+            assert_eq!(detail.tag, Some(("Copied".into(), Tone::Done)));
             assert_eq!(
                 detail.metadata,
                 [
@@ -758,10 +1092,14 @@ mod tests {
                 ]
             );
             assert_eq!(
-                ocr_detail("a", &shown, false, &[]).title,
-                "Recognized 1 line"
+                ocr_detail(&found("你好", &[]), &shown, false, &[]).title,
+                "1 line · Chinese"
             );
-            assert_eq!(ocr_detail("", &shown, false, &[]).title, "No text found");
+            assert_eq!(
+                ocr_detail(&found("", &[]), &shown, false, &[]).title,
+                "No text found"
+            );
+            assert_eq!(permission_detail().actions[0].title, "Open Privacy Settings");
             assert!(capture::no_screen_access().contains("Screen Recording"));
         });
     }
@@ -799,7 +1137,7 @@ mod tests {
         let pb = pasteboard::tests::Private::new();
         pb.put_png(&std::fs::read(ocr::tests::FIXTURE).unwrap());
         let image = pasteboard::image_data(&pb.0).expect("应读到 PNG");
-        ocr::tests::assert_fixture_text(&ocr::recognize(&image, &[]).unwrap());
+        ocr::tests::assert_fixture_text(&ocr::recognize(&image, &[]).unwrap().text);
     }
 
     #[test]
@@ -809,7 +1147,7 @@ mod tests {
         let names = COMMANDS
             .iter()
             .map(|cmd| cmd.symbol)
-            .chain(["file-image", "scan-text"]);
+            .chain(["file-image", "scan-text", "shield-alert"]);
         for name in names {
             let path = format!("icons/{name}.svg");
             assert!(

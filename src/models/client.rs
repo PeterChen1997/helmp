@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::config::{ModelConfig, ModelKind};
@@ -24,6 +24,70 @@ pub const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Anthropic 接口版本。只用到 model / max_tokens / system / messages 这几个稳定字段。
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// 模型调用失败的类别：界面据此决定引导用户「打开设置」还是「重试」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// 配置不完整：没填模型名、没填 API Key、钥匙串读不出来。
+    Setup,
+    /// 401 / 403：Key 无效或没有权限。
+    Auth,
+    /// 404：地址或模型名不对（Ollama 没 pull）。
+    NotFound,
+    /// 429：请求太频繁或额度用完。
+    RateLimited,
+    /// 等待超时。
+    Timeout,
+    /// 连不上：域名解析失败、端口没人监听、证书校验失败。
+    Unreachable,
+    /// 5xx：服务端出错。
+    Server,
+    /// 返回内容看不懂（多半是 Base URL 填错）。
+    BadResponse,
+    Other,
+}
+
+/// 模型调用失败：`Display` 是给用户看的那句话，`kind` 给界面分流。
+#[derive(Debug)]
+pub struct ModelError {
+    pub kind: FailureKind,
+    message: String,
+}
+
+impl ModelError {
+    pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ModelError {}
+
+/// 错误链里的模型失败类别；不是模型调用造成的错误返回 None。
+pub fn failure_kind(err: &anyhow::Error) -> Option<FailureKind> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<ModelError>())
+        .map(|err| err.kind)
+}
+
+fn status_kind(status: u16) -> FailureKind {
+    match status {
+        401 | 403 => FailureKind::Auth,
+        404 => FailureKind::NotFound,
+        408 => FailureKind::Timeout,
+        429 => FailureKind::RateLimited,
+        500..=599 => FailureKind::Server,
+        _ => FailureKind::Other,
+    }
+}
 
 /// 一次调用的参数。
 pub struct Request<'a> {
@@ -68,19 +132,27 @@ fn base(model: &ModelConfig) -> String {
 
 pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<HttpRequest> {
     if model.model.trim().is_empty() {
-        bail!(trf!(
-            "「{}」还没有填写模型名",
-            "Enter a model name for “{}”",
-            model.name
-        ));
+        return Err(ModelError::new(
+            FailureKind::Setup,
+            trf!(
+                "「{}」还没有填写模型名",
+                "Enter a model name for “{}”",
+                model.name
+            ),
+        )
+        .into());
     }
     let key = key.map(str::trim).filter(|key| !key.is_empty());
     if needs_key(model.kind) && key.is_none() {
-        bail!(trf!(
-            "「{}」还没有填写 API Key",
-            "Enter an API key for “{}”",
-            model.name
-        ));
+        return Err(ModelError::new(
+            FailureKind::Setup,
+            trf!(
+                "「{}」还没有填写 API Key",
+                "Enter an API key for “{}”",
+                model.name
+            ),
+        )
+        .into());
     }
     let base = base(model);
     let name = model.model.trim();
@@ -166,9 +238,10 @@ pub fn send(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Str
         .read_to_string()
         .map_err(|err| transport_error(model, &http.url, err))?;
     if !(200..300).contains(&status) {
-        return Err(anyhow!(status_error(model.kind, status, &text)));
+        return Err(ModelError::new(status_kind(status), status_error(model.kind, status, &text)).into());
     }
     parse_reply(model.kind, &text)
+        .map_err(|err| ModelError::new(FailureKind::BadResponse, err.to_string()).into())
 }
 
 /// 取出回复文本。
@@ -272,25 +345,39 @@ fn transport_error(model: &ModelConfig, url: &str, err: ureq::Error) -> anyhow::
             "Address unreachable: couldn't connect to {url}{hint}"
         )
     };
-    let message = match &err {
-        ureq::Error::Timeout(_) => timeout(),
-        ureq::Error::HostNotFound => trf!(
-            "地址不可达，找不到这个域名：{url}",
-            "Address unreachable: couldn't find the host for {url}"
+    let (kind, message) = match &err {
+        ureq::Error::Timeout(_) => (FailureKind::Timeout, timeout()),
+        ureq::Error::HostNotFound => (
+            FailureKind::Unreachable,
+            trf!(
+                "地址不可达，找不到这个域名：{url}",
+                "Address unreachable: couldn't find the host for {url}"
+            ),
         ),
-        ureq::Error::ConnectionFailed => refused(),
-        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => refused(),
-        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => timeout(),
-        ureq::Error::BadUri(_) | ureq::Error::Http(_) => {
-            trf!("Base URL 格式不对：{url}", "Invalid base URL: {url}")
+        ureq::Error::ConnectionFailed => (FailureKind::Unreachable, refused()),
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
+            (FailureKind::Unreachable, refused())
         }
-        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => trf!(
-            "HTTPS 证书校验失败：{url}",
-            "HTTPS certificate verification failed: {url}"
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => {
+            (FailureKind::Timeout, timeout())
+        }
+        ureq::Error::BadUri(_) | ureq::Error::Http(_) => (
+            FailureKind::Setup,
+            trf!("Base URL 格式不对：{url}", "Invalid base URL: {url}"),
         ),
-        _ => trf!("请求 {url} 失败", "Request to {url} failed"),
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => (
+            FailureKind::Unreachable,
+            trf!(
+                "HTTPS 证书校验失败：{url}",
+                "HTTPS certificate verification failed: {url}"
+            ),
+        ),
+        _ => (
+            FailureKind::Other,
+            trf!("请求 {url} 失败", "Request to {url} failed"),
+        ),
     };
-    anyhow!(trf!("{message}（{err}）", "{message} ({err})"))
+    ModelError::new(kind, trf!("{message}（{err}）", "{message} ({err})")).into()
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -568,6 +655,33 @@ pub(crate) mod tests {
                 .to_string();
             assert!(err.starts_with("The response isn't JSON"), "{err}");
         });
+    }
+
+    #[test]
+    fn failures_are_classified_for_the_ui() {
+        // 界面按类别给出路：Key 无效 / 没填 Key 要「打开设置」，超时 / 限流 / 连不上要「重试」。
+        // 类别丢了，用户只会看到一串报错而不知道下一步该干什么。
+        let (url, _rx) = mock(401, r#"{"error":{"message":"bad key"}}"#);
+        let err = send(&model(ModelKind::Ollama, &url, "x"), None, &REQ).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Auth));
+        let (url, _rx) = mock(429, r#"{"error":"slow down"}"#);
+        let err = send(&model(ModelKind::Ollama, &url, "x"), None, &REQ).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::RateLimited));
+        let (url, _rx) = mock(503, "");
+        let err = send(&model(ModelKind::Ollama, &url, "x"), None, &REQ).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Server));
+        let m = model(ModelKind::OpenAiCompatible, "http://127.0.0.1:9", "x");
+        let err = send(&m, None, &REQ).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Setup));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let err = send(&model(ModelKind::Ollama, &dead, "x"), None, &REQ).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Unreachable));
+        // 加了上下文（「用 X 翻译失败」）也要认得出来。
+        let wrapped = err.context("用「X」翻译失败");
+        assert_eq!(failure_kind(&wrapped), Some(FailureKind::Unreachable));
+        assert_eq!(failure_kind(&anyhow!("别的错误")), None);
     }
 
     #[test]

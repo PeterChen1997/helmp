@@ -54,6 +54,8 @@ pub struct Action {
     run: Arc<RunFn>,
     /// 执行时不隐藏面板，完成后原地刷新列表（如删除一条剪贴板记录）。
     keep_open: bool,
+    /// 「重试」：不执行自己，而是让框架重新执行所在结果的主操作（表单视图里带着当前表单值原地重跑）。
+    rerun: bool,
 }
 
 impl Action {
@@ -62,6 +64,7 @@ impl Action {
         Self {
             run: Arc::new(move |_| f()),
             keep_open: false,
+            rerun: false,
         }
     }
 
@@ -70,7 +73,20 @@ impl Action {
         Self {
             run: Arc::new(f),
             keep_open: false,
+            rerun: false,
         }
+    }
+
+    /// 重新执行所在结果的主操作（结果详情里的「重试」「重新截图」）。由框架解释，单独执行时什么也不做。
+    pub fn rerun() -> Self {
+        Self {
+            rerun: true,
+            ..Self::new(|| Ok(Outcome::Done))
+        }
+    }
+
+    pub fn is_rerun(&self) -> bool {
+        self.rerun
     }
 
     /// 用 macOS `open` 打开文件、.app 或 URL（含 `claude://`、`codex://` 深链）。
@@ -159,7 +175,9 @@ impl Action {
 /// 动作没有可比较的内容：同一个闭包（同一次构造的克隆）才算相等。
 impl PartialEq for Action {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.run, &other.run) && self.keep_open == other.keep_open
+        Arc::ptr_eq(&self.run, &other.run)
+            && self.keep_open == other.keep_open
+            && self.rerun == other.rerun
     }
 }
 
@@ -273,6 +291,11 @@ pub fn keycaps(shortcut: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
     Text(String),
+    /// 这次操作的主结果文字（译文、识别出的文字）：可以用鼠标选中复制，保留换行。
+    /// `large` 为真时用大字号（译文）。
+    Result { text: String, large: bool },
+    /// 结果下面的一行小字说明，如「Claude Haiku · 中文 → 英文 · 1.2 秒」。
+    Caption(String),
     /// 等宽文本（命令、代码、脚本输出）。
     Code(String),
     /// 带小标题的引用框（如「最后一条消息」）。
@@ -375,6 +398,9 @@ pub struct Item {
     pub actions: Vec<NamedAction>,
     pub detail: Option<Detail>,
     pub form: Option<Form>,
+    /// 表单项：表单内容（搜索框输入、文本框、下拉框）变化后防抖自动执行主操作，结果原地显示
+    /// （翻译的「输入即译」）。主操作必须可以安全地重复执行。
+    pub auto_run: bool,
 }
 
 impl Item {
@@ -393,6 +419,7 @@ impl Item {
             actions: Vec::new(),
             detail: None,
             form: None,
+            auto_run: false,
         }
     }
 }
@@ -434,6 +461,15 @@ pub trait Provider: Send + Sync {
 
     /// 首页（空查询）要展示的项，如「等你处理」的会话、「快捷命令」。
     fn suggestions(&self) -> Vec<Item> {
+        Vec::new()
+    }
+
+    /// 进入本插件范围之前，在界面线程调用一次。`app_in_front` 为真表示面板还没显示、
+    /// 用户原来的 App 仍在前台（全局快捷键、菜单栏直达），可以对它取词。必须很快返回（几百毫秒内）。
+    fn will_enter(&self, _app_in_front: bool) {}
+
+    /// 范围内在搜索框按 ↑ 能调出的历史输入，最近的在前（如翻译过的原文）。
+    fn recall(&self) -> Vec<String> {
         Vec::new()
     }
 }

@@ -217,9 +217,20 @@ pub fn accessibility_trusted() -> bool {
 
 /// 向前台 App 发送 ⌘V。调用方需先确认 `accessibility_trusted()`，否则事件会被系统静默丢弃。
 pub fn send_paste() -> Result<()> {
+    const KEYCODE_V: u16 = 9;
+    send_command_key(KEYCODE_V)
+}
+
+/// 向前台 App 发送 ⌘C（翻译取词的后备方式）。同样需要辅助功能权限。
+pub fn send_copy() -> Result<()> {
+    const KEYCODE_C: u16 = 8;
+    send_command_key(KEYCODE_C)
+}
+
+/// 发送 ⌘ + 某个键（按下、抬起）。修饰键只带 ⌘：用户此刻可能还按着唤起快捷键的 ⌥⇧。
+fn send_command_key(keycode: u16) -> Result<()> {
     const COMBINED_SESSION_STATE: i32 = 0;
     const HID_EVENT_TAP: u32 = 0;
-    const KEYCODE_V: u16 = 9;
     const FLAG_COMMAND: u64 = 0x0010_0000;
 
     // SAFETY: 标准 CoreGraphics 调用；每个 Create 得到的对象都在本函数内 CFRelease。
@@ -230,7 +241,7 @@ pub fn send_paste() -> Result<()> {
         }
         let mut result = Ok(());
         for key_down in [true, false] {
-            let event = CGEventCreateKeyboardEvent(source, KEYCODE_V, key_down);
+            let event = CGEventCreateKeyboardEvent(source, keycode, key_down);
             if event.is_null() {
                 result = Err(anyhow::anyhow!(tr(
                     "CGEventCreateKeyboardEvent 失败",
