@@ -157,11 +157,31 @@ fn snapshot(name: &str) {
         }
         let number = window.windowNumber();
         let path = dir.join(format!("{name}-{number}.png"));
-        let status = std::process::Command::new("screencapture")
-            .args(["-x", "-o", "-l", &number.to_string()])
+        // 按窗口号截（-l）在新系统上对本进程的面板会失败，改按窗口所在区域截。
+        // AppKit 坐标原点在主屏左下角，screencapture -R 的原点在左上角。
+        let frame = window.frame();
+        let screen_height = objc2_app_kit::NSScreen::screens(mtm)
+            .firstObject()
+            .map(|screen| screen.frame().size.height)
+            .unwrap_or_default();
+        let top = screen_height - frame.origin.y - frame.size.height;
+        let rect = format!(
+            "{},{},{},{}",
+            frame.origin.x.round(),
+            top.round(),
+            frame.size.width.round(),
+            frame.size.height.round()
+        );
+        let result = std::process::Command::new("screencapture")
+            .args(["-x", "-R", &rect])
             .arg(&path)
-            .status();
-        crate::trace::log(format!("snapshot {} → {status:?}", path.display()));
+            .output();
+        let outcome = match result {
+            Ok(out) if out.status.success() => "ok".to_string(),
+            Ok(out) => format!("失败：{}", String::from_utf8_lossy(&out.stderr).trim()),
+            Err(err) => format!("启动失败：{err}"),
+        };
+        crate::trace::log(format!("snapshot {} → {outcome}", path.display()));
     }
 }
 
