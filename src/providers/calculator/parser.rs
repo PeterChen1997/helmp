@@ -194,13 +194,18 @@ pub fn evaluate(text: &str) -> Option<Result<f64, CalcError>> {
 }
 
 /// 形似日期或电话号码的输入：用户是在搜它，不是要算它。
-/// - 只有数字和 `-`，且至少两个 `-`：`2026-11-09`、`138-1234-5678`。
+/// - 只有数字和 `-`、至少两个 `-`，且首段至少三位或某段以 0 开头：`2026-11-09`、`138-1234-5678`、`1-02-03`。
+///   普通连减 `10-2-3` 照算。
 /// - 数字/数字/数字且第一段四位：`2026/11/09`。
 fn looks_like_date_or_number(text: &str) -> bool {
     let text = text.trim();
     let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
     let dashes = text.split('-').collect::<Vec<_>>();
-    if dashes.len() >= 3 && dashes.iter().all(|part| digits(part)) {
+    if dashes.len() >= 3
+        && dashes.iter().all(|part| digits(part))
+        && (dashes.first().is_some_and(|first| first.len() >= 3)
+            || dashes.iter().any(|part| part.len() > 1 && part.starts_with('0')))
+    {
         return true;
     }
     let slashes = text.split('/').collect::<Vec<_>>();
@@ -501,13 +506,14 @@ mod tests {
             "138-1234-5678",
             "2026/11/09",
             "２０２６－１１－０９",
+            "1-02-03",
         ] {
             assert_eq!(calc(text), None, "{text:?}");
         }
         // 只排除这两种形状：普通的减法、除法照算。
         assert_eq!(value("10-2"), 8.0);
-        // 代价：纯数字的连减（`10-2-3`）也被当成号码；带空格写就照算。
-        assert_eq!(calc("10-2-3"), None);
+        // 普通连减不能误伤：首段短且没有前导 0 的照算。
+        assert_eq!(value("10-2-3"), 5.0);
         assert_eq!(value("10 - 2 - 3"), 5.0);
         assert_eq!(value("26/11/2"), 26.0 / 11.0 / 2.0);
         assert_eq!(value("2026/11"), 2026.0 / 11.0);
