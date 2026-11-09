@@ -74,17 +74,19 @@ pub fn recent() -> Vec<Entry> {
     entries().lock().expect("history poisoned").clone()
 }
 
+/// 图标拆成能落盘的三个字段：（图片路径，是否文件图标，符号图标）。
+fn stored(icon: &Icon) -> (Option<PathBuf>, bool, Option<(String, Tint)>) {
+    match icon {
+        Icon::File(path) => (Some(path.clone()), true, None),
+        Icon::Image(path) => (Some(path.clone()), false, None),
+        Icon::Symbol { name, tint } => (None, false, Some((name.to_string(), *tint))),
+        Icon::None => (None, false, None),
+    }
+}
+
 /// 记录一次执行。失败只打印，不影响执行本身。
 pub fn record(item: &Item, query: &str, scope: Option<&str>) {
-    let (icon, icon_is_file) = match &item.icon {
-        Icon::File(path) => (Some(path.clone()), true),
-        Icon::Image(path) => (Some(path.clone()), false),
-        _ => (None, false),
-    };
-    let symbol = match &item.icon {
-        Icon::Symbol { name, tint } => Some((name.to_string(), *tint)),
-        _ => None,
-    };
+    let (icon, icon_is_file, symbol) = stored(&item.icon);
     let entry = Entry {
         id: item.id.clone(),
         title: item.title.clone(),
@@ -107,8 +109,25 @@ pub fn record(item: &Item, query: &str, scope: Option<&str>) {
         entries.truncate(MAX);
         entries.clone()
     };
+    save(&snapshot);
+}
+
+/// 给没存图标的旧记录补上图标（升级前写下的记录只存了文件 / 图片图标）。
+pub fn backfill_icon(id: &str, icon: &Icon) {
+    let snapshot = {
+        let mut entries = entries().lock().expect("history poisoned");
+        let Some(entry) = entries.iter_mut().find(|e| e.id == id) else {
+            return;
+        };
+        (entry.icon, entry.icon_is_file, entry.symbol) = stored(icon);
+        entries.clone()
+    };
+    save(&snapshot);
+}
+
+fn save(snapshot: &[Entry]) {
     if let Err(err) = path().and_then(|path| {
-        std::fs::write(&path, serde_json::to_string(&snapshot)?)
+        std::fs::write(&path, serde_json::to_string(snapshot)?)
             .with_context(|| format!("写入 {}", path.display()))
     }) {
         eprintln!("helmp: 保存最近使用失败：{err:#}");

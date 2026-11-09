@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::history;
-use crate::provider::{Action, Item, Provider, Scope};
+use crate::provider::{Action, Icon, Item, Provider, Scope, Tint};
 
 /// 一次查询最多返回的结果数。剪贴板历史不设上限，但列表只展示前这么多条。
 pub const MAX_RESULTS: usize = 200;
@@ -107,6 +107,15 @@ impl Engine {
             .flat_map(|provider| provider.suggestions())
             .collect();
         for entry in history::recent().into_iter().take(RECENT_ON_HOME) {
+            let icon = tile_icon(entry.icon(), || {
+                // 空查询且不在范围里时重查会回到首页本身，跳过。
+                if entry.query.is_empty() && entry.scope.is_none() {
+                    return None;
+                }
+                let icon = self.find(&entry.id, &entry.query, entry.scope.as_deref())?.icon;
+                history::backfill_icon(&entry.id, &icon);
+                Some(icon)
+            });
             let engine = self.clone();
             let (id, query, scope) = (entry.id.clone(), entry.query.clone(), entry.scope.clone());
             items.push(Item {
@@ -116,7 +125,7 @@ impl Engine {
                 badge: RECENT_SECTION.into(),
                 // 位于「等你处理」（900+）与「快捷命令」（<800）之间。
                 score: 850,
-                icon: entry.icon(),
+                icon,
                 action: Action::new(move || {
                     let item = engine
                         .find(&id, &query, scope.as_deref())
@@ -182,6 +191,21 @@ impl Engine {
     }
 }
 
+/// 「最近使用」格子的图标：记录里存的优先；旧记录没存就按原结果现查一次（查到后写回历史）；
+/// 都没有时用通用图标，格子里不能是一块空白。
+fn tile_icon(stored: Icon, live: impl FnOnce() -> Option<Icon>) -> Icon {
+    if stored != Icon::None {
+        return stored;
+    }
+    match live() {
+        Some(icon) if icon != Icon::None => icon,
+        _ => Icon::Symbol {
+            name: "rotate-ccw",
+            tint: Tint::Graphite,
+        },
+    }
+}
+
 /// 按分数排序后按分组聚拢：分组的先后由组内最高分决定，组内按分数、再按标题。
 fn group(mut items: Vec<Item>) -> Vec<Item> {
     items.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
@@ -208,6 +232,31 @@ mod tests {
             score,
             ..Item::blank()
         }
+    }
+
+    #[test]
+    fn recent_tiles_never_render_blank() {
+        // 首页「最近使用」是图标平铺：升级前的旧记录没存图标，格子里会是一块空白。
+        let file = Icon::File("/Applications/WeChat.app".into());
+        let symbol = Icon::Symbol { name: "languages", tint: Tint::Teal };
+        // 存了图标就不再现查（现查要跑一次完整查询）。
+        assert_eq!(tile_icon(file.clone(), || panic!("不该现查")), file);
+        // 旧记录：按原结果现查到的图标补上。
+        assert_eq!(tile_icon(Icon::None, || Some(symbol.clone())), symbol);
+        // 原结果已经找不到，或者它本身就没图标：用通用图标，不能是空白。
+        for live in [None, Some(Icon::None)] {
+            assert!(matches!(tile_icon(Icon::None, || live), Icon::Symbol { .. }));
+        }
+    }
+
+    #[test]
+    fn fallback_tile_icon_exists_in_bundled_assets() {
+        use gpui_kit::AssetSource as _;
+        let Icon::Symbol { name, .. } = tile_icon(Icon::None, || None) else {
+            unreachable!()
+        };
+        let path = format!("icons/{name}.svg");
+        assert!(gpui_kit::assets::AllAssets.load(&path).unwrap().is_some());
     }
 
     #[test]
