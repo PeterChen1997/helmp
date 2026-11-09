@@ -6,7 +6,7 @@
 //! - API Key 不在这里：存在钥匙串，见 `ModelConfig::keychain_account`。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use anyhow::{Context as _, Result};
@@ -384,6 +384,10 @@ fn store() -> &'static Store {
             Err(err) => {
                 // 配置坏了不能让整个 App 起不来：用默认值，并大声说明。
                 eprintln!("helmp: 读取配置失败，使用默认配置：{err:#}");
+                match path().and_then(|path| back_up_unreadable(&path)) {
+                    Ok(backup) => eprintln!("helmp: 原配置已备份到 {}", backup.display()),
+                    Err(err) => eprintln!("helmp: 备份读不出的配置失败：{err:#}"),
+                }
                 Config::default()
             }
         };
@@ -396,6 +400,16 @@ fn store() -> &'static Store {
 
 fn path() -> Result<PathBuf> {
     Ok(crate::paths::data_dir()?.join("config.json"))
+}
+
+/// 读不出的配置先复制一份：之后任何一次 `update`（比如引导页点「继续」）都会用默认配置覆盖原文件，
+/// 手改配置时少了一个逗号，不该让模型、快捷键等全部设置跟着丢掉。
+fn back_up_unreadable(path: &Path) -> Result<PathBuf> {
+    // 固定文件名：配置一直坏着时每次启动（包括每次 CLI 调用）都会走到这里，不能越积越多。
+    let backup = path.with_extension("json.unreadable");
+    std::fs::copy(path, &backup)
+        .with_context(|| format!("复制 {} 到 {}", path.display(), backup.display()))?;
+    Ok(backup)
 }
 
 fn load() -> Result<Config> {
@@ -462,6 +476,21 @@ pub fn extension_enabled(provider_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_config_is_kept_before_defaults_overwrite_it() {
+        // 解析失败时用默认配置启动，下一次保存就会覆盖原文件；先备份，用户手改坏的配置才找得回来。
+        let dir = std::env::temp_dir().join(format!("helmp-config-backup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let broken = r#"{"models":[{"id":"m1","name":"我的模型",}]"#;
+        std::fs::write(&path, broken).unwrap();
+        let backup = back_up_unreadable(&path).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), broken);
+        assert_eq!(backup.parent(), Some(dir.as_path()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn old_files_missing_fields_still_load() {
