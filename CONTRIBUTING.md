@@ -40,6 +40,7 @@ CI runs the same two commands on macOS. Tests that depend on your own machine (r
 - `query()` runs on every keystroke and must only read memory. Do IO in `start()` or on a background thread.
 - Tests should say why the behavior matters (see the comments in existing tests), so they break when the intent breaks.
 - New modules implement the `Provider` trait; see [docs/architecture.md](docs/architecture.md).
+- The interface is bilingual. Write every user-visible string as `tr("中文", "English")` (or `trf!` with arguments) from `src/i18n.rs`, and update both `README.md` and `README.zh-CN.md` (and the matching `docs/` pages) when behavior changes.
 
 ### Commit messages
 
@@ -91,6 +92,7 @@ CI 在 macOS 上跑的就是这两条。依赖本机环境的测试（真实的 
 - `query()` 每次按键都会调用，只能读内存；IO 放到 `start()` 或后台线程里。
 - 测试要写清楚「这个行为为什么重要」（参考现有测试里的注释），这样意图被破坏时它才会失败。
 - 新模块实现 `Provider` trait，见 [docs/architecture.md](docs/architecture.md)。
+- 界面是中英双语的：所有给用户看的文字都写成 `src/i18n.rs` 里的 `tr("中文", "English")`（带参数用 `trf!`）；行为有变化时，`README.md`、`README.zh-CN.md` 和 `docs/` 里对应的页面要一起更新。
 
 ### 提交信息
 

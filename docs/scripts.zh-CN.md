@@ -45,7 +45,7 @@ date "+%Y-%m-%d %H:%M:%S %Z"
 | `description` | 否 | 显示在副标题和详情里 |
 | `author` | 否 | 能解析，暂不显示 |
 | `argument1` … `argument3` | 否 | 参数，见下文 |
-| `needsConfirmation` | 否 | `true` 或 `false`。为 `true` 时，只有查询以 ` !` 结尾才会执行 |
+| `needsConfirmation` | 否 | `true` 或 `false`。为 `true` 时，回车后先在面板里显示确认页，再按一次回车才运行，按 <kbd>esc</kbd> 取消。查询以 ` !`（空格加感叹号）结尾时跳过确认页、直接运行 |
 | `currentDirectoryPath` | 否 | 工作目录。支持 `~` 和 `~/…`，相对路径按脚本所在目录解析。默认是脚本所在目录 |
 | `platform` | 否 | 写了的话必须包含 `macOS` |
 | `icon` | 否 | 能解析，暂不显示；目前所有脚本都用同一个终端图标 |

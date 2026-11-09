@@ -4,4 +4,5 @@ target/
 # 生图探索原图（56 MB），对比页用 design/preview 里的压缩版
 design/mockups/
 __pycache__/
+.playwright-mcp/
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Helmp · macOS launcher with an agent switcher</title>
-  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, screenshot OCR and translation with your own model. No account, no telemetry.">
+  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, screenshot OCR, translation with your own model, a calculator and system commands. English and Chinese interface. No account, no telemetry.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0b0d16" media="(prefers-color-scheme: dark)">
@@ -70,8 +70,8 @@
         <span lang="en">A native macOS launcher that knows which coding agent is waiting for you.</span>
         <span lang="zh-CN">原生 macOS 启动器，还知道哪个 coding agent 在等你。</span>
       </p>
-      <p class="lede" lang="en">Find apps by pinyin, jump to the Claude Code or Codex session that needs you, search your clipboard, pull text out of screenshots and translate with your own model. Written in Rust with GPUI. No account, no telemetry.</p>
-      <p class="lede" lang="zh-CN">拼音搜应用，一键跳到正在等你的 Claude Code / Codex 会话，翻剪贴板历史，识别截图里的文字，用你自己的模型翻译。Rust + GPUI 编写，不用登录，没有遥测。</p>
+      <p class="lede" lang="en">Find apps by pinyin, jump to the Claude Code or Codex session that needs you, search your clipboard, pull text out of screenshots, translate with your own model, and do quick math. Written in Rust with GPUI. No account, no telemetry.</p>
+      <p class="lede" lang="zh-CN">拼音搜应用，一键跳到正在等你的 Claude Code / Codex 会话，翻剪贴板历史，识别截图里的文字，用你自己的模型翻译，顺手算个数。Rust + GPUI 编写，不用登录，没有遥测。</p>
       <div class="cta">
         <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp">
           <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -84,8 +84,8 @@
         </a>
       </div>
       <p class="meta">
-        <span lang="en">macOS 15 or later · MIT licensed · Early preview</span>
-        <span lang="zh-CN">macOS 15 及以上 · MIT 协议 · 早期预览版</span>
+        <span lang="en">macOS 15 or later · English &amp; 简体中文 · MIT licensed · Early preview</span>
+        <span lang="zh-CN">macOS 15 及以上 · 中英双语界面 · MIT 协议 · 早期预览版</span>
       </p>
 
       <!-- 用 HTML 画的面板示意（Agent 会话视图），不是截图。 -->
@@ -202,8 +202,8 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 10h8M8 14h5"/></svg>
           </div>
           <h3><span lang="en">Screenshot to text</span><span lang="zh-CN">截图识字</span></h3>
-          <p lang="en">Select a region and get its text, in Chinese and English, with Apple Vision on your Mac. <kbd>⌘T</kbd> sends it straight to Translate.</p>
-          <p lang="zh-CN">框选一块区域，用本机的 Apple Vision 识别其中的中英文。<kbd>⌘T</kbd> 直接把结果带进翻译。</p>
+          <p lang="en">Select a region and get its text with Apple Vision on your Mac, line breaks and paragraphs intact. QR codes are read too. Chinese and English by default, nine more languages in Settings. <kbd>⌘T</kbd> sends the text to Translate.</p>
+          <p lang="zh-CN">框选一块区域，用本机的 Apple Vision 识别文字，保留换行和分段，图里的二维码也能读出来。默认识别中英文，设置里还能再加九种语言。<kbd>⌘T</kbd> 把结果带进翻译。</p>
         </article>
 
         <article class="card">
@@ -211,8 +211,35 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M8.5 4v2M6 6c.6 3 2.6 5.4 5 6.5M11 6c-.7 3.2-3 5.8-6 7"/><path d="m12 20 4-9 4 9M13.4 17h5.2"/></svg>
           </div>
           <h3><span lang="en">Translate with your own model</span><span lang="zh-CN">用你自己的模型翻译</span></h3>
-          <p lang="en">Anthropic, any OpenAI-compatible endpoint, or Ollama on your Mac. Keys stay in the Keychain. Helmp picks up the selected text, and <kbd>⌘↵</kbd> puts the translation back in its place.</p>
-          <p lang="zh-CN">支持 Anthropic、任意 OpenAI 兼容接口和本机 Ollama，Key 存在钥匙串里。自动带上选中的文字，<kbd>⌘↵</kbd> 把译文替换回原处。</p>
+          <p lang="en">Anthropic, any OpenAI-compatible endpoint, or Ollama on your Mac. Keys stay in the Keychain. It translates as you type, picks up the selected text, and <kbd>⌘↵</kbd> puts the translation back in its place. <kbd>⌘R</kbd> reads it aloud.</p>
+          <p lang="zh-CN">支持 Anthropic、任意 OpenAI 兼容接口和本机 Ollama，Key 存在钥匙串里。边输入边翻译，自动带上选中的文字，<kbd>⌘↵</kbd> 把译文替换回原处，<kbd>⌘R</kbd> 朗读译文。</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon icon-orange">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7h7"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01M8.5 15h.01M12 15h.01M15.5 15h.01M8.5 18h.01M12 18h.01M15.5 18h.01"/></svg>
+          </div>
+          <h3><span lang="en">A calculator in the search bar</span><span lang="zh-CN">搜索框就是计算器</span></h3>
+          <p lang="en">Type <code>(12+8)*1.5</code> or <code>sqrt(2)</code> and the answer is the first result. Return copies it. Full-width symbols and <code>×</code> <code>÷</code> work too.</p>
+          <p lang="zh-CN">输入 <code>(12+8)*1.5</code> 或 <code>sqrt(2)</code>，答案直接排在第一条，回车复制。全角符号和 <code>×</code> <code>÷</code> 也认。</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon icon-blue">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5s1.2-6.1 3.5-8.5z"/></svg>
+          </div>
+          <h3><span lang="en">Web search fallback</span><span lang="zh-CN">搜不到就上网搜</span></h3>
+          <p lang="en">Any query can go to Google, Baidu or GitHub in your browser. Reorder the engines, turn them off, or add your own URL template.</p>
+          <p lang="zh-CN">任何输入都能一键交给 Google、百度或 GitHub，在浏览器里打开。引擎可以排序、关闭，也能添加自己的网址模板。</p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon icon-red">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
+          </div>
+          <h3><span lang="en">System commands</span><span lang="zh-CN">系统命令</span></h3>
+          <p lang="en">Lock the screen, sleep, toggle dark mode, empty the Trash, restart and more. Anything you can't undo asks for confirmation first.</p>
+          <p lang="zh-CN">锁屏、睡眠、切换深色模式、清空废纸篓、重启等。无法撤销的命令会先让你确认。</p>
         </article>
 
         <article class="card">
@@ -220,17 +247,17 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9.5 13-2 2 2 2M14.5 13l2 2-2 2"/></svg>
           </div>
           <h3><span lang="en">Your Raycast scripts just work</span><span lang="zh-CN">Raycast 脚本直接能用</span></h3>
-          <p lang="en">Drop a script with <code>@raycast.*</code> headers into the scripts folder. Any language, arguments become a form, and every run is capped at 30 seconds.</p>
-          <p lang="zh-CN">带 <code>@raycast.*</code> 头注释的脚本放进脚本目录就能用。语言不限，参数自动变成表单，每次运行最多 30 秒。</p>
+          <p lang="en">Drop a script with <code>@raycast.*</code> headers into the scripts folder. Any language, arguments become a form, risky scripts ask first, and every run is capped at 30 seconds.</p>
+          <p lang="zh-CN">带 <code>@raycast.*</code> 头注释的脚本放进脚本目录就能用。语言不限，参数自动变成表单，危险脚本运行前先确认，每次运行最多 30 秒。</p>
         </article>
 
         <article class="card">
           <div class="card-icon icon-green">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg>
           </div>
-          <h3><span lang="en">Lives in the menu bar</span><span lang="zh-CN">住在菜单栏里</span></h3>
-          <p lang="en">No Dock icon. An orange dot appears on the menu bar icon when a session needs you, and the menu lists those sessions.</p>
-          <p lang="zh-CN">没有 Dock 图标。有会话在等你时，菜单栏图标会亮起一个橙点，菜单里直接列出这些会话。</p>
+          <h3><span lang="en">Menu bar and <code>helmp://</code> links</span><span lang="zh-CN">菜单栏与 <code>helmp://</code> 链接</span></h3>
+          <p lang="en">No Dock icon. An orange dot appears on the menu bar icon when a session needs you. Scripts and Shortcuts can open Helmp with <code>helmp://</code> links.</p>
+          <p lang="zh-CN">没有 Dock 图标。有会话在等你时，菜单栏图标会亮起一个橙点。脚本和快捷指令可以用 <code>helmp://</code> 链接调出 Helmp。</p>
         </article>
 
         <article class="card">
@@ -238,8 +265,8 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
           </div>
           <h3><span lang="en">Keyboard first, IME friendly</span><span lang="zh-CN">键盘优先，不和输入法打架</span></h3>
-          <p lang="en">Global hotkeys for every module, all configurable. The keyboard switches to ABC while the panel is open and back to your input method when it closes.</p>
-          <p lang="zh-CN">每个模块都有全局快捷键，都能改。面板打开时自动切到英文 ABC 键盘，收起时切回原来的输入法。</p>
+          <p lang="en">Global hotkeys for every module, all configurable, and Helmp tells you right away if a new one clashes with something. The keyboard switches to ABC while the panel is open and back to your input method when it closes.</p>
+          <p lang="zh-CN">每个模块都有全局快捷键，都能改；新设的快捷键和别的冲突时当场告诉你。面板打开时自动切到英文 ABC 键盘，收起时切回原来的输入法。</p>
         </article>
       </div>
     </section>
@@ -302,7 +329,7 @@ open target/release/Helmp.app</code></pre>
             <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd><span lang="en">Move selection</span><span lang="zh-CN">选择</span></dd>
             <dt><kbd>↵</kbd></dt><dd><span lang="en">Run</span><span lang="zh-CN">执行</span></dd>
             <dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd><span lang="en">More actions</span><span lang="zh-CN">更多操作</span></dd>
-            <dt><kbd>⇥</kbd></dt><dd><span lang="en">Next filter</span><span lang="zh-CN">切换筛选</span></dd>
+            <dt><kbd>⇥</kbd></dt><dd><span lang="en">Enter the extension / next filter</span><span lang="zh-CN">进入扩展 / 切换筛选</span></dd>
             <dt><kbd>esc</kbd></dt><dd><span lang="en">Back, then hide</span><span lang="zh-CN">逐层返回，最后收起</span></dd>
             <dt><kbd>⌘</kbd><kbd>,</kbd></dt><dd><span lang="en">Settings</span><span lang="zh-CN">设置</span></dd>
           </dl>
@@ -335,13 +362,13 @@ open target/release/Helmp.app</code></pre>
         </div>
         <div class="glass privacy-item">
           <h3><span lang="en">No phoning home</span><span lang="zh-CN">不往外发数据</span></h3>
-          <p lang="en">No account, analytics, telemetry or crash reports. The only requests Helmp makes go to the model you configured, when you translate.</p>
-          <p lang="zh-CN">没有账号、统计、遥测和崩溃上报。Helmp 唯一会发的请求，是你翻译时发给你自己配置的模型。</p>
+          <p lang="en">No account, analytics, telemetry or crash reports. The only requests Helmp makes go to the model you configured for Translate. Web searches simply open in your browser.</p>
+          <p lang="zh-CN">没有账号、统计、遥测和崩溃上报。Helmp 唯一会发的请求，只发往你为翻译配置的模型。网页搜索只是在浏览器里打开网址。</p>
         </div>
         <div class="glass privacy-item">
           <h3><span lang="en">Read-only agents</span><span lang="zh-CN">Agent 只读</span></h3>
-          <p lang="en">Session files of Claude Code and Codex are only read, and only their last 64 KB. Nothing is written, nothing is hooked.</p>
-          <p lang="zh-CN">Claude Code 和 Codex 的会话文件只读，而且只读末尾 64 KB。不写入，不挂 hooks。</p>
+          <p lang="en">Session files of Claude Code and Codex are only read, and long logs only from their last 64 KB. Nothing is written, nothing is hooked.</p>
+          <p lang="zh-CN">Claude Code 和 Codex 的会话文件只读，长日志也只读末尾 64 KB。不写入，不挂 hooks。</p>
         </div>
       </div>
     </section>
@@ -362,8 +389,8 @@ open target/release/Helmp.app</code></pre>
         </details>
         <details class="glass">
           <summary><span lang="en">Is the app in English?</span><span lang="zh-CN">界面是中文的吗？</span></summary>
-          <p lang="en">The interface is currently in Simplified Chinese. An English interface is in progress.</p>
-          <p lang="zh-CN">目前界面是简体中文，英文界面正在做。</p>
+          <p lang="en">Yes. The interface comes in English and Simplified Chinese and follows your system language. Switch it any time in Settings › General › Language. Chinese app names and pinyin search work either way.</p>
+          <p lang="zh-CN">界面有简体中文和英文两种，默认跟随系统语言，随时可以在「设置 › 通用 › 语言」里切换。无论哪种语言，中文应用名和拼音都照样能搜。</p>
         </details>
         <details class="glass">
           <summary><span lang="en">Which Macs does it run on?</span><span lang="zh-CN">支持哪些 Mac？</span></summary>
@@ -379,6 +406,16 @@ open target/release/Helmp.app</code></pre>
           <summary><span lang="en">Which agents are supported?</span><span lang="zh-CN">支持哪些 agent？</span></summary>
           <p lang="en">Claude Code and Codex, both the command-line tools and the desktop apps. Jumping to a terminal session selects the exact tab in iTerm2 and Terminal.app; for other terminals Helmp brings the app to the front.</p>
           <p lang="zh-CN">Claude Code 和 Codex，命令行和桌面 App 都支持。跳转终端里的会话时，iTerm2 和系统终端会精确选中对应的标签页；其他终端则把 App 切到前台。</p>
+        </details>
+        <details class="glass">
+          <summary><span lang="en">Does Translate read my clipboard?</span><span lang="zh-CN">翻译会动我的剪贴板吗？</span></summary>
+          <p lang="en">Helmp first asks the front app for the selected text through Accessibility. Only if the app doesn't support that does Helmp press <kbd>⌘C</kbd> for you, read the text, and put your previous clipboard back. That copy is never added to the clipboard history.</p>
+          <p lang="zh-CN">Helmp 先通过辅助功能接口向前台 App 要选中的文字。只有 App 不支持这种方式时，才会替你按一下 <kbd>⌘C</kbd>，读出文字后把剪贴板原来的内容放回去，这次复制也不会进剪贴板历史。</p>
+        </details>
+        <details class="glass">
+          <summary><span lang="en">Can I open Helmp from a script or Shortcuts?</span><span lang="zh-CN">能从脚本或快捷指令里调出 Helmp 吗？</span></summary>
+          <p lang="en">Yes, with <code>helmp://</code> links: <code>helmp://show?q=wx</code> opens the panel with a query, <code>helmp://scope/translate?q=hello</code> goes straight to Translate, and <code>helmp://settings/models</code> opens a settings page. See <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">the deep link reference</a>.</p>
+          <p lang="zh-CN">可以，用 <code>helmp://</code> 链接：<code>helmp://show?q=wx</code> 唤起面板并带上查询，<code>helmp://scope/translate?q=hello</code> 直接进入翻译，<code>helmp://settings/models</code> 打开设置的某一页。完整说明见<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">深链接文档</a>。</p>
         </details>
         <details class="glass">
           <summary><span lang="en">Why the name?</span><span lang="zh-CN">为什么叫 Helmp？</span></summary>

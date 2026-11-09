@@ -2,7 +2,7 @@
 
 English · [简体中文](privacy.zh-CN.md)
 
-Short version: Helmp has no account, no telemetry, no crash reporting and no update check. Everything it stores stays in one folder on your Mac. The only network requests it makes are the model calls you configure for Translate.
+Short version: Helmp has no account, no telemetry, no crash reporting and no update check. Everything it stores stays in one folder on your Mac. The only network requests it makes go to the model endpoints you configure for Translate.
 
 This page describes what the code does today. If you find a mismatch, please open an issue.
 
@@ -12,7 +12,7 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 
 | Path | Contents | How to remove it |
 |---|---|---|
-| `config.json` | Your settings: hotkeys, enabled modules, model names / endpoints / model ids, clipboard and screenshot options, extra script folders. **No API keys.** | Delete the file to reset settings |
+| `config.json` | Your settings: interface language, hotkeys, enabled modules and aliases, model names / endpoints / model ids, clipboard and screenshot options, web search engines (including custom URL templates), extra script folders. **No API keys.** | Delete the file to reset settings |
 | `history.json` | The "Recent" row on the home view: up to 30 entries, each with the item's title, subtitle, icon and **the query you typed** to find it | Delete the file |
 | `clipboard.sqlite` | Clipboard history: text, file paths, the name and bundle id of the app you copied from, and the time. No item limit unless you set a retention period | Settings › Clipboard, or delete the file |
 | `clipboard-images/` | Images you copied, named by content hash | Removed with the clipboard history |
@@ -48,23 +48,30 @@ They are written when you leave the API Key field, press Return, or test the con
   - Process information (`proc_pidinfo`) of those sessions, and the Git branch of their working folders.
 
   Helmp never writes to these folders, never deletes anything and installs no hooks. You can turn each source off in Settings › Agents.
-- **Selected text.** Only when you open Translate with an empty input and a model is configured, Helmp asks the front app for its selected text through the Accessibility API. It's kept in memory for about a second and a half.
+- **Selected text.** Each time you open Translate without text of its own (hotkey, menu bar, prefix, or a `helmp://scope/translate` link without `q`), Helmp asks the front app for its selected text through the Accessibility API. Some apps (Chrome, Electron apps and others) don't expose the selection that way. For those, and only when Helmp was opened while that app was still in front, Helmp presses <kbd>⌘C</kbd> for you, reads the copied text, and then puts the previous clipboard contents back. Clipboard history recording is paused during this, so the copied selection is not recorded. Data the system can't hand back (for example a file promise) can't be restored. If the app reports that nothing is selected, Helmp doesn't press <kbd>⌘C</kbd>. Without Accessibility permission none of this happens. The text stays in memory until you open Translate again.
+- **Translation history.** Your last 20 translations (source text, result, languages, model) are kept in memory so <kbd>↑</kbd> can bring them back and a repeated request doesn't call the model again. They are never written to disk and are gone when Helmp quits.
+- **Keyboard shortcut settings.** While you record a hotkey in Settings, Helmp reads `~/Library/Preferences/com.apple.symbolichotkeys.plist` (read-only) to find system shortcuts that would conflict.
+- **Images for OCR.** Screenshots, clipboard images and files you pass to `ocr` are processed on your Mac with Apple Vision, including QR code and barcode detection.
 - **Clipboard.** Polled every 300 ms to build the history (see the rules above). Turn the history off in Settings › Clipboard.
 
 ## Network
 
-- **Translate** sends the text you translate, plus a short instruction, to the endpoint you configured: Anthropic, an OpenAI-compatible URL, or Ollama (`http://localhost:11434` by default). "Test connection" in Settings sends a small request to the same endpoint. Each request has a 30-second timeout. Helmp doesn't route these requests through any server of its own; there isn't one.
-- Nothing else. There is no analytics, telemetry, crash reporting or update check. "Check for Updates" in the menu currently just shows the installed version.
+- **Translate** sends the text you translate, plus a short instruction, to the endpoint you configured: Anthropic, an OpenAI-compatible URL, or Ollama (`http://localhost:11434` by default). Translation starts automatically when you pause typing, so a request goes out for each pause, not only when you press Return; an identical request is answered from the in-memory history instead. "Test connection" in Settings sends a small request to the same endpoint. Each request has a 30-second timeout. Helmp doesn't route these requests through any server of its own; there isn't one.
+- **Settings › Models** checks whether each Ollama endpoint you added is running (`GET <endpoint>/api/tags`, 2-second timeout).
+- Nothing else. There is no analytics, telemetry, crash reporting or update check. "Check for Updates" in the menu currently just shows the installed version, and the "Automatically check for updates" switch in Settings has no effect yet.
 
-Things that may reach the network because *you* asked for them: opening a link from the clipboard history, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
+Things that may reach the network because *you* asked for them: web search results (<kbd>↵</kbd> opens the search URL in your default browser; Helmp itself sends nothing, and the subtitle shows the exact URL), opening a link from the clipboard history or from a QR code, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
+
+"Read aloud" in Translate uses the macOS `say` command. `helmp://` deep links are handled locally.
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
-| Accessibility | Simulate <kbd>⌘V</kbd> to paste into the front app; read and replace selected text for Translate |
+| Accessibility | Simulate <kbd>⌘V</kbd> to paste into the front app; read selected text for Translate (simulating <kbd>⌘C</kbd> when needed) and replace it; press <kbd>⌃⌘Q</kbd> for Lock Screen |
 | Screen Recording | Region screenshots (`screencapture -i`) |
 | Automation (iTerm2, Terminal) | Select the tab of an agent session when you jump to it |
+| Automation (System Events, Finder) | System commands: Lock Screen, Toggle Dark Mode, Restart, Shut Down and Log Out go through System Events; Empty Trash goes through Finder |
 
 Helmp checks permissions without triggering system prompts. Every feature that needs one degrades with a message instead of failing silently.
 

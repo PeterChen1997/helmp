@@ -45,7 +45,7 @@ Every field also has a `@helmp.<field>` spelling. If a script has both, the `@he
 | `description` | no | Shown in the row's subtitle and the detail pane |
 | `author` | no | Parsed but not displayed |
 | `argument1` … `argument3` | no | Arguments, see below |
-| `needsConfirmation` | no | `true` or `false`. When `true`, the script only runs if the query ends with ` !` |
+| `needsConfirmation` | no | `true` or `false`. When `true`, <kbd>↵</kbd> first shows a confirmation page in the panel; press <kbd>↵</kbd> again to run the script, or <kbd>esc</kbd> to cancel. Ending the query with ` !` (space and exclamation mark) skips the page |
 | `currentDirectoryPath` | no | Working directory. `~` and `~/…` are expanded, relative paths are resolved against the script's folder. Default: the script's folder |
 | `platform` | no | If present, it must include `macOS` |
 | `icon` | no | Parsed but not displayed yet; every script uses the same terminal icon for now |

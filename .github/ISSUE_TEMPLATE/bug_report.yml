@@ -36,8 +36,13 @@ body:
         - Clipboard history / 剪贴板历史
         - Screenshot & OCR / 截图识别
         - Translate & models / 翻译与模型
+        - Calculator / 计算器
+        - Web search / 网页搜索
+        - System commands / 系统命令
         - Script commands / 脚本命令
         - Menu bar & hotkeys / 菜单栏与快捷键
+        - Deep links (helmp://) / 深链接
+        - Interface language / 界面语言
         - Settings & onboarding / 设置与引导
         - Build & packaging / 构建与打包
         - Other / 其他
@@ -69,4 +74,4 @@ body:
     id: extra
     attributes:
       label: Anything else? / 其他补充
-      description: Screenshots, related settings, input method, terminal app... / 截图、相关设置、输入法、所用终端等。
+      description: Screenshots, interface language, related settings, input method, terminal app... / 截图、界面语言、相关设置、输入法、所用终端等。

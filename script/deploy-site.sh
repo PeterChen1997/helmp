@@ -76,7 +76,7 @@ trap 'rm -f "$refresh_list"' EXIT
   done
 } > "$refresh_list"
 
-echo "==> 将上传到 bucket=$BUCKET（共 ${#files[@]} 个文件）："
+echo "==> 将上传到 bucket=${BUCKET}（共 ${#files[@]} 个文件）："
 for rel in "${files[@]}"; do
   echo "    ${KEY_PREFIX}${rel}"
 done
@@ -89,7 +89,7 @@ if $dry_run; then
 fi
 
 if [[ ! -x "$QSHELL" ]]; then
-  echo "中止：找不到可执行的 qshell：$QSHELL（可用环境变量 QSHELL 指定）" >&2
+  echo "中止：找不到可执行的 qshell：${QSHELL}（可用环境变量 QSHELL 指定）" >&2
   exit 1
 fi
 
