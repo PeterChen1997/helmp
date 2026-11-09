@@ -125,7 +125,8 @@ impl Engine {
                 .enabled()
                 .flat_map(|provider| provider.query(query))
                 .collect();
-            group(items)
+            let recent: Vec<String> = history::recent().into_iter().map(|e| e.id).collect();
+            group_preferring(items, &recent)
         })
     }
 
@@ -272,8 +273,26 @@ fn tile_icon(stored: Icon, live: impl FnOnce() -> Option<Icon>) -> Icon {
 }
 
 /// 按分数排序后按分组聚拢：分组的先后由组内最高分决定，组内按分数、再按标题。
-fn group(mut items: Vec<Item>) -> Vec<Item> {
-    items.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
+fn group(items: Vec<Item>) -> Vec<Item> {
+    group_preferring(items, &[])
+}
+
+/// 同 [`group`]，但分数相同的结果里，最近用过的排前（`recent` 新的在前）。
+/// 只在同一档内调整：字面前缀永远压过拼音模糊之类的档位规则不变，
+/// 但打 `term` 时常用的「终端」会排在没用过的 Termius 前面。
+fn group_preferring(mut items: Vec<Item>, recent: &[String]) -> Vec<Item> {
+    let used = |item: &Item| {
+        recent
+            .iter()
+            .position(|id| id == &item.id)
+            .unwrap_or(usize::MAX)
+    };
+    items.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| used(a).cmp(&used(b)))
+            .then_with(|| a.title.cmp(&b.title))
+    });
     let mut order: Vec<String> = Vec::new();
     for item in &items {
         if !order.contains(&item.badge) {
@@ -335,7 +354,10 @@ mod tests {
         // 首页小节标题就是分组名：英文界面不能冒出中文标题；三个分组名也不能相同，否则会被并成一组。
         use crate::i18n::{Lang, with_lang};
         let names = || [recent_section(), waiting_section(), commands_section()];
-        assert_eq!(with_lang(Lang::Zh, names), ["最近使用", "等你处理", "快捷命令"]);
+        assert_eq!(
+            with_lang(Lang::Zh, names),
+            ["最近使用", "等你处理", "快捷命令"]
+        );
         let en = with_lang(Lang::En, names);
         assert_eq!(en, ["Recent", "Waiting for You", "Commands"]);
         assert!(en[0] != en[1] && en[1] != en[2] && en[0] != en[2]);
@@ -362,6 +384,26 @@ mod tests {
         assert!(engine.is_started("slow-index"));
         // 没有这个插件（如被停用）时不能一直显示「正在索引」。
         assert!(engine.is_started("not-registered"));
+    }
+
+    #[test]
+    fn recently_used_wins_ties_but_never_beats_a_better_match() {
+        // 「常用的排前」：同样是前缀命中，用户天天开的「终端」不该因为字母序排在没用过的 Termius 后面；
+        // 但最近用过不能压过更好的匹配，否则打 wx 会先出微信开发者工具。
+        let mut termius = item("Termius", "应用", 900);
+        termius.id = "apps:termius".into();
+        let mut terminal = item("终端", "应用", 900);
+        terminal.id = "apps:terminal".into();
+        let mut devtools = item("微信开发者工具", "应用", 750);
+        devtools.id = "apps:devtools".into();
+        let recent = ["apps:devtools".to_string(), "apps:terminal".to_string()];
+        let grouped = group_preferring(vec![termius, devtools, terminal], &recent);
+        let titles: Vec<_> = grouped.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["终端", "Termius", "微信开发者工具"]);
+        // 没有使用记录时仍按标题排，结果稳定。
+        let plain = group_preferring(vec![item("b", "应用", 900), item("a", "应用", 900)], &[]);
+        let titles: Vec<_> = plain.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["a", "b"]);
     }
 
     #[test]
