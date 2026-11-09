@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! helmp://show[?q=文字]          唤起面板，可带查询
-//! helmp://scope/<id>[?q=文字]    进入某个扩展（translate、clipboard、agents、screenshot…）
+//! helmp://scope/<id>[?q=文字]    进入某个扩展（translate、clipboard、agents）
 //! helmp://settings[/<页面>]      打开设置（general、extensions、models、agents、clipboard、screenshot、appearance、about）
 //! helmp://hide                   收起面板
 //! ```

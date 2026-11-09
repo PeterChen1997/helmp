@@ -89,6 +89,19 @@ fn set_paused_until(at: Instant) {
     *PAUSED_UNTIL.lock().expect("clipboard pause poisoned") = Some(at);
 }
 
+/// 是否采集系统剪贴板。命令行（`helmp query` / `run`）是一次性进程，只读历史，
+/// 不能顺手把用户当前的剪贴板写进历史——脚本里调 CLI 时用户根本不知道。
+static CAPTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 在 `start` 之前调用：之后启动的剪贴板插件只打开历史库，不采集也不监听。
+pub fn disable_capture() {
+    CAPTURE.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn capture_enabled() -> bool {
+    CAPTURE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 fn recording_paused() -> bool {
     PAUSED_UNTIL
         .lock()
@@ -198,6 +211,9 @@ impl Provider for Clipboard {
         let mut retention = config.clipboard.retention_days;
         self.inner.prune(&config.clipboard)?;
         let mut pruned_at = Instant::now();
+        if !capture_enabled() {
+            return Ok(());
+        }
 
         // 预热 NSWorkspace / 辅助功能查询：首次调用有上百毫秒的一次性初始化，别让第一次按键来付。
         let _ = View::now();

@@ -349,7 +349,7 @@ impl WebSearchConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SystemCommandsConfig {
-    /// 清空废纸篓、重启、关机、注销、退出所有应用：查询末尾加 ` !` 才执行。
+    /// 清空废纸篓、重启、关机、注销、退出所有应用：先出确认页，确认后才执行（查询末尾加 ` !` 可跳过）。
     pub confirm_dangerous: bool,
 }
 

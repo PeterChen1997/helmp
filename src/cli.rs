@@ -34,6 +34,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
 }
 
 fn start(engine: &Engine) {
+    crate::providers::clipboard::disable_capture();
     for (id, err) in engine.start_blocking() {
         eprintln!(
             "helmp: {}",
