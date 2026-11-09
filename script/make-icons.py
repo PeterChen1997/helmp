@@ -1,9 +1,10 @@
 """从生图工具生成的图标原图制作全部图标，菜单栏图标直接取自原图里的白色标志，保证一致。
 
-用法：python3 -I script/make-icons.py design/assets/helmp-icon-v3.png resources/
+用法：python3 -I script/make-icons.py design/assets/helmp-icon-v3.png resources/ design/assets/menubar-glyph.png
 产物：AppIcon.icns / AppIcon-1024.png / AppIcon-64.png、menubar-template.png（18px）/ @2x（36px）
 
 原图要求：满版方图（背景铺满四边，没有圆角和白边），中间一个白色标志（H + 星芒）。
+菜单栏图标单独用一张生图的单色字形（白底黑字，SF Symbols 风格），App 图标里的立体标志缩到 18pt 太糊。
 """
 
 import math
@@ -17,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFilter
 sys.path.insert(0, str(Path(__file__).parent))
 from emblem import emblem_mask  # noqa: E402
 
-src, out = Path(sys.argv[1]), Path(sys.argv[2])
+src, out, glyph_src = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 out.mkdir(parents=True, exist_ok=True)
 
 art = Image.open(src).convert("RGBA")
@@ -70,22 +71,27 @@ with tempfile.TemporaryDirectory() as tmp:
             canvas.resize((px, px), Image.LANCZOS).save(iconset / name)
     subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out / "AppIcon.icns")], check=True)
 
-# ---------- 菜单栏模板图：取原图里的白色标志 ----------
-# 系统图标按主体居中：H 本体垂直居中（星芒占上方留白），整体水平居中；H 高约 13/18。
+# ---------- 菜单栏模板图：单色字形图（白底黑字）反相后当成白色标志提取 ----------
+# 系统图标按主体居中：H 本体垂直居中（星芒占上方留白），整体水平居中；H 高 12/18，星芒刚好不出界。
+paper = Image.new("RGBA", Image.open(glyph_src).size, (255, 255, 255, 255))
+paper.alpha_composite(Image.open(glyph_src).convert("RGBA"))  # 生图可能带透明底：先铺白底
+ink = paper.convert("L").point(lambda v: 255 - v)
+gmask, (ex0, ey0, ex1, ey1), (hx0, hy0, hx1, hy1) = emblem_mask(Image.merge("RGB", (ink, ink, ink)))
 SUPER = 8
 CANVAS = 18 * SUPER
-scale = (13 * SUPER) / (hy1 - hy0)
-glyph = mask.crop((ex0, ey0, ex1, ey1))
-gw, gh = int((ex1 - ex0) * scale), int((ey1 - ey0) * scale)
+scale = (12 * SUPER) / (hy1 - hy0)
+glyph = gmask.crop((ex0, ey0, ex1, ey1))
+gw, gh = round((ex1 - ex0) * scale), round((ey1 - ey0) * scale)
 glyph = glyph.resize((gw, gh), Image.LANCZOS)
 left = (CANVAS - gw) // 2
-top = int(CANVAS / 2 - ((hy0 + hy1) / 2 - ey0) * scale)
+top = round(CANVAS / 2 - ((hy0 + hy1) / 2 - ey0) * scale)
 top = max(0, min(top, CANVAS - gh))  # 星芒不出界
 alpha = Image.new("L", (CANVAS, CANVAS), 0)
 alpha.paste(glyph, (left, top))
 template = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
 template.putalpha(alpha)
-template.resize((36, 36), Image.LANCZOS).save(out / "menubar-template@2x.png")
-template.resize((18, 18), Image.LANCZOS).save(out / "menubar-template.png")
+# 按面积平均缩小（BOX）：Lanczos 会在字形周围留下一圈振铃淡点，菜单栏上看着发脏。
+template.resize((36, 36), Image.BOX).save(out / "menubar-template@2x.png")
+template.resize((18, 18), Image.BOX).save(out / "menubar-template.png")
 
 print("ok", f"标志中心偏移 ({cx - W / 2:+.0f}, {cy - H / 2:+.0f}) 已按标志重新居中")
