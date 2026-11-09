@@ -152,7 +152,11 @@ const FUNCTIONS: &[&str] = &[
 /// 判定：只含数字、运算符、括号与已知名字，且至少有一个二元运算符或函数调用。
 /// 于是 `wx`、`微信`、`1password`、`2026`、`-5`、`1.2.3` 都不算；`1+`、`1/0` 算（给出错误说明）。
 /// 不认识的名字只有后面紧跟括号时才当成函数（`foo(2)` → 未知函数），否则整句不算算式。
+/// 日期与号码也不算（见 `looks_like_date_or_number`）。
 pub fn evaluate(text: &str) -> Option<Result<f64, CalcError>> {
+    if looks_like_date_or_number(text) {
+        return None;
+    }
     let tokens = tokenize(text)?;
     let mut signal = false;
     for (index, token) in tokens.iter().enumerate() {
@@ -187,6 +191,22 @@ pub fn evaluate(text: &str) -> Option<Result<f64, CalcError>> {
         depth: 0,
     };
     Some(parser.parse())
+}
+
+/// 形似日期或电话号码的输入：用户是在搜它，不是要算它。
+/// - 只有数字和 `-`，且至少两个 `-`：`2026-11-09`、`138-1234-5678`。
+/// - 数字/数字/数字且第一段四位：`2026/11/09`。
+fn looks_like_date_or_number(text: &str) -> bool {
+    let text = text.trim();
+    let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+    let dashes = text.split('-').collect::<Vec<_>>();
+    if dashes.len() >= 3 && dashes.iter().all(|part| digits(part)) {
+        return true;
+    }
+    let slashes = text.split('/').collect::<Vec<_>>();
+    slashes.len() == 3
+        && slashes.iter().all(|part| digits(part))
+        && slashes.first().is_some_and(|year| year.len() == 4)
 }
 
 struct Parser {
@@ -471,6 +491,27 @@ mod tests {
         ] {
             assert_eq!(calc(text), None, "{text:?}");
         }
+    }
+
+    #[test]
+    fn dates_and_phone_numbers_are_not_expressions() {
+        // 搜日期、电话号码时，把它们当减法 / 除法算出一个数顶到第一条只会碍事。
+        for text in [
+            "2026-11-09",
+            "138-1234-5678",
+            "2026/11/09",
+            "２０２６－１１－０９",
+        ] {
+            assert_eq!(calc(text), None, "{text:?}");
+        }
+        // 只排除这两种形状：普通的减法、除法照算。
+        assert_eq!(value("10-2"), 8.0);
+        // 代价：纯数字的连减（`10-2-3`）也被当成号码；带空格写就照算。
+        assert_eq!(calc("10-2-3"), None);
+        assert_eq!(value("10 - 2 - 3"), 5.0);
+        assert_eq!(value("26/11/2"), 26.0 / 11.0 / 2.0);
+        assert_eq!(value("2026/11"), 2026.0 / 11.0);
+        assert_eq!(value("2026-11-09+1"), 2007.0);
     }
 
     #[test]

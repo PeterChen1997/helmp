@@ -1,11 +1,11 @@
 //! 扩展（设计稿 SettingsExtensions）：插件表格 + 脚本目录。
 
-use gpui_kit::component::input::Input;
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{default_script_dir, display_path};
-use crate::config;
+use crate::config::{self, Config};
 use crate::i18n::{tr, trf};
 use crate::providers::websearch;
 use crate::settings::SettingsView;
@@ -156,7 +156,7 @@ impl SettingsView {
                     pal,
                 )))
             })
-            .child(self.render_web_search(&config.web_search.engines, pal, cx))
+            .child(self.render_web_search(&config.web_search.engines(), pal, cx))
             .child(self.render_system_commands(config.system_commands.confirm_dangerous, pal, cx))
             .child(widgets::group_header(tr("脚本目录", "Script Folders"), pal))
             .child(self.render_script_dirs(&config.script_dirs, pal, cx))
@@ -186,7 +186,8 @@ impl SettingsView {
             .into_any_element()
     }
 
-    /// 网页搜索引擎：开关 + 上下移动调整顺序（顺序就是结果里的顺序）。
+    /// 网页搜索引擎：开关 + 上下移动调整顺序（顺序就是结果里的顺序）；
+    /// 自定义引擎可编辑、删除，内置引擎只能关闭。下方是添加 / 编辑自定义引擎的表单。
     fn render_web_search(
         &mut self,
         engines: &[config::WebSearchEngine],
@@ -194,7 +195,7 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let last = engines.len().saturating_sub(1);
-        let rows = engines
+        let mut rows: Vec<AnyElement> = engines
             .iter()
             .enumerate()
             .map(|(index, engine)| {
@@ -219,6 +220,39 @@ impl SettingsView {
                         }),
                     )
                 };
+                let mut controls = div().flex().items_center().gap(px(6.));
+                if !engine.builtin {
+                    let (id, name, url) =
+                        (engine.id.clone(), engine.name.clone(), engine.url.clone());
+                    controls = controls.child(widgets::push_button(
+                        SharedString::from(format!("web-search-edit-{}", engine.id)),
+                        tr("编辑", "Edit"),
+                        false,
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.edit_web_engine(
+                                Some((id.clone(), name.clone(), url.clone())),
+                                window,
+                                cx,
+                            );
+                        }),
+                    ));
+                    let id = engine.id.clone();
+                    controls = controls.child(widgets::danger_button(
+                        SharedString::from(format!("web-search-remove-{}", engine.id)),
+                        tr("删除", "Delete"),
+                        false,
+                        pal,
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            let id = id.clone();
+                            if this.web_engine_editing.as_deref() == Some(id.as_str()) {
+                                this.edit_web_engine(None, window, cx);
+                            }
+                            this.save(cx, move |c| {
+                                model::remove_custom_engine(c, &id);
+                            });
+                        }),
+                    ));
+                }
                 let id = engine.id.clone();
                 widgets::row(
                     div()
@@ -235,10 +269,7 @@ impl SettingsView {
                                 .child(widgets::label(name.clone(), pal))
                                 .child(widgets::help_text(engine.url.clone(), pal).truncate()),
                         ),
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
+                    controls
                         .child(move_button(true))
                         .child(move_button(false))
                         .child(widgets::switch(
@@ -257,6 +288,80 @@ impl SettingsView {
                 .into_any_element()
             })
             .collect();
+
+        // 添加 / 编辑自定义引擎。
+        let editing = self.web_engine_editing.is_some();
+        let field = |state: &Entity<InputState>| {
+            div()
+                .flex()
+                .items_center()
+                .h(px(26.))
+                .px(px(6.))
+                .rounded(px(6.))
+                .bg(pal.control)
+                .border_1()
+                .border_color(pal.separator)
+                .text_size(px(12.))
+                .child(Input::new(state).appearance(false))
+        };
+        let mut buttons = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(widgets::push_button(
+                "web-search-submit",
+                if editing {
+                    tr("保存", "Save")
+                } else {
+                    tr("添加", "Add")
+                },
+                false,
+                cx.listener(|this, _: &ClickEvent, window, cx| this.submit_web_engine(window, cx)),
+            ));
+        if editing {
+            buttons = buttons.child(widgets::push_button(
+                "web-search-cancel-edit",
+                tr("取消", "Cancel"),
+                false,
+                cx.listener(|this, _: &ClickEvent, window, cx| {
+                    this.edit_web_engine(None, window, cx)
+                }),
+            ));
+        }
+        if let Some(err) = self.web_engine_error {
+            buttons = buttons.child(widgets::error_text(err.message(), pal));
+        }
+        rows.push(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(14.))
+                .py(px(10.))
+                .child(widgets::label(
+                    if editing {
+                        tr("编辑自定义引擎", "Edit Custom Engine")
+                    } else {
+                        tr("添加自定义引擎", "Add Custom Engine")
+                    },
+                    pal,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .w(px(150.))
+                                .flex_none()
+                                .child(field(&self.web_engine_name)),
+                        )
+                        .child(div().flex_1().min_w_0().child(field(&self.web_engine_url))),
+                )
+                .child(buttons)
+                .into_any_element(),
+        );
+
         div()
             .flex()
             .flex_col()
@@ -264,11 +369,56 @@ impl SettingsView {
             .child(widgets::group(rows, pal).mb(px(6.)))
             .child(div().mb(px(18.)).ml(px(4.)).child(widgets::help_text(
                 tr(
-                    "查询非空时列在结果末尾，没有本地结果时排在最前；从上到下就是结果里的顺序",
-                    "Listed after local results, or first when nothing local matches. Results follow this order.",
+                    "查询非空时列在结果末尾，没有本地结果时排在最前；从上到下就是结果里的顺序。网址里的 {query} 会换成你输入的内容；内置引擎只能关闭，不能删除",
+                    "Listed after local results, or first when nothing local matches, in this order. {query} in the URL is replaced with what you type. Built-in engines can be turned off but not deleted.",
                 ),
                 pal,
             )))
+    }
+
+    /// 开始编辑某个自定义引擎（把它的名称、网址填进表单），或传 None 回到「添加」并清空表单。
+    fn edit_web_engine(
+        &mut self,
+        engine: Option<(String, String, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (id, name, url) = match engine {
+            Some((id, name, url)) => (Some(id), name, url),
+            None => (None, String::new(), String::new()),
+        };
+        self.web_engine_editing = id;
+        self.web_engine_error = None;
+        self.web_engine_name
+            .update(cx, |input, cx| input.set_value(name, window, cx));
+        self.web_engine_url
+            .update(cx, |input, cx| input.set_value(url, window, cx));
+        cx.notify();
+    }
+
+    /// 添加或保存自定义引擎。名称为空或网址没有 {query} 时就地提示，不保存。
+    fn submit_web_engine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name = self.web_engine_name.read(cx).value().to_string();
+        let url = self.web_engine_url.read(cx).value().to_string();
+        let editing = self.web_engine_editing.clone();
+        let apply = move |c: &mut Config| match &editing {
+            Some(id) => model::update_custom_engine(c, id, &name, &url).map(|_| ()),
+            None => model::add_custom_engine(c, &name, &url).map(|_| ()),
+        };
+        // 先在副本上试一遍：填写有误时不落盘，只显示原因。
+        let mut probe = Config::clone(&config::get());
+        if let Err(err) = apply(&mut probe) {
+            self.web_engine_error = Some(err);
+            cx.notify();
+            return;
+        }
+        self.save(cx, move |c| {
+            if let Err(err) = apply(c) {
+                // 上面刚用同样的输入校验过，走到这里说明配置在这一瞬间被别处改了。
+                eprintln!("helmp: 保存自定义搜索引擎失败：{}", err.message());
+            }
+        });
+        self.edit_web_engine(None, window, cx);
     }
 
     /// 系统命令：危险命令的二次确认开关。

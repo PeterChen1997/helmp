@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use crate::config::{Appearance, Config, Language, PanelScreen};
+use crate::config::{
+    Appearance, Config, CustomSearchEngine, Language, PanelScreen, is_builtin_search_engine,
+};
 use crate::i18n::{tr, trf};
 use crate::provider::Tint;
 
@@ -473,9 +475,14 @@ pub fn remove_script_dir(config: &mut Config, dir: &str) -> bool {
     config.script_dirs.len() != before
 }
 
-/// 网页搜索引擎的开关。返回是否找到这个引擎。
+/// 网页搜索引擎的开关：内置引擎记在覆盖表里，自定义引擎改自己的字段。返回是否找到这个引擎。
 pub fn set_web_search_enabled(config: &mut Config, id: &str, enabled: bool) -> bool {
-    match config.web_search.engines.iter_mut().find(|e| e.id == id) {
+    let web = &mut config.web_search;
+    if is_builtin_search_engine(id) {
+        web.builtin.insert(id.to_string(), enabled);
+        return true;
+    }
+    match web.custom.iter_mut().find(|e| e.id == id) {
         Some(engine) => {
             engine.enabled = enabled;
             true
@@ -485,23 +492,106 @@ pub fn set_web_search_enabled(config: &mut Config, id: &str, enabled: bool) -> b
 }
 
 /// 把引擎上移（`up`）或下移一位；已在顶端 / 底端或找不到时不动，返回是否有变化。
+/// 移动后把当前完整顺序写进 `order`。
 pub fn move_web_search(config: &mut Config, id: &str, up: bool) -> bool {
-    let engines = &mut config.web_search.engines;
-    let Some(index) = engines.iter().position(|e| e.id == id) else {
+    let mut ids: Vec<String> = config
+        .web_search
+        .engines()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    let Some(index) = ids.iter().position(|e| e == id) else {
         return false;
     };
     let target = if up {
         index.checked_sub(1)
     } else {
-        Some(index + 1).filter(|&next| next < engines.len())
+        Some(index + 1).filter(|&next| next < ids.len())
     };
-    match target {
-        Some(target) => {
-            engines.swap(index, target);
-            true
+    let Some(target) = target else {
+        return false;
+    };
+    ids.swap(index, target);
+    config.web_search.order = ids;
+    true
+}
+
+/// 自定义引擎填写有误的原因。文案在显示时按语言取。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineError {
+    EmptyName,
+    MissingQuery,
+}
+
+impl EngineError {
+    pub fn message(self) -> &'static str {
+        match self {
+            EngineError::EmptyName => tr("请填写名称", "Enter a name"),
+            EngineError::MissingQuery => tr(
+                "网址模板必须包含 {query}，搜索时会换成你输入的内容",
+                "The URL template must contain {query}; it’s replaced with what you type",
+            ),
         }
-        None => false,
     }
+}
+
+fn validate_engine(name: &str, url: &str) -> Result<(String, String), EngineError> {
+    let (name, url) = (name.trim(), url.trim());
+    if name.is_empty() {
+        return Err(EngineError::EmptyName);
+    }
+    if !url.contains("{query}") {
+        return Err(EngineError::MissingQuery);
+    }
+    Ok((name.to_string(), url.to_string()))
+}
+
+/// 添加自定义引擎（默认启用，排在末尾），返回它的 id。填写有误时不改配置。
+pub fn add_custom_engine(
+    config: &mut Config,
+    name: &str,
+    url: &str,
+) -> Result<String, EngineError> {
+    let (name, url) = validate_engine(name, url)?;
+    let web = &mut config.web_search;
+    let id = (1..)
+        .map(|n| format!("custom-{n}"))
+        .find(|id| !web.custom.iter().any(|e| &e.id == id) && !web.order.contains(id))
+        .unwrap_or_default();
+    web.custom.push(CustomSearchEngine {
+        id: id.clone(),
+        name,
+        url,
+        enabled: true,
+    });
+    Ok(id)
+}
+
+/// 修改自定义引擎的名称与网址。填写有误时不改配置；找不到（含内置引擎）返回 `Ok(false)`。
+pub fn update_custom_engine(
+    config: &mut Config,
+    id: &str,
+    name: &str,
+    url: &str,
+) -> Result<bool, EngineError> {
+    let (name, url) = validate_engine(name, url)?;
+    match config.web_search.custom.iter_mut().find(|e| e.id == id) {
+        Some(engine) => {
+            engine.name = name;
+            engine.url = url;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// 删除自定义引擎；内置引擎删不掉（只能关闭），返回是否删除了。
+pub fn remove_custom_engine(config: &mut Config, id: &str) -> bool {
+    let web = &mut config.web_search;
+    let before = web.custom.len();
+    web.custom.retain(|e| e.id != id);
+    web.order.retain(|e| e != id);
+    web.custom.len() != before
 }
 
 // ---------------------------------------------------------------- Agent
@@ -718,7 +808,7 @@ mod tests {
         // 设置里用上下按钮调整顺序：越界时不能绕到另一头，也不能动到别的引擎。
         let mut config = Config::default();
         let order = |c: &Config| -> Vec<String> {
-            c.web_search.engines.iter().map(|e| e.id.clone()).collect()
+            c.web_search.engines().into_iter().map(|e| e.id).collect()
         };
         assert!(!move_web_search(&mut config, "google", true));
         assert!(move_web_search(&mut config, "github", true));
@@ -727,14 +817,79 @@ mod tests {
         assert!(!move_web_search(&mut config, &last, false));
         assert!(!move_web_search(&mut config, "nope", false));
         assert!(set_web_search_enabled(&mut config, "bing", true));
-        assert!(
-            config
-                .web_search
-                .engines
+        let enabled = |c: &Config, id: &str| {
+            c.web_search
+                .engines()
                 .iter()
-                .any(|e| e.id == "bing" && e.enabled)
-        );
+                .any(|e| e.id == id && e.enabled)
+        };
+        assert!(enabled(&config, "bing"));
         assert!(!set_web_search_enabled(&mut config, "nope", true));
+    }
+
+    #[test]
+    fn custom_engines_need_a_name_and_a_query_slot() {
+        // 模板里没有 {query} 的引擎永远搜不到用户输入的内容，不能悄悄存下来。
+        let mut config = Config::default();
+        assert_eq!(
+            add_custom_engine(&mut config, "知乎", "https://www.zhihu.com/"),
+            Err(EngineError::MissingQuery)
+        );
+        assert_eq!(
+            add_custom_engine(&mut config, "  ", "https://x/?q={query}"),
+            Err(EngineError::EmptyName)
+        );
+        assert!(config.web_search.custom.is_empty(), "填写有误时不能保存");
+
+        let id = add_custom_engine(
+            &mut config,
+            " 知乎 ",
+            " https://www.zhihu.com/search?q={query} ",
+        )
+        .unwrap();
+        let second =
+            add_custom_engine(&mut config, "V2EX", "https://www.v2ex.com/?q={query}").unwrap();
+        assert_ne!(id, second, "id 必须唯一，否则开关和删除会作用到别的引擎");
+        let added = config
+            .web_search
+            .engines()
+            .into_iter()
+            .find(|e| e.id == id)
+            .unwrap();
+        assert_eq!(
+            (added.name.as_str(), added.enabled, added.builtin),
+            ("知乎", true, false)
+        );
+        assert_eq!(added.url, "https://www.zhihu.com/search?q={query}");
+
+        // 编辑同样要校验，校验失败时保持原样。
+        assert_eq!(
+            update_custom_engine(&mut config, &id, "知乎", "https://www.zhihu.com/"),
+            Err(EngineError::MissingQuery)
+        );
+        assert_eq!(
+            update_custom_engine(
+                &mut config,
+                &id,
+                "知乎问答",
+                "https://zhihu.com/s?q={query}"
+            ),
+            Ok(true)
+        );
+        assert_eq!(config.web_search.custom[0].name, "知乎问答");
+        assert_eq!(
+            update_custom_engine(&mut config, "google", "G", "https://g/?q={query}"),
+            Ok(false),
+            "内置引擎不能改名改网址"
+        );
+
+        // 内置引擎删不掉，只能关；自定义引擎删除后连同排序一起消失。
+        assert!(!remove_custom_engine(&mut config, "google"));
+        assert!(config.web_search.engines().iter().any(|e| e.id == "google"));
+        assert!(move_web_search(&mut config, &id, true));
+        assert!(remove_custom_engine(&mut config, &id));
+        assert!(!config.web_search.order.contains(&id));
+        assert!(config.web_search.engines().iter().all(|e| e.id != id));
     }
 
     #[test]

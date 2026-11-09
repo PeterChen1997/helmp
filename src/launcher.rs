@@ -651,6 +651,11 @@ impl Launcher {
                             this.open_scope_with(scope, text, window, cx);
                             return;
                         }
+                        Ok(Outcome::Dismiss) => {
+                            this.result = None;
+                            cx.notify();
+                            return;
+                        }
                         Ok(Outcome::OpenSettings) => {
                             this.executed = true;
                             // 推迟到本次更新结束：设置窗口会读引擎等全局状态，不能在启动器更新中途打开。

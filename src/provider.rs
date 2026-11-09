@@ -36,6 +36,8 @@ pub enum Outcome {
     EnterScopeWith(&'static str, String),
     /// 打开设置窗口（动作在后台线程执行，不能直接开窗口，交给界面线程做）。
     OpenSettings,
+    /// 关掉正在展示的详情（如确认页的「取消」），回到结果列表，同按 Esc。
+    Dismiss,
 }
 
 /// 执行时框架传给动作的输入：表单视图下是各字段的值。
@@ -87,6 +89,11 @@ impl Action {
     /// 进入某个插件范围。
     pub fn enter_scope(scope: &'static str) -> Self {
         Self::new(move || Ok(Outcome::EnterScope(scope)))
+    }
+
+    /// 关掉正在展示的详情、回到列表（确认页的「取消」）。不隐藏面板。
+    pub fn dismiss() -> Self {
+        Self::new(|| Ok(Outcome::Dismiss)).keep_open()
     }
 
     /// 标记为「执行时不隐藏面板、完成后原地刷新」。
@@ -286,6 +293,39 @@ pub struct Detail {
     pub metadata: Vec<(String, String)>,
     /// 结果的操作（执行后展示的详情才用）：第一个是回车的主操作（如「复制译文」），其余进 ⌘K。
     pub actions: Vec<NamedAction>,
+}
+
+impl Detail {
+    /// 危险操作的确认页（对标 HapiGo「是否确定执行」）：回车执行 `confirm`，「取消」或 Esc 回到列表。
+    /// 返回它的动作应标记 `keep_open`，确认页直接出现在面板里，不先收起再弹出。
+    pub fn confirm(
+        icon: Icon,
+        question: String,
+        consequence: String,
+        confirm_title: String,
+        confirm: Action,
+    ) -> Self {
+        Detail {
+            icon,
+            title: question,
+            tag: Some((tr("无法撤销", "Can’t be undone").into(), Tone::Waiting)),
+            blocks: vec![
+                Block::Text(consequence),
+                Block::Text(
+                    tr(
+                        "回车确认执行，一旦开始中途无法终止；按 Esc 取消。",
+                        "Press Return to go ahead; it can’t be stopped once started. Press Esc to cancel.",
+                    )
+                    .into(),
+                ),
+            ],
+            metadata: Vec::new(),
+            actions: vec![
+                NamedAction::new(confirm_title, None, confirm),
+                NamedAction::new(tr("取消", "Cancel"), Some("Esc"), Action::dismiss()),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

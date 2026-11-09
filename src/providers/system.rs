@@ -2,8 +2,9 @@
 //! 打开「系统设置」、退出所有应用。
 //!
 //! - 匹配看中英关键词，中文名自带拼音 / 首字母（`suoping`、`sp` → 锁屏），与界面语言无关。
-//! - 危险命令（清空废纸篓、重启、关机、注销、退出所有应用）沿用脚本插件 `needsConfirmation` 的确认方式：
-//!   查询末尾加 ` !` 才执行，否则回车只提示怎么确认。设置 › 扩展里可关掉确认。
+//! - 危险命令（清空废纸篓、重启、关机、注销、退出所有应用）回车后先在面板里显示确认页
+//!   （`Detail::confirm`），再按一次回车才执行，Esc 取消。查询末尾带 ` !` 视为已确认，直接执行
+//!   （与脚本插件 `needsConfirmation` 的老习惯一致）。设置 › 扩展里可关掉确认。
 //! - 执行层是可替换的函数（`Executor`），测试只记录会执行哪个 `Op`，不碰真实系统。
 //!   `HELMP_DRY_RUN=1` 时只返回将要执行的命令（命令行自查用）。
 
@@ -17,7 +18,7 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorks
 use crate::config;
 use crate::i18n::{tr, trf};
 use crate::matcher;
-use crate::provider::{Accessory, Action, Icon, Item, Outcome, Provider, Tint, Tone};
+use crate::provider::{Accessory, Action, Detail, Icon, Item, Outcome, Provider, Tint, Tone};
 
 use super::scripts::args::strip_confirmation;
 
@@ -65,9 +66,21 @@ struct Command {
     subtitle: (&'static str, &'static str),
     keywords: &'static [&'static str],
     icon: Icon,
-    /// 不可撤销：执行前要确认。
-    dangerous: bool,
+    /// 不可撤销的命令执行前先显示确认页。
+    confirm: Option<Confirm>,
     op: Op,
+}
+
+impl Command {
+    fn dangerous(&self) -> bool {
+        self.confirm.is_some()
+    }
+}
+
+/// 确认页的文字：(中文, 英文)。
+struct Confirm {
+    question: (&'static str, &'static str),
+    consequence: (&'static str, &'static str),
 }
 
 const fn symbol(name: &'static str, tint: Tint) -> Icon {
@@ -81,7 +94,7 @@ static COMMANDS: [Command; 11] = [
         subtitle: ("锁定屏幕，回来时需要密码", "Lock the screen"),
         keywords: &["锁屏", "锁定屏幕", "lock screen", "lock"],
         icon: symbol("lock", Tint::Indigo),
-        dangerous: false,
+        confirm: None,
         // ⌃⌘Q 是系统的锁屏快捷键；没有公开 API 可以直接锁屏。需要辅助功能权限（粘贴已经要了）。
         op: Op::AppleScript(
             r#"tell application "System Events" to keystroke "q" using {control down, command down}"#,
@@ -93,7 +106,7 @@ static COMMANDS: [Command; 11] = [
         subtitle: ("让电脑进入睡眠", "Put the Mac to sleep"),
         keywords: &["睡眠", "休眠", "sleep"],
         icon: symbol("moon", Tint::Indigo),
-        dangerous: false,
+        confirm: None,
         op: Op::Run("/usr/bin/pmset", &["sleepnow"]),
     },
     Command {
@@ -105,7 +118,13 @@ static COMMANDS: [Command; 11] = [
         ),
         keywords: &["清空废纸篓", "废纸篓", "垃圾桶", "empty trash", "trash"],
         icon: symbol("trash", Tint::Red),
-        dangerous: true,
+        confirm: Some(Confirm {
+            question: ("确定要清空废纸篓吗？", "Empty the Trash?"),
+            consequence: (
+                "废纸篓里的所有项目会被永久删除，无法恢复。",
+                "Everything in the Trash will be permanently erased and can’t be recovered.",
+            ),
+        }),
         op: Op::AppleScript(r#"tell application "Finder" to empty trash"#),
     },
     Command {
@@ -117,7 +136,7 @@ static COMMANDS: [Command; 11] = [
         ),
         keywords: &["显示桌面", "桌面", "show desktop", "desktop"],
         icon: symbol("monitor", Tint::Blue),
-        dangerous: false,
+        confirm: None,
         // 「调度中心」带参数 1 就是系统的「显示桌面」（同 F11）。
         op: Op::Run(
             "/System/Applications/Mission Control.app/Contents/MacOS/Mission Control",
@@ -133,7 +152,7 @@ static COMMANDS: [Command; 11] = [
         ),
         keywords: &["隐藏其他应用", "隐藏其他", "hide others", "hide other apps"],
         icon: symbol("eye-off", Tint::Gray),
-        dangerous: false,
+        confirm: None,
         op: Op::HideOtherApps,
     },
     Command {
@@ -153,7 +172,7 @@ static COMMANDS: [Command; 11] = [
             "appearance",
         ],
         icon: symbol("sun-moon", Tint::Graphite),
-        dangerous: false,
+        confirm: None,
         op: Op::AppleScript(
             r#"tell application "System Events" to tell appearance preferences to set dark mode to not dark mode"#,
         ),
@@ -164,7 +183,13 @@ static COMMANDS: [Command; 11] = [
         subtitle: ("重新启动电脑", "Restart the Mac"),
         keywords: &["重启", "重新启动", "restart", "reboot"],
         icon: symbol("rotate-ccw", Tint::Orange),
-        dangerous: true,
+        confirm: Some(Confirm {
+            question: ("确定要重启吗？", "Restart now?"),
+            consequence: (
+                "所有应用都会退出，未保存的文档由各应用询问是否保存。",
+                "All apps will quit; apps with unsaved documents will ask you to save them.",
+            ),
+        }),
         op: Op::AppleScript(r#"tell application "System Events" to restart"#),
     },
     Command {
@@ -173,7 +198,13 @@ static COMMANDS: [Command; 11] = [
         subtitle: ("关闭电脑", "Shut down the Mac"),
         keywords: &["关机", "关闭电脑", "shut down", "shutdown", "power off"],
         icon: symbol("power", Tint::Red),
-        dangerous: true,
+        confirm: Some(Confirm {
+            question: ("确定要关机吗？", "Shut down now?"),
+            consequence: (
+                "所有应用都会退出并关闭电脑，未保存的文档由各应用询问是否保存。",
+                "All apps will quit and the Mac will turn off; apps with unsaved documents will ask you to save them.",
+            ),
+        }),
         op: Op::AppleScript(r#"tell application "System Events" to shut down"#),
     },
     Command {
@@ -182,7 +213,13 @@ static COMMANDS: [Command; 11] = [
         subtitle: ("退出当前用户的登录", "Log out of this user account"),
         keywords: &["注销", "退出登录", "登出", "log out", "logout", "sign out"],
         icon: symbol("log-out", Tint::Orange),
-        dangerous: true,
+        confirm: Some(Confirm {
+            question: ("确定要注销吗？", "Log out now?"),
+            consequence: (
+                "所有应用都会退出并回到登录界面，未保存的文档由各应用询问是否保存。",
+                "All apps will quit and you’ll return to the login window; apps with unsaved documents will ask you to save them.",
+            ),
+        }),
         op: Op::AppleScript(r#"tell application "System Events" to log out"#),
     },
     Command {
@@ -196,7 +233,7 @@ static COMMANDS: [Command; 11] = [
             "system preferences",
         ],
         icon: symbol("settings", Tint::Gray),
-        dangerous: false,
+        confirm: None,
         op: Op::Run("/usr/bin/open", &["-b", "com.apple.systempreferences"]),
     },
     Command {
@@ -215,7 +252,13 @@ static COMMANDS: [Command; 11] = [
             "close all apps",
         ],
         icon: symbol("octagon-x", Tint::Red),
-        dangerous: true,
+        confirm: Some(Confirm {
+            question: ("确定要退出所有应用吗？", "Quit all apps?"),
+            consequence: (
+                "除 Finder 与 Helmp 外的应用都会退出，未保存的文档由各应用询问是否保存。",
+                "Every app except Finder and Helmp will quit; apps with unsaved documents will ask you to save them.",
+            ),
+        }),
         op: Op::QuitAllApps,
     },
 ];
@@ -265,12 +308,12 @@ impl Provider for System {
                     .iter()
                     .filter_map(|keyword| matcher::score(text, keyword))
                     .max()?;
-                let guard = if command.dangerous && confirm_required {
+                let guard = if command.dangerous() && confirm_required {
                     Some(confirmed)
                 } else {
                     None
                 };
-                Some(self.item(command, score, guard, text))
+                Some(self.item(command, score, guard))
             })
             .collect()
     }
@@ -278,27 +321,34 @@ impl Provider for System {
 
 impl System {
     /// `guard`：None = 不需要确认；Some(false) = 需要确认但还没确认；Some(true) = 已确认。
-    fn item(&self, command: &Command, score: u32, guard: Option<bool>, typed: &str) -> Item {
+    fn item(&self, command: &Command, score: u32, guard: Option<bool>) -> Item {
         let title = tr(command.title.0, command.title.1);
         let description = tr(command.subtitle.0, command.subtitle.1);
-        let (subtitle, accessories, action) = match guard {
-            Some(false) => (
+        let execute = run(Arc::clone(&self.exec), command.op);
+        let (subtitle, accessories, action) = match (guard, &command.confirm) {
+            (Some(false), Some(confirm)) => (
                 trf!(
-                    "{description} · 需要确认：在末尾加 ! 后回车",
-                    "{description} · Needs confirmation: add ! to the end, then press Return"
+                    "{description} · 回车后需确认",
+                    "{description} · Asks for confirmation"
                 ),
                 vec![Accessory::Tag {
                     text: tr("需确认", "Confirm").into(),
                     tone: Tone::Waiting,
                 }],
-                // 不隐藏面板，直接在原地说明怎么确认。
+                // 第一次回车只显示确认页（不收起面板）；确认页的主操作才真正执行。
                 Action::new({
-                    let prompt = confirm_prompt(title, typed);
-                    move || Ok(Outcome::Message(prompt.clone()))
+                    let detail = Detail::confirm(
+                        command.icon.clone(),
+                        tr(confirm.question.0, confirm.question.1).into(),
+                        tr(confirm.consequence.0, confirm.consequence.1).into(),
+                        title.into(),
+                        execute,
+                    );
+                    move || Ok(Outcome::Show(detail.clone()))
                 })
                 .keep_open(),
             ),
-            Some(true) => (
+            (Some(true), _) => (
                 trf!(
                     "{description} · 已确认，回车立即执行",
                     "{description} · Confirmed; press Return to run now"
@@ -307,13 +357,9 @@ impl System {
                     text: tr("已确认", "Confirmed").into(),
                     tone: Tone::Running,
                 }],
-                run(Arc::clone(&self.exec), command.op),
+                execute,
             ),
-            None => (
-                description.to_string(),
-                Vec::new(),
-                run(Arc::clone(&self.exec), command.op),
-            ),
+            _ => (description.to_string(), Vec::new(), execute),
         };
         Item {
             id: format!("system:{}", command.key),
@@ -328,13 +374,6 @@ impl System {
             ..Item::blank()
         }
     }
-}
-
-fn confirm_prompt(title: &str, typed: &str) -> String {
-    trf!(
-        "确定要{title}吗？一旦执行无法撤销。确认请在查询末尾加 ! 后回车，例如「{typed} !」。",
-        "{title} can’t be undone. To confirm, add ! to the end of your query and press Return, e.g. “{typed} !”."
-    )
 }
 
 fn run(exec: Executor, op: Op) -> Action {
@@ -517,7 +556,7 @@ mod tests {
         // 这五个一旦执行就收不回来（文件删了、未保存的工作丢了），必须走确认；其余的随手可撤销，不该多一步。
         let mut dangerous: Vec<_> = COMMANDS
             .iter()
-            .filter(|c| c.dangerous)
+            .filter(|c| c.dangerous())
             .map(|c| c.key)
             .collect();
         dangerous.sort_unstable();
@@ -529,16 +568,16 @@ mod tests {
 
     #[test]
     fn dangerous_commands_never_run_without_confirmation() {
-        // 误按回车不能关机、清空废纸篓：未确认时只给出说明，执行层一次都不能被调用。
+        // 误按回车不能关机、清空废纸篓：第一次回车只出确认页，执行层一次都不能被调用；
+        // 确认页上回车（主操作）才执行，「取消」只回到列表。
         let (system, log) = recording(|| true);
-        for command in COMMANDS.iter().filter(|c| c.dangerous) {
+        for command in COMMANDS.iter().filter(|c| c.dangerous()) {
             let query = command.keywords[0];
             let item = find(&system, query, command.key).unwrap_or_else(|| panic!("{query}"));
-            assert!(item.action.keeps_open(), "提示确认时不该先把面板收起");
-            let Outcome::Message(message) = item.action.run().unwrap() else {
-                panic!("{query} 未确认时应只给出说明");
-            };
-            assert!(message.contains(&format!("{query} !")), "{message}");
+            assert!(
+                item.action.keeps_open(),
+                "确认页应直接出现在面板里，不先收起"
+            );
             assert_eq!(
                 item.accessories,
                 vec![Accessory::Tag {
@@ -546,11 +585,37 @@ mod tests {
                     tone: Tone::Waiting
                 }]
             );
-        }
-        assert!(log.lock().unwrap().is_empty(), "未确认就执行了：{log:?}");
+            let Outcome::Show(page) = item.action.run().unwrap() else {
+                panic!("{query} 第一次回车应显示确认页");
+            };
+            assert!(log.lock().unwrap().is_empty(), "未确认就执行了：{log:?}");
+            let confirm = command.confirm.as_ref().unwrap();
+            assert_eq!(page.title, confirm.question.0);
+            let titles: Vec<_> = page.actions.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(
+                titles,
+                [command.title.0, "取消"],
+                "主操作（回车）是执行，其次是取消"
+            );
 
-        // 末尾加 ` !` 才真正执行，且执行的就是这条命令。
-        for command in COMMANDS.iter().filter(|c| c.dangerous) {
+            assert_eq!(page.actions[1].action.run().unwrap(), Outcome::Dismiss);
+            assert!(
+                page.actions[1].action.keeps_open(),
+                "取消只回到列表，不收起面板"
+            );
+            assert!(log.lock().unwrap().is_empty(), "取消后不应执行");
+
+            assert_eq!(page.actions[0].action.run().unwrap(), Outcome::Done);
+            assert_eq!(*log.lock().unwrap(), vec![command.op]);
+            log.lock().unwrap().clear();
+        }
+    }
+
+    #[test]
+    fn trailing_bang_still_skips_the_confirmation_page() {
+        // 老用户习惯在末尾加 ` !` 直接执行（脚本插件的 needsConfirmation 也是这样），不能因为加了确认页就失效。
+        let (system, log) = recording(|| true);
+        for command in COMMANDS.iter().filter(|c| c.dangerous()) {
             let query = format!("{} !", command.keywords[0]);
             let item = find(&system, &query, command.key).unwrap();
             assert_eq!(item.action.run().unwrap(), Outcome::Done);

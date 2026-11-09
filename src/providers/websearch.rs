@@ -26,7 +26,7 @@ pub struct WebSearch {
 impl WebSearch {
     pub fn new() -> Self {
         Self {
-            engines: Box::new(|| config::get().web_search.engines.clone()),
+            engines: Box::new(|| config::get().web_search.engines()),
         }
     }
 }
@@ -114,7 +114,7 @@ mod tests {
 
     fn defaults() -> WebSearch {
         WebSearch {
-            engines: Box::new(|| WebSearchConfig::default().engines),
+            engines: Box::new(|| WebSearchConfig::default().engines()),
         }
     }
 
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn order_and_switches_come_from_config() {
         // 设置里关掉的不出现；用户把 GitHub 调到最前，结果里它就在最前。
-        let mut engines = WebSearchConfig::default().engines;
+        let mut engines = WebSearchConfig::default().engines();
         engines.retain(|engine| engine.id != "google");
         engines.rotate_right(1);
         for engine in &mut engines {
@@ -183,6 +183,7 @@ mod tests {
             id: "zhihu".into(),
             name: "知乎".into(),
             url: "https://www.zhihu.com/search?q={query}".into(),
+            builtin: false,
             enabled: true,
         });
         let custom = WebSearch {
