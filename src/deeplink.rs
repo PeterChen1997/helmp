@@ -120,6 +120,8 @@ fn open(link: Link, cx: &mut App) {
         Link::Show { query } => LauncherHandle::update(cx, |launcher, window, cx| {
             launcher.show(window, cx);
             if let Some(query) = query {
+                // `q` 是主搜索的输入：面板上次停在某个扩展里（如剪贴板）时，不回到主搜索就会在那个扩展里搜。
+                launcher.reset_view(window, cx);
                 launcher.set_query(&query, window, cx);
             }
         }),

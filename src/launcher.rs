@@ -301,7 +301,7 @@ impl Launcher {
         &self.items
     }
 
-    /// 自检用：回到根视图（退出范围、清空输入与结果）。
+    /// 回到根视图（退出范围、清空输入与结果）。自检与带查询的 `helmp://show` 用。
     pub fn reset_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reset(window, cx);
         self.refresh(cx);
