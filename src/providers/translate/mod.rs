@@ -22,8 +22,8 @@ use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::models;
 use crate::provider::{
-    Accessory, Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction,
-    Outcome, Provider, Scope, Tint,
+    Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction, Outcome,
+    Provider, Scope, Tint,
 };
 
 const SCOPE: &str = "translate";
@@ -31,8 +31,6 @@ const ICON: Icon = Icon::Symbol {
     name: "languages",
     tint: Tint::Teal,
 };
-/// 打开翻译的全局快捷键（显示用；⌘⇧T 会抢浏览器「恢复标签页」，改成 ⌥⇧T）。
-const HOTKEY: &str = "⌥⇧T";
 
 /// 分组名（也是分组键）：在查询里取，查询已按语言固定。
 fn badge() -> &'static str {
@@ -135,7 +133,7 @@ fn entry(badge: &str, score: u32) -> Item {
         badge: badge.into(),
         score,
         icon: ICON,
-        accessories: vec![Accessory::keys(HOTKEY)],
+        accessories: crate::hotkey::hint_keys(SCOPE),
         action: Action::enter_scope(SCOPE),
         action_title: tr("进入", "Open").into(),
         ..Item::blank()
@@ -567,7 +565,8 @@ mod tests {
         assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
         assert_eq!(item.icon, ICON);
-        assert_eq!(item.accessories, vec![Accessory::keys("⌥⇧T")]);
+        // 键帽只显示真正生效的全局快捷键；单测里没有注册任何热键，就不能显示 ⌥⇧T。
+        assert!(item.accessories.is_empty(), "{:?}", item.accessories);
         assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("translate"));
     }
 

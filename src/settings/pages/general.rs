@@ -5,6 +5,7 @@ use gpui_kit::*;
 use crate::config::{self, Language, PanelScreen};
 use crate::i18n::tr;
 use crate::settings::SettingsView;
+use crate::settings::hotkey;
 use crate::settings::model::{self, LANGUAGE_OPTIONS, PANEL_SCREEN_OPTIONS, RESET_OPTIONS};
 use crate::settings::system::{self, LoginItemStatus};
 use crate::settings::widgets::{self, MenuChoice};
@@ -110,7 +111,7 @@ impl SettingsView {
                 vec![
                     widgets::row(
                         widgets::label(tr("唤起快捷键", "Keyboard shortcut"), pal),
-                        self.hotkey.clone(),
+                        hotkey::with_note(&self.hotkey, pal, cx),
                     )
                     .into_any_element(),
                     launch.into_any_element(),

@@ -3,13 +3,17 @@
 //! - 唤起面板：`config.general.hotkey`（默认 ⌥Space）。
 //! - 范围快捷键：`config.extensions[<provider id>].hotkey`，未配置用 [`EXTENSION_SHORTCUTS`] 的默认值，
 //!   配置成空字符串表示不绑定；扩展被停用时也不绑定。
-//! - 配置变化（设置窗口改快捷键）时增量重新注册：新组合注册失败就保留旧的，并在 stderr 说明。
+//! - 配置变化（设置窗口改快捷键）时增量重新注册：新组合注册失败就保留旧的，
+//!   原因记成 [`Issue`]，设置窗口在对应行显示（同时写 stderr）。
+//! - 录制前的冲突判定（Helmp 自己的命令 / 系统快捷键 / 保留组合 / 其他 App）见 [`conflict`]。
 //!
 //! 事件在 Carbon 回调线程产生，这里用前台任务定时轮询 receiver，把命令投回 GPUI 主线程
-//! （Loungy 的做法）。菜单栏通过 [`active`] 读取真实生效的快捷键来显示。
+//! （Loungy 的做法）。菜单栏、面板通过 [`active`] / [`hint`] 读取真实生效的快捷键来显示。
+
+pub mod conflict;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
@@ -19,6 +23,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use gpui_kit::*;
 
 use crate::config::Config;
+use crate::i18n::{tr, trf};
 use crate::launcher::{Launcher, LauncherHandle};
 
 /// 唤起面板的默认快捷键，与 `config::General::default()` 一致。
@@ -47,6 +52,7 @@ pub enum Command {
 pub struct ExtensionShortcut {
     pub provider: &'static str,
     pub label: &'static str,
+    pub label_en: &'static str,
     pub default: &'static str,
     pub command: Command,
 }
@@ -55,12 +61,14 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
     ExtensionShortcut {
         provider: "clipboard",
         label: "剪贴板历史",
+        label_en: "Clipboard History",
         default: "cmd-shift-v",
         command: Command::Scope("clipboard"),
     },
     ExtensionShortcut {
         provider: "screenshot",
         label: "截图识别文字",
+        label_en: "Recognize Text in Screenshot",
         default: "cmd-shift-2",
         command: Command::RunItem {
             id: "screenshot:ocr-screen",
@@ -70,12 +78,14 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
     ExtensionShortcut {
         provider: "translate",
         label: "翻译选中文字",
+        label_en: "Translate Selection",
         default: "alt-shift-t",
         command: Command::Scope("translate"),
     },
     ExtensionShortcut {
         provider: "agents",
         label: "Agent 会话",
+        label_en: "Agent Sessions",
         default: "ctrl-alt-a",
         command: Command::Scope("agents"),
     },
@@ -83,81 +93,91 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
 
 // ======================= 字符串 ⇄ HotKey =======================
 
-/// (配置里的写法, 物理键, 显示符号, NSMenuItem 的 keyEquivalent 字符)
-const KEYS: &[(&str, Code, &str, char)] = &[
-    ("a", Code::KeyA, "A", 'a'),
-    ("b", Code::KeyB, "B", 'b'),
-    ("c", Code::KeyC, "C", 'c'),
-    ("d", Code::KeyD, "D", 'd'),
-    ("e", Code::KeyE, "E", 'e'),
-    ("f", Code::KeyF, "F", 'f'),
-    ("g", Code::KeyG, "G", 'g'),
-    ("h", Code::KeyH, "H", 'h'),
-    ("i", Code::KeyI, "I", 'i'),
-    ("j", Code::KeyJ, "J", 'j'),
-    ("k", Code::KeyK, "K", 'k'),
-    ("l", Code::KeyL, "L", 'l'),
-    ("m", Code::KeyM, "M", 'm'),
-    ("n", Code::KeyN, "N", 'n'),
-    ("o", Code::KeyO, "O", 'o'),
-    ("p", Code::KeyP, "P", 'p'),
-    ("q", Code::KeyQ, "Q", 'q'),
-    ("r", Code::KeyR, "R", 'r'),
-    ("s", Code::KeyS, "S", 's'),
-    ("t", Code::KeyT, "T", 't'),
-    ("u", Code::KeyU, "U", 'u'),
-    ("v", Code::KeyV, "V", 'v'),
-    ("w", Code::KeyW, "W", 'w'),
-    ("x", Code::KeyX, "X", 'x'),
-    ("y", Code::KeyY, "Y", 'y'),
-    ("z", Code::KeyZ, "Z", 'z'),
-    ("0", Code::Digit0, "0", '0'),
-    ("1", Code::Digit1, "1", '1'),
-    ("2", Code::Digit2, "2", '2'),
-    ("3", Code::Digit3, "3", '3'),
-    ("4", Code::Digit4, "4", '4'),
-    ("5", Code::Digit5, "5", '5'),
-    ("6", Code::Digit6, "6", '6'),
-    ("7", Code::Digit7, "7", '7'),
-    ("8", Code::Digit8, "8", '8'),
-    ("9", Code::Digit9, "9", '9'),
-    ("-", Code::Minus, "-", '-'),
-    ("=", Code::Equal, "=", '='),
-    ("[", Code::BracketLeft, "[", '['),
-    ("]", Code::BracketRight, "]", ']'),
-    ("\\", Code::Backslash, "\\", '\\'),
-    (";", Code::Semicolon, ";", ';'),
-    ("'", Code::Quote, "'", '\''),
-    (",", Code::Comma, ",", ','),
-    (".", Code::Period, ".", '.'),
-    ("/", Code::Slash, "/", '/'),
-    ("`", Code::Backquote, "`", '`'),
-    ("space", Code::Space, "Space", ' '),
-    ("enter", Code::Enter, "↵", '\r'),
-    ("tab", Code::Tab, "⇥", '\t'),
-    ("escape", Code::Escape, "⎋", '\u{1b}'),
-    ("backspace", Code::Backspace, "⌫", '\u{8}'),
-    ("delete", Code::Delete, "⌦", '\u{f728}'),
-    ("up", Code::ArrowUp, "↑", '\u{f700}'),
-    ("down", Code::ArrowDown, "↓", '\u{f701}'),
-    ("left", Code::ArrowLeft, "←", '\u{f702}'),
-    ("right", Code::ArrowRight, "→", '\u{f703}'),
-    ("home", Code::Home, "↖", '\u{f729}'),
-    ("end", Code::End, "↘", '\u{f72b}'),
-    ("pageup", Code::PageUp, "⇞", '\u{f72c}'),
-    ("pagedown", Code::PageDown, "⇟", '\u{f72d}'),
-    ("f1", Code::F1, "F1", '\u{f704}'),
-    ("f2", Code::F2, "F2", '\u{f705}'),
-    ("f3", Code::F3, "F3", '\u{f706}'),
-    ("f4", Code::F4, "F4", '\u{f707}'),
-    ("f5", Code::F5, "F5", '\u{f708}'),
-    ("f6", Code::F6, "F6", '\u{f709}'),
-    ("f7", Code::F7, "F7", '\u{f70a}'),
-    ("f8", Code::F8, "F8", '\u{f70b}'),
-    ("f9", Code::F9, "F9", '\u{f70c}'),
-    ("f10", Code::F10, "F10", '\u{f70d}'),
-    ("f11", Code::F11, "F11", '\u{f70e}'),
-    ("f12", Code::F12, "F12", '\u{f70f}'),
+/// (配置里的写法, 物理键, 显示符号, NSMenuItem 的 keyEquivalent 字符, Carbon 虚拟键码 kVK_*)。
+///
+/// 虚拟键码用来对照系统快捷键（`com.apple.symbolichotkeys.plist` 里存的就是它）和探测 Carbon 注册。
+const KEYS: &[(&str, Code, &str, char, u16)] = &[
+    ("a", Code::KeyA, "A", 'a', 0x00),
+    ("b", Code::KeyB, "B", 'b', 0x0B),
+    ("c", Code::KeyC, "C", 'c', 0x08),
+    ("d", Code::KeyD, "D", 'd', 0x02),
+    ("e", Code::KeyE, "E", 'e', 0x0E),
+    ("f", Code::KeyF, "F", 'f', 0x03),
+    ("g", Code::KeyG, "G", 'g', 0x05),
+    ("h", Code::KeyH, "H", 'h', 0x04),
+    ("i", Code::KeyI, "I", 'i', 0x22),
+    ("j", Code::KeyJ, "J", 'j', 0x26),
+    ("k", Code::KeyK, "K", 'k', 0x28),
+    ("l", Code::KeyL, "L", 'l', 0x25),
+    ("m", Code::KeyM, "M", 'm', 0x2E),
+    ("n", Code::KeyN, "N", 'n', 0x2D),
+    ("o", Code::KeyO, "O", 'o', 0x1F),
+    ("p", Code::KeyP, "P", 'p', 0x23),
+    ("q", Code::KeyQ, "Q", 'q', 0x0C),
+    ("r", Code::KeyR, "R", 'r', 0x0F),
+    ("s", Code::KeyS, "S", 's', 0x01),
+    ("t", Code::KeyT, "T", 't', 0x11),
+    ("u", Code::KeyU, "U", 'u', 0x20),
+    ("v", Code::KeyV, "V", 'v', 0x09),
+    ("w", Code::KeyW, "W", 'w', 0x0D),
+    ("x", Code::KeyX, "X", 'x', 0x07),
+    ("y", Code::KeyY, "Y", 'y', 0x10),
+    ("z", Code::KeyZ, "Z", 'z', 0x06),
+    ("0", Code::Digit0, "0", '0', 0x1D),
+    ("1", Code::Digit1, "1", '1', 0x12),
+    ("2", Code::Digit2, "2", '2', 0x13),
+    ("3", Code::Digit3, "3", '3', 0x14),
+    ("4", Code::Digit4, "4", '4', 0x15),
+    ("5", Code::Digit5, "5", '5', 0x17),
+    ("6", Code::Digit6, "6", '6', 0x16),
+    ("7", Code::Digit7, "7", '7', 0x1A),
+    ("8", Code::Digit8, "8", '8', 0x1C),
+    ("9", Code::Digit9, "9", '9', 0x19),
+    ("-", Code::Minus, "-", '-', 0x1B),
+    ("=", Code::Equal, "=", '=', 0x18),
+    ("[", Code::BracketLeft, "[", '[', 0x21),
+    ("]", Code::BracketRight, "]", ']', 0x1E),
+    ("\\", Code::Backslash, "\\", '\\', 0x2A),
+    (";", Code::Semicolon, ";", ';', 0x29),
+    ("'", Code::Quote, "'", '\'', 0x27),
+    (",", Code::Comma, ",", ',', 0x2B),
+    (".", Code::Period, ".", '.', 0x2F),
+    ("/", Code::Slash, "/", '/', 0x2C),
+    ("`", Code::Backquote, "`", '`', 0x32),
+    ("space", Code::Space, "Space", ' ', 0x31),
+    ("enter", Code::Enter, "↵", '\r', 0x24),
+    ("tab", Code::Tab, "⇥", '\t', 0x30),
+    ("escape", Code::Escape, "⎋", '\u{1b}', 0x35),
+    ("backspace", Code::Backspace, "⌫", '\u{8}', 0x33),
+    ("delete", Code::Delete, "⌦", '\u{f728}', 0x75),
+    ("up", Code::ArrowUp, "↑", '\u{f700}', 0x7E),
+    ("down", Code::ArrowDown, "↓", '\u{f701}', 0x7D),
+    ("left", Code::ArrowLeft, "←", '\u{f702}', 0x7B),
+    ("right", Code::ArrowRight, "→", '\u{f703}', 0x7C),
+    ("home", Code::Home, "↖", '\u{f729}', 0x73),
+    ("end", Code::End, "↘", '\u{f72b}', 0x77),
+    ("pageup", Code::PageUp, "⇞", '\u{f72c}', 0x74),
+    ("pagedown", Code::PageDown, "⇟", '\u{f72d}', 0x79),
+    ("f1", Code::F1, "F1", '\u{f704}', 0x7A),
+    ("f2", Code::F2, "F2", '\u{f705}', 0x78),
+    ("f3", Code::F3, "F3", '\u{f706}', 0x63),
+    ("f4", Code::F4, "F4", '\u{f707}', 0x76),
+    ("f5", Code::F5, "F5", '\u{f708}', 0x60),
+    ("f6", Code::F6, "F6", '\u{f709}', 0x61),
+    ("f7", Code::F7, "F7", '\u{f70a}', 0x62),
+    ("f8", Code::F8, "F8", '\u{f70b}', 0x64),
+    ("f9", Code::F9, "F9", '\u{f70c}', 0x65),
+    ("f10", Code::F10, "F10", '\u{f70d}', 0x6D),
+    ("f11", Code::F11, "F11", '\u{f70e}', 0x67),
+    ("f12", Code::F12, "F12", '\u{f70f}', 0x6F),
+    ("f13", Code::F13, "F13", '\u{f710}', 0x69),
+    ("f14", Code::F14, "F14", '\u{f711}', 0x6B),
+    ("f15", Code::F15, "F15", '\u{f712}', 0x71),
+    ("f16", Code::F16, "F16", '\u{f713}', 0x6A),
+    ("f17", Code::F17, "F17", '\u{f714}', 0x40),
+    ("f18", Code::F18, "F18", '\u{f715}', 0x4F),
+    ("f19", Code::F19, "F19", '\u{f716}', 0x50),
+    ("f20", Code::F20, "F20", '\u{f717}', 0x5A),
 ];
 
 /// 修饰键的 macOS 显示顺序 ⌃⌥⇧⌘。
@@ -204,16 +224,42 @@ pub fn parse(spec: &str) -> Result<HotKey> {
         .find(|(token, ..)| *token == key)
         .map(|(_, code, ..)| *code)
         .with_context(|| format!("「{spec}」里的「{key}」不是支持的按键"))?;
-    if mods.is_empty() {
+    if mods.is_empty() && !is_function_key(code) {
         // 不带修饰键的全局快捷键会吞掉所有 App 里的这个键，等于把键盘弄坏。
+        // F1–F20 例外：它们不产生字符，单独做快捷键很常见。
         bail!("「{spec}」没有修饰键，全局快捷键至少要带一个 cmd / ctrl / alt / shift");
     }
     Ok(HotKey::new(Some(mods), code))
 }
 
+/// F1–F20：不产生字符，可以不带修饰键单独做全局快捷键。
+pub fn is_function_key(code: Code) -> bool {
+    KEYS.iter()
+        .find(|(_, c, ..)| *c == code)
+        .is_some_and(|(token, ..)| {
+            token
+                .strip_prefix('f')
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| (1..=20).contains(&n))
+        })
+}
+
+/// Carbon 虚拟键码（kVK_*）。表外的键返回 None。
+pub fn carbon_keycode(code: Code) -> Option<u16> {
+    KEYS.iter()
+        .find(|(_, c, ..)| *c == code)
+        .map(|(.., vk)| *vk)
+}
+
+/// Carbon 虚拟键码 → 物理键，[`carbon_keycode`] 的逆运算。
+pub fn code_from_carbon(vk: u16) -> Option<Code> {
+    KEYS.iter()
+        .find(|(.., v)| *v == vk)
+        .map(|(_, code, ..)| *code)
+}
+
 /// `HotKey` → 配置写法，[`parse`] 的逆运算。表外的键返回 None。
-/// 给设置窗口录制快捷键后写回配置用；在它接上之前只有测试调用。
-#[allow(dead_code)]
+/// 设置窗口录制快捷键后写回配置用。
 pub fn to_spec(hotkey: &HotKey) -> Option<String> {
     let (token, ..) = KEYS.iter().find(|(_, code, ..)| *code == hotkey.key)?;
     // 与 GPUI `Keystroke::unparse` 的顺序一致：ctrl-alt-cmd-shift，设置窗口写回去的字符串不会和它打架。
@@ -239,7 +285,7 @@ pub fn glyphs(hotkey: &HotKey) -> String {
         .map(|(_, glyph)| *glyph)
         .collect();
     match KEYS.iter().find(|(_, code, ..)| *code == hotkey.key) {
-        Some((_, _, glyph, _)) => out.push_str(glyph),
+        Some((_, _, glyph, ..)) => out.push_str(glyph),
         None => out.push_str(&hotkey.key.to_string()),
     }
     out
@@ -249,7 +295,7 @@ pub fn glyphs(hotkey: &HotKey) -> String {
 pub fn key_equivalent(hotkey: &HotKey) -> Option<char> {
     KEYS.iter()
         .find(|(_, code, ..)| *code == hotkey.key)
-        .map(|(.., ch)| *ch)
+        .map(|(_, _, _, ch, _)| *ch)
 }
 
 // ======================= 期望的绑定 =======================
@@ -262,8 +308,10 @@ pub struct Wanted {
     pub spec: Option<String>,
 }
 
-/// 按配置算出所有命令的期望绑定。顺序即优先级：组合冲突时排在前面的保留。
-pub fn wanted(config: &Config) -> Vec<Wanted> {
+/// 每条命令分到的组合，不管扩展是否启用。顺序即优先级：组合冲突时排在前面的保留。
+///
+/// 录制时按它查冲突：停用的扩展仍然占着自己的组合，否则重新启用时会和别的命令撞上。
+pub fn assigned(config: &Config) -> Vec<Wanted> {
     let mut out = vec![Wanted {
         command: Command::Toggle,
         label: "唤起 Helmp",
@@ -271,12 +319,11 @@ pub fn wanted(config: &Config) -> Vec<Wanted> {
     }];
     for shortcut in &EXTENSION_SHORTCUTS {
         let ext = config.extensions.get(shortcut.provider);
-        let enabled = ext.is_none_or(|ext| ext.enabled);
         let spec = match ext.and_then(|ext| ext.hotkey.as_deref()) {
-            _ if !enabled => None,
-            // 用户清空了快捷键：不绑定。
+            // 用户清除了快捷键（写成空字符串）：不绑定。
             Some(spec) if spec.trim().is_empty() => None,
             Some(spec) => Some(spec.to_string()),
+            // 没配置过：用默认值。
             None => Some(shortcut.default.to_string()),
         };
         out.push(Wanted {
@@ -286,6 +333,63 @@ pub fn wanted(config: &Config) -> Vec<Wanted> {
         });
     }
     out
+}
+
+/// 按配置算出所有命令真正要注册的绑定：[`assigned`] 去掉停用的扩展。
+pub fn wanted(config: &Config) -> Vec<Wanted> {
+    let mut out = assigned(config);
+    for want in &mut out {
+        let disabled = EXTENSION_SHORTCUTS
+            .iter()
+            .find(|shortcut| shortcut.command == want.command)
+            .and_then(|shortcut| config.extensions.get(shortcut.provider))
+            .is_some_and(|ext| !ext.enabled);
+        if disabled {
+            want.spec = None;
+        }
+    }
+    out
+}
+
+/// 某条命令在配置里分到的组合（设置窗口显示用）。None = 未设置。
+pub fn assigned_spec(config: &Config, command: Command) -> Option<String> {
+    assigned(config)
+        .into_iter()
+        .find(|want| want.command == command)
+        .and_then(|want| want.spec)
+        .filter(|spec| !spec.trim().is_empty())
+}
+
+/// 某条命令的出厂默认组合。
+pub fn default_spec(command: Command) -> Option<&'static str> {
+    match command {
+        Command::Toggle => Some(DEFAULT_TOGGLE),
+        _ => EXTENSION_SHORTCUTS
+            .iter()
+            .find(|shortcut| shortcut.command == command)
+            .map(|shortcut| shortcut.default),
+    }
+}
+
+/// 某个扩展的快捷键命令（扩展表格里哪些行能录快捷键）。
+pub fn extension_command(provider: &str) -> Option<Command> {
+    EXTENSION_SHORTCUTS
+        .iter()
+        .find(|shortcut| shortcut.provider == provider)
+        .map(|shortcut| shortcut.command)
+}
+
+/// 命令的显示名（按当前语言），冲突提示里指名用。
+pub fn command_label(command: Command) -> &'static str {
+    match command {
+        Command::Toggle => tr("唤起 Helmp", "Open Helmp"),
+        _ => EXTENSION_SHORTCUTS
+            .iter()
+            .find(|shortcut| shortcut.command == command)
+            .map_or(tr("Helmp 命令", "a Helmp command"), |shortcut| {
+                tr(shortcut.label, shortcut.label_en)
+            }),
+    }
 }
 
 // ======================= 注册表 =======================
@@ -306,15 +410,65 @@ impl Registrar for GlobalHotKeyManager {
     }
 }
 
-/// 当前真实注册着的绑定。
+/// 某条命令没能按配置生效的原因。设置窗口在对应行显示，文案按当前语言现取。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Issue {
+    /// 配置里的写法解析不了（多半是手改 config.json 改坏了）。
+    Invalid { spec: String },
+    /// 和优先级更高的命令要了同一个组合。
+    Duplicate { wanted: HotKey, owner: Command },
+    /// 向系统注册失败（被系统或其他 App 占用）。`kept` 是退回去继续生效的旧组合。
+    Unavailable {
+        wanted: HotKey,
+        kept: Option<HotKey>,
+    },
+}
+
+impl Issue {
+    pub fn message(&self) -> String {
+        match self {
+            Issue::Invalid { spec } => trf!(
+                "配置里的快捷键「{spec}」无效，未生效",
+                "The shortcut “{spec}” in the config file is invalid and isn’t active"
+            ),
+            Issue::Duplicate { wanted, owner } => trf!(
+                "{} 已被「{}」使用，未生效",
+                "{} is already used by “{}” and isn’t active",
+                glyphs(wanted),
+                command_label(*owner)
+            ),
+            Issue::Unavailable {
+                wanted,
+                kept: Some(kept),
+            } => trf!(
+                "{} 注册失败（已被系统或其他应用占用），仍在使用 {}",
+                "Couldn’t register {} (taken by macOS or another app); still using {}",
+                glyphs(wanted),
+                glyphs(kept)
+            ),
+            Issue::Unavailable { wanted, kept: None } => trf!(
+                "{} 注册失败（已被系统或其他应用占用），目前没有生效的快捷键",
+                "Couldn’t register {} (taken by macOS or another app); no shortcut is active",
+                glyphs(wanted)
+            ),
+        }
+    }
+}
+
+/// 当前真实注册着的绑定，以及没能按配置生效的命令。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Registry {
     bound: BTreeMap<Command, HotKey>,
+    issues: BTreeMap<Command, Issue>,
 }
 
 impl Registry {
     pub fn get(&self, command: Command) -> Option<HotKey> {
         self.bound.get(&command).copied()
+    }
+
+    pub fn issue(&self, command: Command) -> Option<&Issue> {
+        self.issues.get(&command)
     }
 
     pub fn command_for(&self, hotkey_id: u32) -> Option<Command> {
@@ -324,12 +478,16 @@ impl Registry {
             .map(|(command, _)| *command)
     }
 
-    /// 把注册状态调整到 `wanted`，返回需要告诉用户的问题（每条一句）。
+    /// 把注册状态调整到 `wanted`，返回需要告诉用户的问题（每条一句，写 stderr 用）；
+    /// 同样的问题按命令记进 `issues`，给设置窗口显示。
     ///
     /// - 解析失败 / 注册失败：保留这条命令原来的组合。
     /// - 两条命令想要同一个组合：排在前面的拿到，后面的报冲突、保留原来的（原来的也冲突就不绑定）。
     pub fn apply(&mut self, registrar: &impl Registrar, wanted: &[Wanted]) -> Vec<String> {
         let mut problems = Vec::new();
+        for want in wanted {
+            self.issues.remove(&want.command);
+        }
 
         // 1. 解析，解析失败保留旧的。
         let mut targets: Vec<(Command, &'static str, Option<HotKey>)> = wanted
@@ -342,6 +500,8 @@ impl Registry {
                         Ok(hotkey) => Some(hotkey),
                         Err(err) => {
                             problems.push(format!("「{}」的快捷键无效：{err:#}", want.label));
+                            self.issues
+                                .insert(want.command, Issue::Invalid { spec: spec.clone() });
                             current
                         }
                     },
@@ -351,29 +511,38 @@ impl Registry {
             .collect();
 
         // 2. 冲突：按优先级认领组合。
-        let mut claimed: Vec<(HotKey, &'static str)> = Vec::new();
+        let mut claimed: Vec<(HotKey, Command, &'static str)> = Vec::new();
         for i in 0..targets.len() {
             let (command, label, Some(target)) = targets[i] else {
                 continue;
             };
-            if let Some((_, owner)) = claimed.iter().find(|(hotkey, _)| *hotkey == target) {
+            if let Some((_, owner, owner_label)) =
+                claimed.iter().find(|(hotkey, ..)| *hotkey == target)
+            {
                 problems.push(format!(
-                    "「{label}」的快捷键 {} 与「{owner}」冲突，未生效",
+                    "「{label}」的快捷键 {} 与「{owner_label}」冲突，未生效",
                     glyphs(&target)
                 ));
+                self.issues.insert(
+                    command,
+                    Issue::Duplicate {
+                        wanted: target,
+                        owner: *owner,
+                    },
+                );
                 let fallback = self.get(command).filter(|current| {
                     *current != target
-                        && !claimed.iter().any(|(hotkey, _)| hotkey == current)
+                        && !claimed.iter().any(|(hotkey, ..)| hotkey == current)
                         && !targets
                             .iter()
                             .any(|(other, _, t)| *other != command && *t == Some(*current))
                 });
                 targets[i].2 = fallback;
                 if let Some(fallback) = fallback {
-                    claimed.push((fallback, label));
+                    claimed.push((fallback, command, label));
                 }
             } else {
-                claimed.push((target, label));
+                claimed.push((target, command, label));
             }
         }
 
@@ -406,6 +575,13 @@ impl Registry {
                         !self.bound.values().any(|bound| bound == old)
                             && registrar.register(*old).is_ok()
                     });
+                    self.issues.insert(
+                        *command,
+                        Issue::Unavailable {
+                            wanted: *target,
+                            kept,
+                        },
+                    );
                     match kept {
                         Some(old) => {
                             self.bound.insert(*command, old);
@@ -441,7 +617,48 @@ pub fn active(command: Command) -> Option<HotKey> {
         .and_then(|registry| registry.get(command))
 }
 
-/// 每次绑定变化加一，菜单栏据此决定是否重建菜单。
+/// 某条命令没能按配置生效的原因（设置窗口显示警示用）。
+pub fn issue(command: Command) -> Option<Issue> {
+    ACTIVE
+        .lock()
+        .expect("hotkey registry poisoned")
+        .as_ref()
+        .and_then(|registry| registry.issue(command).cloned())
+}
+
+/// 这个组合现在是否由 Helmp 自己注册着（探测「被其他 App 占用」前排除自己）。
+pub fn is_bound_by_helmp(hotkey: HotKey) -> bool {
+    ACTIVE
+        .lock()
+        .expect("hotkey registry poisoned")
+        .as_ref()
+        .is_some_and(|registry| registry.bound.values().any(|bound| *bound == hotkey))
+}
+
+/// 面板 / 首页结果右侧显示的快捷键：只有真正生效的才显示，冲突未生效、被清除、录制中都不显示。
+pub fn hint(command: Command) -> Option<String> {
+    hint_in(
+        ACTIVE.lock().expect("hotkey registry poisoned").as_ref(),
+        command,
+    )
+}
+
+fn hint_in(registry: Option<&Registry>, command: Command) -> Option<String> {
+    registry
+        .and_then(|registry| registry.get(command))
+        .map(|hotkey| glyphs(&hotkey))
+}
+
+/// 某个扩展的快捷键提示，做成结果右侧的键帽（provider 用，见 [`hint`]）。没有生效的绑定时为空。
+pub fn hint_keys(provider: &str) -> Vec<crate::provider::Accessory> {
+    extension_command(provider)
+        .and_then(hint)
+        .map(|glyphs| crate::provider::Accessory::keys(&glyphs))
+        .into_iter()
+        .collect()
+}
+
+/// 每次绑定或问题变化加一，菜单栏、设置窗口据此刷新。
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
@@ -474,6 +691,7 @@ pub fn register_toggle(
 
     if registry.get(Command::Toggle).is_none() {
         // 配置里的唤起快捷键用不了：退回默认值，免得整个 App 没有入口。
+        let toggle_issue = registry.issue(Command::Toggle).cloned();
         let fallback: Vec<Wanted> = wanted_now
             .iter()
             .cloned()
@@ -488,6 +706,13 @@ pub fn register_toggle(
         match registry.get(Command::Toggle) {
             Some(hotkey) => eprintln!("helmp: 暂时改用默认唤起快捷键 {}", glyphs(&hotkey)),
             None => bail!("唤起快捷键注册失败（默认的 {DEFAULT_TOGGLE} 也不行）"),
+        }
+        // 默认值顶上了，但用户配的那个仍然没生效：设置里要继续提示，并说明现在用的是哪个。
+        if let Some(mut issue) = toggle_issue {
+            if let Issue::Unavailable { kept, .. } = &mut issue {
+                *kept = registry.get(Command::Toggle);
+            }
+            registry.issues.insert(Command::Toggle, issue);
         }
     }
     publish(&registry);
@@ -516,14 +741,14 @@ pub fn register_toggle(
             }
             if changed_rx.try_recv().is_ok() {
                 while changed_rx.try_recv().is_ok() {}
-                // 设置窗口录制快捷键期间注销全部全局热键：Carbon 热键会在系统层吞掉按键，
-                // 不注销的话用户按下当前的唤起键（如 ⌥Space）录到的不是组合，而是面板被唤起。
-                let wanted_now = if SUSPENDED.load(Ordering::Relaxed) {
-                    Vec::new()
-                } else {
-                    wanted(&crate::config::get())
-                };
+                let suspended = SUSPENDED.load(Ordering::Relaxed) > 0;
+                let wanted_now = wanted_while(suspended, &crate::config::get());
+                // 挂起只是临时让出组合，不代表问题解决了：设置窗口里别的行的警示保持不变。
+                let issues = suspended.then(|| registry.issues.clone());
                 report(registry.apply(&manager, &wanted_now));
+                if let Some(issues) = issues {
+                    registry.issues = issues;
+                }
                 publish(&registry);
             }
             cx.background_executor().timer(POLL_INTERVAL).await;
@@ -534,16 +759,49 @@ pub fn register_toggle(
     Ok(())
 }
 
-static SUSPENDED: AtomicBool = AtomicBool::new(false);
+/// 挂起时每条命令都要求「不绑定」，`apply` 才会真的注销（只传空列表的话什么都不会变）。
+///
+/// 设置窗口录制快捷键期间注销全部全局热键：Carbon 热键会在系统层吞掉按键，
+/// 不注销的话用户按下当前的唤起键（如 ⌥Space）录到的不是组合，而是面板被唤起。
+fn wanted_while(suspended: bool, config: &Config) -> Vec<Wanted> {
+    let mut out = wanted(config);
+    if suspended {
+        for want in &mut out {
+            want.spec = None;
+        }
+    }
+    out
+}
+
+/// 正在录制的录制框个数。用计数而不是开关：从一个录制框直接点到另一个时，
+/// 前一个失焦（恢复）和后一个开始（挂起）的先后不固定，开关会被后到的「恢复」打开。
+static SUSPENDED: AtomicUsize = AtomicUsize::new(0);
 static RECHECK: std::sync::OnceLock<std::sync::Mutex<mpsc::Sender<()>>> =
     std::sync::OnceLock::new();
 
-/// 暂停 / 恢复全部全局热键（设置窗口录制快捷键时用）。
-pub fn set_suspended(suspended: bool) {
-    if SUSPENDED.swap(suspended, Ordering::Relaxed) == suspended {
-        return;
+/// 开始录制：挂起全部全局热键，并让系统快捷键（⌘Space、⇧⌘3 等）在 Helmp 前台时暂不生效，
+/// 录制框才收得到这些按键、能提示「已被系统使用」。必须和 [`resume`] 成对调用（主线程）。
+pub fn suspend() {
+    if SUSPENDED.fetch_add(1, Ordering::Relaxed) == 0 {
+        crate::trace::log("hotkeys suspended");
+        conflict::pause_system_hotkeys();
+        recheck();
     }
-    crate::trace::log(format!("hotkeys suspended={suspended}"));
+}
+
+/// 结束录制：恢复全局热键与系统快捷键。
+pub fn resume() {
+    let previous = SUSPENDED
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+        .unwrap_or(0);
+    if previous == 1 {
+        crate::trace::log("hotkeys resumed");
+        conflict::restore_system_hotkeys();
+        recheck();
+    }
+}
+
+fn recheck() {
     if let Some(tx) = RECHECK.get() {
         let _ = tx.lock().expect("hotkey recheck poisoned").send(());
     }
@@ -877,5 +1135,199 @@ mod tests {
         assert!(problems.is_empty());
         assert!(fake.registered.borrow().is_empty());
         assert_eq!(registry.get(Command::Scope("clipboard")), None);
+    }
+
+    #[test]
+    fn function_keys_work_without_modifiers() {
+        // F1–F20 不产生字符，单独做全局快捷键很常见（HapiGo 用户就有 ⌃⌥⇧⌘F20）；
+        // 录制框允许 F5，解析这边不放行的话，录下来的值永远注册不上。
+        assert_eq!(
+            parse("f5").unwrap(),
+            HotKey::new(Some(Modifiers::empty()), Code::F5)
+        );
+        assert_eq!(parse("f20").unwrap().key, Code::F20);
+        assert_eq!(
+            to_spec(&parse("ctrl-f13").unwrap()).as_deref(),
+            Some("ctrl-f13")
+        );
+        // 字母、空格仍然必须带修饰键。
+        assert!(parse("q").is_err());
+        assert!(parse("space").is_err());
+    }
+
+    #[test]
+    fn carbon_keycodes_round_trip() {
+        // 系统快捷键 plist 存的是虚拟键码；对照表错一位，⇧⌘3 就会被认成别的组合而漏报。
+        assert_eq!(carbon_keycode(Code::Space), Some(0x31));
+        assert_eq!(carbon_keycode(Code::Digit3), Some(0x14));
+        assert_eq!(code_from_carbon(0x14), Some(Code::Digit3));
+        for (_, code, .., vk) in KEYS {
+            assert_eq!(code_from_carbon(*vk), Some(*code), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn cleared_hotkey_is_never_triggered() {
+        // 用户清除了剪贴板历史的快捷键：注册表里不能还留着 ⇧⌘V，否则按下去照样打开剪贴板。
+        let fake = Fake::default();
+        let mut registry = Registry::default();
+        registry.apply(&fake, &wanted(&Config::default()));
+        let shift_cmd_v = parse("cmd-shift-v").unwrap();
+        assert_eq!(
+            registry.command_for(shift_cmd_v.id()),
+            Some(Command::Scope("clipboard"))
+        );
+
+        let mut config = Config::default();
+        config.extensions.insert(
+            "clipboard".into(),
+            ExtensionConfig {
+                hotkey: Some(String::new()),
+                ..ExtensionConfig::default()
+            },
+        );
+        registry.apply(&fake, &wanted(&config));
+        assert_eq!(registry.command_for(shift_cmd_v.id()), None);
+        assert!(!fake.registered.borrow().contains(&shift_cmd_v));
+        assert_eq!(hint_in(Some(&registry), Command::Scope("clipboard")), None);
+    }
+
+    #[test]
+    fn failures_are_recorded_per_command_for_the_settings_window() {
+        // 只写 stderr 的话用户永远看不到：注册失败、重复、写坏都要记到对应命令上。
+        let fake = Fake {
+            taken: vec![parse("cmd-shift-2").unwrap()],
+            ..Fake::default()
+        };
+        let mut registry = Registry::default();
+        registry.apply(
+            &fake,
+            &[
+                want(Command::Toggle, "alt-space"),
+                want(Command::Scope("clipboard"), "alt-space"),
+                want(Command::Scope("translate"), "alt-nosuchkey"),
+                want(
+                    Command::RunItem {
+                        id: "screenshot:ocr-screen",
+                        query: "截图识别文字",
+                    },
+                    "cmd-shift-2",
+                ),
+            ],
+        );
+        assert_eq!(registry.issue(Command::Toggle), None);
+        assert_eq!(
+            registry.issue(Command::Scope("clipboard")),
+            Some(&Issue::Duplicate {
+                wanted: parse("alt-space").unwrap(),
+                owner: Command::Toggle,
+            })
+        );
+        assert!(matches!(
+            registry.issue(Command::Scope("translate")),
+            Some(Issue::Invalid { .. })
+        ));
+        let ocr = Command::RunItem {
+            id: "screenshot:ocr-screen",
+            query: "截图识别文字",
+        };
+        assert_eq!(
+            registry.issue(ocr),
+            Some(&Issue::Unavailable {
+                wanted: parse("cmd-shift-2").unwrap(),
+                kept: None,
+            })
+        );
+        let message = registry.issue(ocr).unwrap().message();
+        assert!(
+            message.contains("⇧⌘2") && message.contains("占用"),
+            "{message}"
+        );
+        let message = registry
+            .issue(Command::Scope("clipboard"))
+            .unwrap()
+            .message();
+        assert!(message.contains("唤起 Helmp"), "{message}");
+
+        // 用户改成能用的组合后，警示要消失。
+        registry.apply(
+            &fake,
+            &[
+                want(Command::Toggle, "alt-space"),
+                want(Command::Scope("clipboard"), "cmd-shift-v"),
+            ],
+        );
+        assert_eq!(registry.issue(Command::Scope("clipboard")), None);
+    }
+
+    #[test]
+    fn hints_show_only_what_actually_works() {
+        // 菜单和面板里显示的快捷键必须按得出来：冲突没生效的不能显示，生效的按 ⌃⌥⇧⌘ 顺序显示。
+        let fake = Fake::default();
+        let mut registry = Registry::default();
+        registry.apply(
+            &fake,
+            &[
+                want(Command::Toggle, "cmd-shift-v"),
+                want(Command::Scope("clipboard"), "cmd-shift-v"),
+            ],
+        );
+        assert_eq!(
+            hint_in(Some(&registry), Command::Toggle).as_deref(),
+            Some("⇧⌘V")
+        );
+        assert_eq!(hint_in(Some(&registry), Command::Scope("clipboard")), None);
+        // 热键还没注册（命令行模式、单测）时什么都不显示。
+        assert_eq!(hint_in(None, Command::Toggle), None);
+    }
+
+    #[test]
+    fn suspending_really_unregisters_everything() {
+        // 录制时要把全部组合让出来：只传空列表给 apply 什么都不会注销，
+        // 用户在录制框里按当前的唤起键（⌥Space）就会把面板叫出来，而不是录到组合。
+        let fake = Fake::default();
+        let mut registry = Registry::default();
+        let config = Config::default();
+        registry.apply(&fake, &wanted_while(false, &config));
+        assert_eq!(
+            fake.registered.borrow().len(),
+            EXTENSION_SHORTCUTS.len() + 1
+        );
+        registry.apply(&fake, &wanted_while(true, &config));
+        assert!(fake.registered.borrow().is_empty());
+        assert_eq!(registry.get(Command::Toggle), None);
+        registry.apply(&fake, &wanted_while(false, &config));
+        assert_eq!(
+            registry.get(Command::Toggle),
+            Some(parse("alt-space").unwrap())
+        );
+    }
+
+    #[test]
+    fn assigned_keeps_disabled_extensions_but_wanted_does_not() {
+        // 停用扩展不注册（还给别的 App），但它分到的组合仍算它的：录制别的命令时要指名冲突。
+        let mut config = Config::default();
+        config.extensions.insert(
+            "agents".into(),
+            ExtensionConfig {
+                enabled: false,
+                ..ExtensionConfig::default()
+            },
+        );
+        assert_eq!(
+            assigned_spec(&config, Command::Scope("agents")).as_deref(),
+            Some("ctrl-alt-a")
+        );
+        let wanted = wanted(&config);
+        assert_eq!(
+            wanted
+                .iter()
+                .find(|w| w.command == Command::Scope("agents"))
+                .unwrap()
+                .spec,
+            None
+        );
+        assert_eq!(default_spec(Command::Scope("agents")), Some("ctrl-alt-a"));
+        assert_eq!(default_spec(Command::Toggle), Some(DEFAULT_TOGGLE));
     }
 }
