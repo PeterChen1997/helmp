@@ -7,6 +7,7 @@ use gpui_kit::*;
 use super::{default_script_dir, display_path};
 use crate::config;
 use crate::i18n::{tr, trf};
+use crate::providers::websearch;
 use crate::settings::SettingsView;
 use crate::settings::model;
 use crate::settings::system;
@@ -155,6 +156,8 @@ impl SettingsView {
                     pal,
                 )))
             })
+            .child(self.render_web_search(&config.web_search.engines, pal, cx))
+            .child(self.render_system_commands(config.system_commands.confirm_dangerous, pal, cx))
             .child(widgets::group_header(tr("脚本目录", "Script Folders"), pal))
             .child(self.render_script_dirs(&config.script_dirs, pal, cx))
             .child(
@@ -181,6 +184,130 @@ impl SettingsView {
                     )),
             )
             .into_any_element()
+    }
+
+    /// 网页搜索引擎：开关 + 上下移动调整顺序（顺序就是结果里的顺序）。
+    fn render_web_search(
+        &mut self,
+        engines: &[config::WebSearchEngine],
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let last = engines.len().saturating_sub(1);
+        let rows = engines
+            .iter()
+            .enumerate()
+            .map(|(index, engine)| {
+                let name = websearch::engine_name(engine);
+                let (icon, tint) = websearch::engine_icon(&engine.id);
+                let move_button = |up: bool| {
+                    let id = engine.id.clone();
+                    let disabled = if up { index == 0 } else { index == last };
+                    widgets::push_button(
+                        SharedString::from(format!(
+                            "web-search-{}-{}",
+                            if up { "up" } else { "down" },
+                            engine.id
+                        )),
+                        if up { "↑" } else { "↓" },
+                        disabled,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let id = id.clone();
+                            this.save(cx, move |c| {
+                                model::move_web_search(c, &id, up);
+                            });
+                        }),
+                    )
+                };
+                let id = engine.id.clone();
+                widgets::row(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(widgets::tinted_icon(icon, tint, px(24.)))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.))
+                                .min_w_0()
+                                .child(widgets::label(name.clone(), pal))
+                                .child(widgets::help_text(engine.url.clone(), pal).truncate()),
+                        ),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(move_button(true))
+                        .child(move_button(false))
+                        .child(widgets::switch(
+                            SharedString::from(format!("web-search-enabled-{}", engine.id)),
+                            engine.enabled,
+                            &trf!("在 {name} 搜索", "Search {name}"),
+                            pal,
+                            cx.listener(move |this, on: &bool, _, cx| {
+                                let (id, on) = (id.clone(), *on);
+                                this.save(cx, move |c| {
+                                    model::set_web_search_enabled(c, &id, on);
+                                });
+                            }),
+                        )),
+                )
+                .into_any_element()
+            })
+            .collect();
+        div()
+            .flex()
+            .flex_col()
+            .child(widgets::group_header(tr("网页搜索", "Web Search"), pal))
+            .child(widgets::group(rows, pal).mb(px(6.)))
+            .child(div().mb(px(18.)).ml(px(4.)).child(widgets::help_text(
+                tr(
+                    "查询非空时列在结果末尾，没有本地结果时排在最前；从上到下就是结果里的顺序",
+                    "Listed after local results, or first when nothing local matches. Results follow this order.",
+                ),
+                pal,
+            )))
+    }
+
+    /// 系统命令：危险命令的二次确认开关。
+    fn render_system_commands(
+        &mut self,
+        confirm: bool,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .flex_col()
+            .child(widgets::group_header(tr("系统命令", "System Commands"), pal))
+            .child(widgets::group(
+                vec![
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("危险命令需要确认", "Confirm dangerous commands"),
+                            tr(
+                                "清空废纸篓、重启、关机、注销、退出所有应用：在查询末尾加 ! 后回车才执行",
+                                "Empty Trash, Restart, Shut Down, Log Out, Quit All Apps run only after you add ! to the end of the query",
+                            ),
+                            pal,
+                        ),
+                        widgets::switch(
+                            "system-confirm-dangerous",
+                            confirm,
+                            tr("危险命令需要确认", "Confirm dangerous commands"),
+                            pal,
+                            cx.listener(|this, on: &bool, _, cx| {
+                                let on = *on;
+                                this.save(cx, move |c| c.system_commands.confirm_dangerous = on);
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+                ],
+                pal,
+            ))
     }
 
     fn render_script_dirs(

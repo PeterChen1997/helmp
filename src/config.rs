@@ -22,6 +22,11 @@ pub struct Config {
     pub translate: TranslateConfig,
     pub clipboard: ClipboardConfig,
     pub screenshot: ScreenshotConfig,
+    /// 网页搜索兜底：引擎列表的顺序就是结果里的顺序。
+    #[serde(default)]
+    pub web_search: WebSearchConfig,
+    #[serde(default)]
+    pub system_commands: SystemCommandsConfig,
     pub appearance: Appearance,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
@@ -38,6 +43,8 @@ impl Default for Config {
             translate: TranslateConfig::default(),
             clipboard: ClipboardConfig::default(),
             screenshot: ScreenshotConfig::default(),
+            web_search: WebSearchConfig::default(),
+            system_commands: SystemCommandsConfig::default(),
             appearance: Appearance::System,
             script_dirs: Vec::new(),
             onboarding_done: false,
@@ -205,6 +212,75 @@ impl Default for ScreenshotConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WebSearchConfig {
+    pub engines: Vec<WebSearchEngine>,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        // 内置引擎的显示名不存在这里（随界面语言变，见 `providers::websearch::engine_name`），`name` 留空。
+        let engine = |id: &str, url: &str, enabled: bool| WebSearchEngine {
+            id: id.into(),
+            name: String::new(),
+            url: url.into(),
+            enabled,
+        };
+        Self {
+            engines: vec![
+                engine("google", "https://www.google.com/search?q={query}", true),
+                engine("baidu", "https://www.baidu.com/s?wd={query}", true),
+                engine("github", "https://github.com/search?q={query}", true),
+                engine("bing", "https://www.bing.com/search?q={query}", false),
+                engine(
+                    "bing-translate",
+                    "https://www.bing.com/translator?text={query}",
+                    false,
+                ),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WebSearchEngine {
+    /// 稳定 id，也是结果 id 的后缀（`websearch:<id>`）。
+    pub id: String,
+    /// 自定义引擎的显示名；内置引擎留空，显示名按界面语言取。
+    pub name: String,
+    /// 网址模板，`{query}` 换成 URL 编码后的查询。
+    pub url: String,
+    pub enabled: bool,
+}
+
+impl Default for WebSearchEngine {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            url: String::new(),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SystemCommandsConfig {
+    /// 清空废纸篓、重启、关机、注销、退出所有应用：查询末尾加 ` !` 才执行。
+    pub confirm_dangerous: bool,
+}
+
+impl Default for SystemCommandsConfig {
+    fn default() -> Self {
+        Self {
+            confirm_dangerous: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Appearance {
@@ -316,6 +392,16 @@ mod tests {
         assert!(config.clipboard.skip_concealed);
         // 加语言设置之前的配置：跟随系统，而不是读失败。
         assert_eq!(config.general.language, Language::System);
+        // 加网页搜索与系统命令之前的配置：默认引擎照常出现，危险命令仍要确认。
+        let enabled: Vec<_> = config
+            .web_search
+            .engines
+            .iter()
+            .filter(|engine| engine.enabled)
+            .map(|engine| engine.id.as_str())
+            .collect();
+        assert_eq!(enabled, ["google", "baidu", "github"]);
+        assert!(config.system_commands.confirm_dangerous);
     }
 
     #[test]

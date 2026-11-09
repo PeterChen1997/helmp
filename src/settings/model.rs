@@ -365,12 +365,40 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
                 "Uses the model set up in Models",
             )),
         ),
+        // 退出 Helmp、打开设置。「系统命令」名字给了真正的系统命令插件，这里改叫 Helmp 命令免得两行同名。
         "builtin" => (
-            tr("系统命令", "System Commands"),
+            tr("Helmp 命令", "Helmp Commands"),
             builtin,
             "settings",
             Tint::Gray,
             None,
+        ),
+        "system" => (
+            tr("系统命令", "System Commands"),
+            builtin,
+            "power",
+            Tint::Red,
+            Some(tr(
+                "锁屏、睡眠、关机、清空废纸篓等",
+                "Lock, sleep, shut down, empty Trash, and more",
+            )),
+        ),
+        "calculator" => (
+            tr("计算器", "Calculator"),
+            builtin,
+            "calculator",
+            Tint::Orange,
+            None,
+        ),
+        "websearch" => (
+            tr("网页搜索", "Web Search"),
+            builtin,
+            "globe",
+            Tint::Blue,
+            Some(tr(
+                "没有本地结果时排在最前，引擎在下方调整",
+                "Shown first when nothing local matches; set engines below",
+            )),
         ),
         // 新插件还没登记显示名：显示 id，至少能开关。
         _ => ("", builtin, "puzzle", Tint::Gray, None),
@@ -443,6 +471,37 @@ pub fn remove_script_dir(config: &mut Config, dir: &str) -> bool {
     let before = config.script_dirs.len();
     config.script_dirs.retain(|existing| existing != dir);
     config.script_dirs.len() != before
+}
+
+/// 网页搜索引擎的开关。返回是否找到这个引擎。
+pub fn set_web_search_enabled(config: &mut Config, id: &str, enabled: bool) -> bool {
+    match config.web_search.engines.iter_mut().find(|e| e.id == id) {
+        Some(engine) => {
+            engine.enabled = enabled;
+            true
+        }
+        None => false,
+    }
+}
+
+/// 把引擎上移（`up`）或下移一位；已在顶端 / 底端或找不到时不动，返回是否有变化。
+pub fn move_web_search(config: &mut Config, id: &str, up: bool) -> bool {
+    let engines = &mut config.web_search.engines;
+    let Some(index) = engines.iter().position(|e| e.id == id) else {
+        return false;
+    };
+    let target = if up {
+        index.checked_sub(1)
+    } else {
+        Some(index + 1).filter(|&next| next < engines.len())
+    };
+    match target {
+        Some(target) => {
+            engines.swap(index, target);
+            true
+        }
+        None => false,
+    }
 }
 
 // ---------------------------------------------------------------- Agent
@@ -655,6 +714,30 @@ mod tests {
     }
 
     #[test]
+    fn web_search_order_moves_one_step_and_stops_at_the_ends() {
+        // 设置里用上下按钮调整顺序：越界时不能绕到另一头，也不能动到别的引擎。
+        let mut config = Config::default();
+        let order = |c: &Config| -> Vec<String> {
+            c.web_search.engines.iter().map(|e| e.id.clone()).collect()
+        };
+        assert!(!move_web_search(&mut config, "google", true));
+        assert!(move_web_search(&mut config, "github", true));
+        assert_eq!(order(&config)[..3], ["google", "github", "baidu"]);
+        let last = order(&config).last().cloned().unwrap();
+        assert!(!move_web_search(&mut config, &last, false));
+        assert!(!move_web_search(&mut config, "nope", false));
+        assert!(set_web_search_enabled(&mut config, "bing", true));
+        assert!(
+            config
+                .web_search
+                .engines
+                .iter()
+                .any(|e| e.id == "bing" && e.enabled)
+        );
+        assert!(!set_web_search_enabled(&mut config, "nope", true));
+    }
+
+    #[test]
     fn default_alias_comes_from_scope_prefix() {
         // 别名列显示插件默认前缀，用户才知道不改也能用 `cb ` 进入。
         assert_eq!(default_alias(&["cb ".into()]).as_deref(), Some("cb"));
@@ -725,9 +808,17 @@ mod tests {
             "scripts",
             "translate",
             "builtin",
+            "system",
+            "calculator",
+            "websearch",
         ] {
             assert!(!extension_meta(id).name.is_empty(), "{id}");
         }
+        // 两个插件同名，用户分不清该开关哪一个。
+        assert_ne!(
+            extension_meta("builtin").name,
+            extension_meta("system").name
+        );
         assert_eq!(extension_meta("scripts").kind, "脚本");
     }
 }

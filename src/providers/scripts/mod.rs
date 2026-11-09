@@ -8,7 +8,7 @@
 //! - 输出：compact / fullOutput / inline 在详情里展示（等宽），silent 跑完不打扰。
 //! - `needsConfirmation: true` 的脚本只有查询以 ` !` 结尾才执行。
 
-mod args;
+pub(super) mod args;
 mod header;
 mod runner;
 
