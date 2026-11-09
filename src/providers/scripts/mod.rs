@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 
+use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::provider::{
     Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction, Outcome,
@@ -33,7 +34,9 @@ const ICON: Icon = Icon::Symbol {
     name: "square-terminal",
     tint: Tint::Graphite,
 };
-const BADGE: &str = "脚本";
+fn badge() -> &'static str {
+    tr("脚本", "Scripts")
+}
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// 只在文件开头这么多字节里找头注释，避免把大文件整个读进来。
@@ -46,7 +49,12 @@ const TITLE_PREFIX_SCORE: u32 = 1000;
 const PACKAGE_PREFIX_SCORE: u32 = 850;
 /// packageName 模糊匹配相对标题匹配的降权。
 const PACKAGE_PENALTY: u32 = 100;
-const CONFIRM_HINT: &str = "该脚本需要确认，在查询末尾加 ! 后回车执行";
+fn confirm_hint() -> &'static str {
+    tr(
+        "该脚本需要确认，在查询末尾加 ! 后回车执行",
+        "This script needs confirmation. Add ! to the end of your query, then press Return.",
+    )
+}
 
 #[derive(Debug)]
 pub struct Script {
@@ -68,22 +76,23 @@ impl Script {
         let header = &self.header;
         let mut metadata = Vec::new();
         if let Some(description) = &header.description {
-            metadata.push(("说明".to_string(), description.clone()));
+            metadata.push((tr("说明", "Description").to_string(), description.clone()));
         }
-        metadata.push(("脚本".to_string(), display_path.to_string()));
+        metadata.push((tr("脚本", "Script").to_string(), display_path.to_string()));
         let dialect = if header.helmp_only {
-            "Helmp 脚本"
+            tr("Helmp 脚本", "Helmp Script")
         } else {
             "Raycast Script Commands"
         };
+        let mode = header.mode.name();
         metadata.push((
-            "来源".to_string(),
-            format!("{dialect} · 输出模式 {}", header.mode.name()),
+            tr("来源", "Source").to_string(),
+            trf!("{dialect} · 输出模式 {mode}", "{dialect} · {mode} mode"),
         ));
         let mut blocks = Vec::new();
         if let Some((output, code)) = ran {
             blocks.push(Block::Code(output.to_string()));
-            metadata.push(("退出码".to_string(), code.to_string()));
+            metadata.push((tr("退出码", "Exit Code").to_string(), code.to_string()));
         }
         Detail {
             actions: Vec::new(),
@@ -175,7 +184,12 @@ impl Provider for Scripts {
                     rescan(&index, &dirs, false);
                 }
             })
-            .context("启动脚本目录轮询线程")?;
+            .with_context(|| {
+                tr(
+                    "启动脚本目录轮询线程",
+                    "Couldn't start the script folder watcher",
+                )
+            })?;
         Ok(())
     }
 
@@ -195,7 +209,8 @@ impl Provider for Scripts {
 /// 默认脚本目录（不存在就创建，方便用户找到放哪）+ `config.script_dirs` + `HELMP_SCRIPT_DIRS`，去重。
 fn script_dirs() -> Result<Vec<PathBuf>> {
     let default = crate::paths::data_dir()?.join("scripts");
-    fs::create_dir_all(&default).with_context(|| format!("创建 {}", default.display()))?;
+    fs::create_dir_all(&default)
+        .with_context(|| trf!("创建 {}", "Couldn't create {}", default.display()))?;
     let home = crate::paths::home_dir()?;
     let configured = crate::config::get()
         .script_dirs
@@ -459,7 +474,12 @@ fn item_for(
                 .expect("script outputs poisoned")
                 .get(&path)
                 .cloned()
-                .with_context(|| format!("「{title}」还没有输出：先运行一次"))?;
+                .with_context(|| {
+                    trf!(
+                        "「{title}」还没有输出：先运行一次",
+                        "“{title}” has no output yet. Run it first."
+                    )
+                })?;
             let pasteboard = super::screenshot::pasteboard::general();
             super::screenshot::pasteboard::write_text(&pasteboard, &output)?;
             Ok(Outcome::Done)
@@ -469,7 +489,7 @@ fn item_for(
         id: format!("scripts:{}", script.path.display()),
         title: header.title.clone(),
         subtitle,
-        badge: BADGE.into(),
+        badge: badge().into(),
         score,
         icon: ICON,
         form: (!header.arguments.is_empty()).then(|| form_for(&header.arguments, &initial)),
@@ -481,8 +501,12 @@ fn item_for(
             display,
             Arc::clone(outputs),
         ),
-        action_title: "运行".into(),
-        actions: vec![NamedAction::new("复制输出", Some("⌘C"), copy_output)],
+        action_title: tr("运行", "Run").into(),
+        actions: vec![NamedAction::new(
+            tr("复制输出", "Copy Output"),
+            Some("⌘C"),
+            copy_output,
+        )],
         ..Item::blank()
     })
 }
@@ -497,34 +521,32 @@ fn form_for(arguments: &[Argument], initial: &[String]) -> Form {
     let fields = arguments
         .iter()
         .enumerate()
-        .map(|(index, argument)| Field {
-            key: field_key(index),
-            label: argument.placeholder.clone(),
-            kind: match &argument.kind {
-                ArgKind::Dropdown(options) => FieldKind::Select {
-                    options: options
-                        .iter()
-                        .map(|option| (option.title.clone(), option.value.clone()))
-                        .collect(),
-                },
-                ArgKind::Password => FieldKind::Secret {
-                    placeholder: if argument.optional {
-                        format!("{}（可选）", argument.placeholder)
-                    } else {
-                        argument.placeholder.clone()
+        .map(|(index, argument)| {
+            let label = argument.label(index + 1);
+            let placeholder = if argument.optional {
+                trf!("{label}（可选）", "{label} (optional)")
+            } else {
+                label.clone()
+            };
+            Field {
+                key: field_key(index),
+                label,
+                kind: match &argument.kind {
+                    ArgKind::Dropdown(options) => FieldKind::Select {
+                        options: options
+                            .iter()
+                            .map(|option| (option.title.clone(), option.value.clone()))
+                            .collect(),
+                    },
+                    ArgKind::Password => FieldKind::Secret { placeholder },
+                    ArgKind::Text => FieldKind::Text {
+                        placeholder,
+                        multiline: false,
                     },
                 },
-                ArgKind::Text => FieldKind::Text {
-                    placeholder: if argument.optional {
-                        format!("{}（可选）", argument.placeholder)
-                    } else {
-                        argument.placeholder.clone()
-                    },
-                    multiline: false,
-                },
-            },
-            value: initial.get(index).cloned().unwrap_or_default(),
-            required: !argument.optional,
+                value: initial.get(index).cloned().unwrap_or_default(),
+                required: !argument.optional,
+            }
         })
         .collect();
     Form { fields }
@@ -555,14 +577,15 @@ fn action(
         let args = match args::from_values(&header.arguments, &given) {
             Ok(args) => args,
             Err(err) => {
-                return Ok(Outcome::Message(format!(
+                return Ok(Outcome::Message(trf!(
                     "「{title}」{}，填好后回车",
+                    "“{title}”: {}. Complete the form, then press Return.",
                     err.describe()
                 )));
             }
         };
         if header.needs_confirmation && !confirmed {
-            return Ok(Outcome::Message(CONFIRM_HINT.into()));
+            return Ok(Outcome::Message(confirm_hint().into()));
         }
         let (shown, code) = script.run(&args, runner::TIMEOUT)?;
         let Some(output) = shown else {
@@ -832,7 +855,7 @@ pub mod tests {
         let blocked = only(scripts.query("empty trash"));
         assert_eq!(
             blocked.action.run().unwrap(),
-            Outcome::Message(CONFIRM_HINT.into())
+            Outcome::Message(confirm_hint().into())
         );
         assert!(!marker.exists(), "未确认时不应运行");
 
@@ -1029,5 +1052,62 @@ pub mod tests {
         };
         let path = format!("icons/{name}.svg");
         assert!(gpui_kit::assets::AllAssets.load(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn english_ui_translates_helmp_text_but_not_script_header() {
+        // 英文界面下 Helmp 自己的文案（分组、动作、可选标记、缺参提示）要是英文，
+        // 但标题、placeholder、下拉选项是用户脚本自带的内容，原样显示；
+        // 搜索仍按脚本标题匹配，与界面语言无关。
+        use crate::i18n::{Lang, with_lang};
+        let dir = TempDir::new("english");
+        write_script(
+            &dir,
+            "note.sh",
+            "#!/bin/sh\n# @raycast.title 记一笔\n# @raycast.mode compact\n\
+             # @raycast.argument1 {\"type\":\"text\",\"placeholder\":\"内容\"}\n\
+             # @raycast.argument2 {\"type\":\"text\",\"optional\":true}\n\
+             echo \"$1\"\n",
+            true,
+        );
+        let scripts = provider(&dir);
+        with_lang(Lang::En, || {
+            let item = only(scripts.query("jyb"));
+            assert_eq!(item.title, "记一笔");
+            assert_eq!(item.badge, "Scripts");
+            assert_eq!(item.action_title, "Run");
+            assert_eq!(item.actions[0].title, "Copy Output");
+            let form = item.form.as_ref().expect("有参数应返回表单");
+            assert_eq!(form.fields[0].label, "内容");
+            // 没写 placeholder 的参数用 Helmp 生成的默认名，要跟着语言走。
+            assert_eq!(form.fields[1].label, "Argument 2");
+            assert_eq!(
+                form.fields[1].kind,
+                FieldKind::Text {
+                    placeholder: "Argument 2 (optional)".into(),
+                    multiline: false,
+                }
+            );
+            let Outcome::Message(message) = item.action.run().unwrap() else {
+                panic!("缺参数应返回说明");
+            };
+            assert_eq!(
+                message,
+                "“记一笔”: Missing arguments: 内容. Complete the form, then press Return."
+            );
+            let Some(detail) = &item.detail else {
+                panic!("应有详情");
+            };
+            let keys: Vec<&str> = detail.metadata.iter().map(|(k, _)| k.as_str()).collect();
+            assert_eq!(keys, ["Script", "Source"]);
+            assert_eq!(
+                detail.metadata[1].1,
+                "Raycast Script Commands · compact mode"
+            );
+        });
+        // 解析结果常驻索引：同一份索引切回中文时默认参数名也要切回来，不能停在解析时的语言。
+        let item = only(scripts.query("记一笔"));
+        assert_eq!(item.form.as_ref().unwrap().fields[1].label, "参数2");
+        assert_eq!(item.badge, "脚本");
     }
 }

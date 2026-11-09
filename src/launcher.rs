@@ -12,7 +12,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, Textar
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::engine::{Engine, RECENT_SECTION};
+use crate::engine::{Engine, RECENT_ID_PREFIX};
+use crate::i18n::{tr, trf};
 use crate::provider::{
     Accessory, ActionInput, Block, Detail, FieldKind, Form, Icon as ItemIcon, Item, NamedAction,
     Outcome, Scope,
@@ -133,6 +134,8 @@ pub struct Launcher {
     scroll: ScrollHandle,
     /// 渲染时记录：第 i 个结果在滚动容器里是第几个子元素（小节标题也占位）。
     row_children: Vec<usize>,
+    /// 上次取文案时的语言代数（见 `sync_language`）。
+    lang_generation: u64,
     _refresh: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -140,7 +143,7 @@ pub struct Launcher {
 impl Launcher {
     pub fn new(engine: Engine, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("搜索应用、Agent 会话、剪贴板、命令…")
+            InputState::new(window, cx).placeholder(root_placeholder())
         });
 
         let subscriptions = vec![
@@ -197,6 +200,7 @@ impl Launcher {
             input_source: Default::default(),
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
+            lang_generation: crate::i18n::generation(),
             _refresh: refresh,
             _subscriptions: subscriptions,
         }
@@ -306,6 +310,7 @@ impl Launcher {
             self.input
                 .update(cx, |input, cx| input.select_all(window, cx));
         }
+        self.sync_language(window, cx);
         crate::panel::show(window, cx);
         self.input_source.on_show();
         self.input.read(cx).focus_handle(cx).focus(window, cx);
@@ -324,6 +329,27 @@ impl Launcher {
     }
 
     // ---------- 状态变化 ----------
+
+    /// 界面语言切换后（在设置窗口里切的，那时面板已隐藏），唤起时重取构造时固定下来的文案：
+    /// 搜索框占位，以及当前范围的标签、占位与筛选名（筛选按下标保持不变）。结果随后由 `refresh` 重查。
+    fn sync_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = crate::i18n::generation();
+        if generation == self.lang_generation {
+            return;
+        }
+        self.lang_generation = generation;
+        if let Some(active) = self.scope.as_mut()
+            && let Some(scope) = self.engine.scope(active.scope.id)
+        {
+            active.scope = scope;
+        }
+        let placeholder = match &self.scope {
+            Some(active) => active.scope.placeholder.clone(),
+            None => root_placeholder().to_string(),
+        };
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+    }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.input
@@ -385,7 +411,7 @@ impl Launcher {
         self.selected = 0;
         self.query.clear();
         self.input.update(cx, |input, cx| {
-            input.set_placeholder("搜索应用、Agent 会话、剪贴板、命令…", window, cx);
+            input.set_placeholder(root_placeholder(), window, cx);
             input.set_value("", window, cx);
         });
         self.refresh(cx);
@@ -639,7 +665,7 @@ impl Launcher {
                             ..Detail::default()
                         },
                         Err(err) => Detail {
-                            title: format!("「{}」执行失败", item.title),
+                            title: trf!("「{}」执行失败", "“{}” failed", item.title),
                             icon: item.icon.clone(),
                             blocks: vec![Block::Code(format!("{err:#}"))],
                             ..Detail::default()
@@ -673,10 +699,11 @@ impl Launcher {
                 }
                 // 原命令仍可再跑一次。
                 actions.push(NamedAction::new(
-                    format!(
+                    trf!(
                         "再次{}",
+                        "{} Again",
                         if item.form.is_some() {
-                            "运行"
+                            tr("运行", "Run")
                         } else {
                             item.action_title.as_str()
                         }
@@ -878,6 +905,19 @@ impl LauncherHandle {
 }
 
 // ======================= 渲染 =======================
+
+/// 根视图（不在任何范围里）搜索框的占位文字。
+fn root_placeholder() -> &'static str {
+    tr(
+        "搜索应用、Agent 会话、剪贴板、命令…",
+        "Search apps, agent sessions, clipboard, and commands…",
+    )
+}
+
+/// 首页「最近使用」的结果（平铺成图标）。
+fn is_recent(item: &Item) -> bool {
+    item.id.starts_with(RECENT_ID_PREFIX)
+}
 
 fn kbd(text: impl Into<SharedString>, pal: &Palette, on_selection: bool) -> Div {
     div()
@@ -1198,9 +1238,9 @@ impl Launcher {
     fn render_list(&mut self, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
         if self.items.is_empty() {
             let text = if self.query.trim().is_empty() && self.scope.is_none() {
-                "输入以搜索"
+                tr("输入以搜索", "Type to search")
             } else {
-                "没有结果"
+                tr("没有结果", "No results")
             };
             return div()
                 .flex_1()
@@ -1236,10 +1276,10 @@ impl Launcher {
                 );
             }
             last_badge = Some(item.badge.as_str());
-            if item.badge == RECENT_SECTION {
-                // 「最近使用」平铺成图标。
+            if is_recent(item) {
+                // 「最近使用」平铺成图标。按 id 认而不按分组名认：分组名随语言变。
                 let start = i;
-                while i < items.len() && items[i].1.badge == RECENT_SECTION {
+                while i < items.len() && is_recent(&items[i].1) {
                     row_children[items[i].0] = children.len();
                     i += 1;
                 }
@@ -1543,16 +1583,16 @@ impl Launcher {
             .text_color(pal.key_fg)
             .child(context);
         if self.running {
-            footer = footer.child(div().ml_auto().text_color(pal.muted).child("正在运行…"));
+            footer = footer.child(div().ml_auto().text_color(pal.muted).child(tr("正在运行…", "Running…")));
         } else if let Some(item) = self.selected_item() {
             let primary = match self.result_actions().and_then(|actions| actions.first()) {
                 Some(action) => action.title.clone(),
-                None if item.form.is_some() => "运行".to_string(),
+                None if item.form.is_some() => tr("运行", "Run").to_string(),
                 None => item.action_title.clone(),
             };
             footer = footer.child(div().ml_auto().child(hint(primary.into(), "↵".into())));
             if !item.actions.is_empty() || self.result_actions().is_some() {
-                footer = footer.child(hint("操作".into(), "⌘K".into()));
+                footer = footer.child(hint(tr("操作", "Actions").into(), "⌘K".into()));
             }
         }
         footer.into_any_element()

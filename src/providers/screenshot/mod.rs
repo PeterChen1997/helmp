@@ -21,14 +21,17 @@ use std::sync::Mutex;
 use anyhow::{Context as _, Result};
 use objc2_foundation::{NSDate, NSDateFormatter, NSLocale, NSString};
 
-use crate::engine::COMMANDS_SECTION;
+use crate::engine::commands_section;
+use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::paths;
 use crate::provider::{
     Accessory, Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint,
 };
 
-const BADGE: &str = "截图";
+fn badge() -> &'static str {
+    tr("截图", "Screenshot")
+}
 const TINT: Tint = Tint::Indigo;
 /// 首页「快捷命令」里的分数：排在第一（设计稿顺序：截图识别文字、翻译、剪贴板历史）。
 const OCR_SUGGESTION_SCORE: u32 = 720;
@@ -40,13 +43,21 @@ const TRANSLATE_SCOPE: &str = "translate";
 /// 最近一次识别出的文字，供 ⌘K 里的「复制识别结果」「翻译」使用。
 static LAST_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
+/// 界面文案（中文, English），使用时按当前语言取。
+type Text = (&'static str, &'static str);
+
+fn text(pair: Text) -> &'static str {
+    tr(pair.0, pair.1)
+}
+
 struct Cmd {
     key: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
+    title: Text,
+    subtitle: Text,
+    /// 搜索关键词，与界面语言无关：中文名、拼音、英文名都在这里（含两种语言的标题）。
     keywords: &'static [&'static str],
     symbol: &'static str,
-    action_title: &'static str,
+    action_title: Text,
     /// OCR 命令带「复制识别结果」「翻译」次级操作。
     ocr: bool,
     run: fn() -> Result<Outcome>,
@@ -57,8 +68,11 @@ const SCREENSHOT: [&str; 3] = ["截图", "jt", "screenshot"];
 const COMMANDS: [Cmd; 4] = [
     Cmd {
         key: "clipboard",
-        title: "截图到剪贴板",
-        subtitle: "Screenshot to Clipboard",
+        title: ("截图到剪贴板", "Screenshot to Clipboard"),
+        subtitle: (
+            "Screenshot to Clipboard",
+            "Select an area and copy the image",
+        ),
         keywords: &[
             SCREENSHOT[0],
             SCREENSHOT[1],
@@ -67,30 +81,37 @@ const COMMANDS: [Cmd; 4] = [
             "screenshot to clipboard",
         ],
         symbol: "square-dashed",
-        action_title: "截图",
+        action_title: ("截图", "Capture"),
         ocr: false,
         run: screenshot_to_clipboard,
     },
     Cmd {
         key: "save",
-        title: "截图并保存",
-        subtitle: "Screenshot and Save",
+        title: ("截图并保存", "Screenshot and Save"),
+        subtitle: (
+            "Screenshot and Save",
+            "Select an area, save it, and show it in Finder",
+        ),
         keywords: &[
             SCREENSHOT[0],
             SCREENSHOT[1],
             SCREENSHOT[2],
             "截图并保存",
             "save screenshot",
+            "screenshot and save",
         ],
         symbol: "image-down",
-        action_title: "截图",
+        action_title: ("截图", "Capture"),
         ocr: false,
         run: screenshot_and_save,
     },
     Cmd {
         key: "ocr-screen",
-        title: "截图识别文字",
-        subtitle: "Screenshot OCR — 识别后复制到剪贴板",
+        title: ("截图识别文字", "Recognize Text in Screenshot"),
+        subtitle: (
+            "Screenshot OCR — 识别后复制到剪贴板",
+            "Select an area and copy the recognized text",
+        ),
         keywords: &[
             SCREENSHOT[0],
             SCREENSHOT[1],
@@ -99,19 +120,32 @@ const COMMANDS: [Cmd; 4] = [
             "识别文字",
             "截图识别文字",
             "screenshot ocr",
+            "recognize text in screenshot",
         ],
         symbol: "scan-text",
-        action_title: "截图识别",
+        action_title: ("截图识别", "Capture Text"),
         ocr: true,
         run: ocr_screen,
     },
     Cmd {
         key: "ocr-clipboard",
-        title: "识别剪贴板图片中的文字",
-        subtitle: "Clipboard Image OCR — 识别后复制到剪贴板",
-        keywords: &["ocr", "识别文字", "识别剪贴板图片中的文字", "clipboard ocr"],
+        title: (
+            "识别剪贴板图片中的文字",
+            "Recognize Text in Clipboard Image",
+        ),
+        subtitle: (
+            "Clipboard Image OCR — 识别后复制到剪贴板",
+            "Copy the recognized text to the clipboard",
+        ),
+        keywords: &[
+            "ocr",
+            "识别文字",
+            "识别剪贴板图片中的文字",
+            "clipboard ocr",
+            "recognize text in clipboard image",
+        ],
         symbol: "scan-text",
-        action_title: "识别",
+        action_title: ("识别", "Recognize"),
         ocr: true,
         run: ocr_clipboard,
     },
@@ -136,7 +170,7 @@ impl Provider for Screenshot {
                     .iter()
                     .filter_map(|keyword| matcher::score(query, keyword))
                     .max()?;
-                Some(command_item(cmd, score, BADGE))
+                Some(command_item(cmd, score, badge()))
             })
             .collect();
         items.extend(ocr_file_item(query));
@@ -149,7 +183,7 @@ impl Provider for Screenshot {
             .filter(|cmd| cmd.key == "ocr-screen")
             .map(|cmd| Item {
                 accessories: vec![Accessory::keys("⌘⇧2")],
-                ..command_item(cmd, OCR_SUGGESTION_SCORE, COMMANDS_SECTION)
+                ..command_item(cmd, OCR_SUGGESTION_SCORE, commands_section())
             })
             .collect()
     }
@@ -158,8 +192,8 @@ impl Provider for Screenshot {
 fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
     Item {
         id: format!("screenshot:{}", cmd.key),
-        title: cmd.title.into(),
-        subtitle: cmd.subtitle.into(),
+        title: text(cmd.title).into(),
+        subtitle: text(cmd.subtitle).into(),
         badge: badge.into(),
         score,
         icon: Icon::Symbol {
@@ -167,7 +201,7 @@ fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
             tint: TINT,
         },
         action: Action::new(cmd.run),
-        action_title: cmd.action_title.into(),
+        action_title: text(cmd.action_title).into(),
         actions: if cmd.ocr { ocr_actions() } else { Vec::new() },
         ..Item::blank()
     }
@@ -177,7 +211,7 @@ fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
 fn ocr_actions() -> Vec<NamedAction> {
     vec![
         NamedAction::new(
-            "复制识别结果",
+            tr("复制识别结果", "Copy Recognized Text"),
             Some("⌘C"),
             Action::new(|| {
                 pasteboard::write_text(&pasteboard::general(), &last_text()?)?;
@@ -185,7 +219,7 @@ fn ocr_actions() -> Vec<NamedAction> {
             }),
         ),
         NamedAction::new(
-            "翻译识别结果",
+            tr("翻译识别结果", "Translate Recognized Text"),
             Some("⌘T"),
             Action::new(|| Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, last_text()?))),
         ),
@@ -198,7 +232,12 @@ fn last_text() -> Result<String> {
         .expect("ocr last text poisoned")
         .clone()
         .filter(|text| !text.is_empty())
-        .context("还没有识别结果：先运行一次「截图识别文字」")
+        .with_context(|| {
+            tr(
+                "还没有识别结果：先运行一次「截图识别文字」",
+                "No recognized text yet. Run “Recognize Text in Screenshot” first.",
+            )
+        })
 }
 
 /// `ocr /绝对路径/图片.png` → 对该文件 OCR 的一项。只解析字符串，不碰文件系统（query 不做 IO）。
@@ -215,16 +254,16 @@ fn ocr_file_item(query: &str) -> Option<Item> {
     let path = PathBuf::from(path);
     Some(Item {
         id: format!("screenshot:ocr-file:{}", path.display()),
-        title: "识别图片中的文字".into(),
+        title: tr("识别图片中的文字", "Recognize Text in Image").into(),
         subtitle: path.display().to_string(),
-        badge: BADGE.into(),
+        badge: badge().into(),
         score: 1000,
         icon: Icon::Symbol {
             name: "file-image",
             tint: TINT,
         },
         action: Action::new(move || ocr_file(&path, &ocr_dir()?, &languages())),
-        action_title: "识别".into(),
+        action_title: tr("识别", "Recognize").into(),
         actions: ocr_actions(),
         ..Item::blank()
     })
@@ -253,7 +292,7 @@ fn save_dir(configured: Option<&str>) -> Result<PathBuf> {
 
 fn screenshot_to_clipboard() -> Result<Outcome> {
     if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::NO_SCREEN_ACCESS.into()));
+        return Ok(Outcome::Message(capture::no_screen_access().into()));
     }
     capture::to_clipboard()?;
     Ok(Outcome::Done)
@@ -261,17 +300,22 @@ fn screenshot_to_clipboard() -> Result<Outcome> {
 
 fn screenshot_and_save() -> Result<Outcome> {
     if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::NO_SCREEN_ACCESS.into()));
+        return Ok(Outcome::Message(capture::no_screen_access().into()));
     }
     let dir = save_dir(crate::config::get().screenshot.save_dir.as_deref())?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("创建 {}", dir.display()))?;
-    let path = dir.join(format!("Helmp 截图 {}.png", timestamp()));
+    std::fs::create_dir_all(&dir)
+        .with_context(|| trf!("创建 {}", "Couldn't create {}", dir.display()))?;
+    let ts = timestamp();
+    let path = dir.join(trf!("Helmp 截图 {ts}.png", "Helmp Screenshot {ts}.png"));
     if capture::to_file(&path)? {
         let status = Command::new("open").arg("-R").arg(&path).status()?;
         anyhow::ensure!(
             status.success(),
-            "在 Finder 中显示 {} 失败：{status}",
-            path.display()
+            trf!(
+                "在 Finder 中显示 {} 失败：{status}",
+                "Couldn't show {} in Finder: {status}",
+                path.display()
+            )
         );
     }
     Ok(Outcome::Done)
@@ -279,7 +323,7 @@ fn screenshot_and_save() -> Result<Outcome> {
 
 fn ocr_screen() -> Result<Outcome> {
     if !capture::has_screen_access() {
-        return Ok(Outcome::Message(capture::NO_SCREEN_ACCESS.into()));
+        return Ok(Outcome::Message(capture::no_screen_access().into()));
     }
     let dir = ocr_dir()?;
     let path = new_image_path(&dir)?;
@@ -287,26 +331,35 @@ fn ocr_screen() -> Result<Outcome> {
         return Ok(Outcome::Done);
     }
     prune_images(&dir)?;
-    let image = std::fs::read(&path).with_context(|| format!("读取 {}", path.display()))?;
+    let image = std::fs::read(&path)
+        .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
     let png = ocr::to_png(&image)?;
     let text = ocr::recognize(&image, &languages())?;
-    copy_and_show(text, Shown::new(path, &png, "区域尺寸"), &languages())
+    let size_label = tr("区域尺寸", "Selection Size");
+    copy_and_show(text, Shown::new(path, &png, size_label), &languages())
 }
 
 fn ocr_clipboard() -> Result<Outcome> {
-    let image = pasteboard::image_data(&pasteboard::general())
-        .context("剪贴板里没有图片（支持 PNG / TIFF）")?;
+    let image = pasteboard::image_data(&pasteboard::general()).with_context(|| {
+        tr(
+            "剪贴板里没有图片（支持 PNG / TIFF）",
+            "No image on the clipboard (PNG or TIFF supported)",
+        )
+    })?;
     let png = ocr::to_png(&image)?;
     let path = keep_image(&ocr_dir()?, &png.bytes)?;
     let text = ocr::recognize(&image, &languages())?;
-    copy_and_show(text, Shown::new(path, &png, "图片尺寸"), &languages())
+    let size_label = tr("图片尺寸", "Image Size");
+    copy_and_show(text, Shown::new(path, &png, size_label), &languages())
 }
 
 fn ocr_file(path: &Path, dir: &Path, languages: &[String]) -> Result<Outcome> {
-    let image = std::fs::read(path).with_context(|| format!("读取 {}", path.display()))?;
+    let image =
+        std::fs::read(path).with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
     let text = ocr::recognize(&image, languages)?;
     let png = ocr::to_png(&image)?;
-    let shown = Shown::new(keep_image(dir, &png.bytes)?, &png, "图片尺寸");
+    let size_label = tr("图片尺寸", "Image Size");
+    let shown = Shown::new(keep_image(dir, &png.bytes)?, &png, size_label);
     remember(&text);
     Ok(Outcome::Show(ocr_detail(&text, &shown, false, languages)))
 }
@@ -347,16 +400,24 @@ fn remember(text: &str) {
 /// 设计稿「截图识别」：标题说明识别了几行、是否已复制；截图在上，识别结果在下；元数据 语言 / 尺寸。
 fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> Detail {
     let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
+    // 英文按单复数说 line / lines。
+    let unit = if lines == 1 { "line" } else { "lines" };
     let title = match (lines, copied) {
-        (0, _) => "没有识别到文字".to_string(),
-        (n, true) => format!("已识别 {n} 行文字，已复制到剪贴板"),
-        (n, false) => format!("已识别 {n} 行文字"),
+        (0, _) => tr("没有识别到文字", "No text found").to_string(),
+        (n, true) => trf!(
+            "已识别 {n} 行文字，已复制到剪贴板",
+            "Recognized {n} {unit} and copied to clipboard"
+        ),
+        (n, false) => trf!("已识别 {n} 行文字", "Recognized {n} {unit}"),
     };
     let mut blocks = vec![Block::Image(shown.path.clone())];
     if !text.is_empty() {
         blocks.push(Block::Text(text.to_string()));
     }
-    let mut metadata = vec![("语言".to_string(), language_names(languages))];
+    let mut metadata = vec![(
+        tr("语言", "Languages").to_string(),
+        language_names(languages),
+    )];
     if shown.width > 0 && shown.height > 0 {
         metadata.push((
             shown.size_label.to_string(),
@@ -368,9 +429,13 @@ fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> 
         Vec::new()
     } else {
         vec![
-            NamedAction::new("复制识别结果", None, Action::copy(text)),
             NamedAction::new(
-                "翻译识别结果",
+                tr("复制识别结果", "Copy Recognized Text"),
+                None,
+                Action::copy(text),
+            ),
+            NamedAction::new(
+                tr("翻译识别结果", "Translate Recognized Text"),
                 Some("⌘T"),
                 Action::new({
                     let text = text.to_string();
@@ -392,7 +457,7 @@ fn ocr_detail(text: &str, shown: &Shown, copied: bool, languages: &[String]) -> 
     }
 }
 
-/// `zh-Hans, en-US` → `简体中文、英文`。
+/// `zh-Hans, en-US` → `简体中文、英文`（英文界面：`Simplified Chinese, English`）。
 fn language_names(languages: &[String]) -> String {
     let defaults: Vec<String> = ocr::DEFAULT_LANGUAGES
         .iter()
@@ -407,29 +472,30 @@ fn language_names(languages: &[String]) -> String {
         .iter()
         .map(|code| {
             let name = match code.as_str() {
-                "zh-Hans" | "zh-CN" => "简体中文",
-                "zh-Hant" | "zh-TW" | "zh-HK" => "繁体中文",
-                "yue-Hans" | "yue-Hant" => "粤语",
-                "ja-JP" | "ja" => "日文",
-                "ko-KR" | "ko" => "韩文",
-                "fr-FR" | "fr" => "法文",
-                "de-DE" | "de" => "德文",
-                "es-ES" | "es" => "西班牙文",
-                "it-IT" | "it" => "意大利文",
-                "pt-BR" | "pt" => "葡萄牙文",
-                "ru-RU" | "ru" => "俄文",
-                other if other.starts_with("en") => "英文",
+                "zh-Hans" | "zh-CN" => tr("简体中文", "Simplified Chinese"),
+                "zh-Hant" | "zh-TW" | "zh-HK" => tr("繁体中文", "Traditional Chinese"),
+                "yue-Hans" | "yue-Hant" => tr("粤语", "Cantonese"),
+                "ja-JP" | "ja" => tr("日文", "Japanese"),
+                "ko-KR" | "ko" => tr("韩文", "Korean"),
+                "fr-FR" | "fr" => tr("法文", "French"),
+                "de-DE" | "de" => tr("德文", "German"),
+                "es-ES" | "es" => tr("西班牙文", "Spanish"),
+                "it-IT" | "it" => tr("意大利文", "Italian"),
+                "pt-BR" | "pt" => tr("葡萄牙文", "Portuguese"),
+                "ru-RU" | "ru" => tr("俄文", "Russian"),
+                other if other.starts_with("en") => tr("英文", "English"),
                 other => other,
             };
             name.to_string()
         })
         .collect::<Vec<_>>()
-        .join("、")
+        .join(tr("、", ", "))
 }
 
 /// `<dir>/ocr-<毫秒>-<序号>.png`（目录不存在就创建）。按名字排序即按时间排序。
 fn new_image_path(dir: &Path) -> Result<PathBuf> {
-    std::fs::create_dir_all(dir).with_context(|| format!("创建 {}", dir.display()))?;
+    std::fs::create_dir_all(dir)
+        .with_context(|| trf!("创建 {}", "Couldn't create {}", dir.display()))?;
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis())
@@ -438,13 +504,20 @@ fn new_image_path(dir: &Path) -> Result<PathBuf> {
     (0..1000)
         .map(|seq| dir.join(format!("ocr-{millis:013}-{seq:03}.png")))
         .find(|path| !path.exists())
-        .with_context(|| format!("{} 里同一毫秒的截图太多", dir.display()))
+        .with_context(|| {
+            trf!(
+                "{} 里同一毫秒的截图太多",
+                "Too many screenshots in {} within the same millisecond",
+                dir.display()
+            )
+        })
 }
 
 /// 把要展示的 PNG 存进 `dir`，并清掉旧的。
 fn keep_image(dir: &Path, png: &[u8]) -> Result<PathBuf> {
     let path = new_image_path(dir)?;
-    std::fs::write(&path, png).with_context(|| format!("写入 {}", path.display()))?;
+    std::fs::write(&path, png)
+        .with_context(|| trf!("写入 {}", "Couldn't write {}", path.display()))?;
     prune_images(dir)?;
     Ok(path)
 }
@@ -452,7 +525,7 @@ fn keep_image(dir: &Path, png: &[u8]) -> Result<PathBuf> {
 /// 只保留最新的 `KEEP_OCR_IMAGES` 张。
 fn prune_images(dir: &Path) -> Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .with_context(|| format!("读取 {}", dir.display()))?
+        .with_context(|| trf!("读取 {}", "Couldn't read {}", dir.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {
             path.file_name()
@@ -463,7 +536,13 @@ fn prune_images(dir: &Path) -> Result<()> {
     files.sort();
     let excess = files.len().saturating_sub(KEEP_OCR_IMAGES);
     for old in files.iter().take(excess) {
-        std::fs::remove_file(old).with_context(|| format!("删除旧截图 {}", old.display()))?;
+        std::fs::remove_file(old).with_context(|| {
+            trf!(
+                "删除旧截图 {}",
+                "Couldn't delete old screenshot {}",
+                old.display()
+            )
+        })?;
     }
     Ok(())
 }
@@ -545,7 +624,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         let item = &items[0];
         assert_eq!(item.id, "screenshot:ocr-screen");
-        assert_eq!(item.badge, COMMANDS_SECTION);
+        assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
         assert_eq!(item.accessories, vec![Accessory::keys("⌘⇧2")]);
         assert_eq!(
@@ -624,6 +703,68 @@ mod tests {
         assert_eq!(empty.title, "没有识别到文字");
         assert_eq!(empty.blocks, [Block::Image(PathBuf::from("/tmp/x.png"))]);
         assert_eq!(empty.metadata[0].1, "日文");
+    }
+
+    #[test]
+    fn english_ui_still_finds_ocr_by_chinese_query() {
+        // 全局快捷键 ⌘⇧2 和菜单栏用 `RunItem { id: "screenshot:ocr-screen", query: "截图识别文字" }`
+        // 重新查找这条命令：界面换成英文后，这个中文查询必须仍然命中同一个 id，否则快捷键会失灵。
+        use crate::i18n::{Lang, with_lang};
+        with_lang(Lang::En, || {
+            let items = Screenshot.query("截图识别文字");
+            let ocr = items
+                .iter()
+                .find(|item| item.id == "screenshot:ocr-screen")
+                .expect("英文界面下「截图识别文字」应命中 screenshot:ocr-screen");
+            assert_eq!(ocr.title, "Recognize Text in Screenshot");
+            assert_eq!(ocr.badge, "Screenshot");
+            assert_eq!(ocr.action_title, "Capture Text");
+            let actions: Vec<&str> = ocr.actions.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(
+                actions,
+                ["Copy Recognized Text", "Translate Recognized Text"]
+            );
+            // 拼音简写与英文标题也照常能找到。
+            assert!(ids("jt").contains(&"screenshot:ocr-screen".to_string()));
+            assert!(ids("recognize text").contains(&"screenshot:ocr-clipboard".to_string()));
+        });
+        // 中文界面下输入英文标题也能找到。
+        assert!(
+            ids("Recognize Text in Clipboard Image")
+                .contains(&"screenshot:ocr-clipboard".to_string())
+        );
+    }
+
+    #[test]
+    fn english_detail_counts_lines_and_names_languages() {
+        // 识别结果详情是用户最常看的界面：英文下要说清行数（单复数）、是否已复制，语言名也要是英文。
+        use crate::i18n::{Lang, with_lang};
+        with_lang(Lang::En, || {
+            let shown = Shown {
+                path: PathBuf::from("/tmp/x.png"),
+                size_label: tr("区域尺寸", "Selection Size"),
+                width: 640,
+                height: 220,
+            };
+            let detail = ocr_detail("a\nb", &shown, true, &[]);
+            assert_eq!(detail.title, "Recognized 2 lines and copied to clipboard");
+            assert_eq!(
+                detail.metadata,
+                [
+                    (
+                        "Languages".to_string(),
+                        "Simplified Chinese, English".to_string()
+                    ),
+                    ("Selection Size".to_string(), "640 × 220".to_string())
+                ]
+            );
+            assert_eq!(
+                ocr_detail("a", &shown, false, &[]).title,
+                "Recognized 1 line"
+            );
+            assert_eq!(ocr_detail("", &shown, false, &[]).title, "No text found");
+            assert!(capture::no_screen_access().contains("Screen Recording"));
+        });
     }
 
     #[test]

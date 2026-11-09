@@ -4,11 +4,12 @@
 //! 执行时以表单值为准（`from_values`），同样做必填、可选项与 URL 编码检查。
 
 use super::header::{ArgKind, Argument, DropdownOption};
+use crate::i18n::trf;
 
 /// 参数不满足声明时的说明，用于 subtitle 和执行时的提示。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgError {
-    /// 必填参数缺失，内容是它们的 placeholder。
+    /// 必填参数缺失，内容是它们的界面名（`Argument::label`）。
     Missing(Vec<String>),
     /// dropdown 参数的值不在可选项里。
     InvalidChoice {
@@ -21,13 +22,18 @@ pub enum ArgError {
 impl ArgError {
     pub fn describe(&self) -> String {
         match self {
-            Self::Missing(placeholders) => format!("需要参数：{}", placeholders.join("、")),
+            Self::Missing(placeholders) => trf!(
+                "需要参数：{}",
+                "Missing arguments: {}",
+                placeholders.join(crate::i18n::tr("、", ", "))
+            ),
             Self::InvalidChoice {
                 placeholder,
                 given,
                 options,
-            } => format!(
+            } => trf!(
                 "参数「{placeholder}」不能是 {given}，可选：{}",
+                "“{placeholder}” can’t be {given}. Choose from: {}",
                 options.join(" / ")
             ),
         }
@@ -82,7 +88,7 @@ pub fn from_values(arguments: &[Argument], given: &[String]) -> Result<Vec<Strin
     for (index, argument) in arguments.iter().enumerate() {
         let Some(raw) = given.get(index).filter(|raw| !raw.is_empty()) else {
             if !argument.optional {
-                missing.push(argument.placeholder.clone());
+                missing.push(argument.label(index + 1));
             }
             values.push(String::new());
             continue;
@@ -91,7 +97,7 @@ pub fn from_values(arguments: &[Argument], given: &[String]) -> Result<Vec<Strin
             ArgKind::Dropdown(options) => find_option(options, raw)
                 .map(|o| o.value.clone())
                 .ok_or_else(|| ArgError::InvalidChoice {
-                    placeholder: argument.placeholder.clone(),
+                    placeholder: argument.label(index + 1),
                     given: raw.clone(),
                     options: options.iter().map(|o| o.title.clone()).collect(),
                 })?,

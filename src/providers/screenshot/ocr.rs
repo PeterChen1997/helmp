@@ -4,6 +4,8 @@
 //! 这样「截图文件」「剪贴板图片」「指定图片」三条路径共用一个入口。不需要任何系统权限。
 
 use anyhow::{Context as _, Result};
+
+use crate::i18n::tr;
 use objc2::AnyThread as _;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
@@ -19,7 +21,7 @@ pub const DEFAULT_LANGUAGES: [&str; 2] = ["zh-Hans", "en-US"];
 /// `languages` 为空时用 `DEFAULT_LANGUAGES`。
 /// 没有文字时返回空字符串；图片无法解码或 Vision 报错时返回 Err。
 pub fn recognize(image: &[u8], languages: &[String]) -> Result<String> {
-    anyhow::ensure!(!image.is_empty(), "图片数据为空");
+    anyhow::ensure!(!image.is_empty(), tr("图片数据为空", "Image data is empty"));
     autoreleasepool(|_| {
         let data = NSData::with_bytes(image);
         let handler = VNImageRequestHandler::initWithData_options(
@@ -45,7 +47,12 @@ pub fn recognize(image: &[u8], languages: &[String]) -> Result<String> {
         handler
             .performRequests_error(&NSArray::from_slice(&[as_request]))
             .map_err(|err| anyhow::anyhow!("{}", err.localizedDescription()))
-            .context("Vision 文字识别失败（图片可能无法解码）")?;
+            .with_context(|| {
+                tr(
+                    "Vision 文字识别失败（图片可能无法解码）",
+                    "Vision text recognition failed (the image may not be decodable)",
+                )
+            })?;
 
         let lines: Vec<String> = request
             .results()
@@ -71,7 +78,7 @@ pub struct Png {
 pub fn to_png(image: &[u8]) -> Result<Png> {
     autoreleasepool(|_| {
         let rep = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(image))
-            .context("图片无法解码")?;
+            .with_context(|| tr("图片无法解码", "Couldn't decode the image"))?;
         let width = u32::try_from(rep.pixelsWide()).unwrap_or(0);
         let height = u32::try_from(rep.pixelsHigh()).unwrap_or(0);
         let bytes = if image.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -84,7 +91,7 @@ pub fn to_png(image: &[u8]) -> Result<Png> {
                     &NSDictionary::new(),
                 )
             }
-            .context("PNG 编码失败")?
+            .with_context(|| tr("PNG 编码失败", "Couldn't encode the image as PNG"))?
             .to_vec()
         };
         Ok(Png {

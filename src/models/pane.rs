@@ -11,6 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::config::{self, ModelConfig, ModelKind};
+use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
 const KINDS: [ModelKind; 3] = [
@@ -30,7 +31,8 @@ enum Menu {
 enum Status {
     Idle,
     Running,
-    Ok(String),
+    /// (中文, 英文)：渲染时按当前语言取，切换语言后跟着变。
+    Ok((&'static str, &'static str)),
     Err(String),
 }
 
@@ -55,19 +57,18 @@ pub struct ModelsPane {
     /// Ollama 模型 id → 是否在线。
     online: HashMap<String, bool>,
     menu: Option<Menu>,
+    /// 输入框占位文字按哪一代语言设置的（`i18n::generation`）；None 表示还没设置。
+    placeholders_for: Option<u64>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl ModelsPane {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("如 DeepSeek"));
+        // 随语言变的占位文字在 render 里设置（`sync_placeholders`）。
+        let name = cx.new(|cx| InputState::new(window, cx));
         let base_url = cx.new(|cx| InputState::new(window, cx).placeholder("https://…"));
-        let api_key = cx.new(|cx| {
-            InputState::new(window, cx)
-                .masked(true)
-                .placeholder("只存在本机钥匙串")
-        });
-        let model = cx.new(|cx| InputState::new(window, cx).placeholder("如 deepseek-chat"));
+        let api_key = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let model = cx.new(|cx| InputState::new(window, cx));
 
         let mut subscriptions = Vec::new();
         for (state, field) in [
@@ -109,11 +110,32 @@ impl ModelsPane {
             status: Status::Idle,
             online: HashMap::new(),
             menu: None,
+            placeholders_for: None,
             _subscriptions: subscriptions,
         };
         pane.load_selected(window, cx);
         pane.check_ollama(cx);
         pane
+    }
+
+    /// 首次渲染、切换语言后，按当前语言重设输入框的占位文字（InputState 不会自己跟着变）。
+    fn sync_placeholders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let generation = crate::i18n::generation();
+        if self.placeholders_for == Some(generation) {
+            return;
+        }
+        self.placeholders_for = Some(generation);
+        let texts = [
+            (&self.name, tr("如 DeepSeek", "e.g. DeepSeek")),
+            (
+                &self.api_key,
+                tr("只存在本机钥匙串", "Stored only in your Keychain"),
+            ),
+            (&self.model, tr("如 deepseek-chat", "e.g. deepseek-chat")),
+        ];
+        for (state, text) in texts {
+            state.update(cx, |state, cx| state.set_placeholder(text, window, cx));
+        }
     }
 
     fn selected_model(&self) -> Option<ModelConfig> {
@@ -167,7 +189,7 @@ impl ModelsPane {
                 f(model);
             }
         }) {
-            self.status = Status::Err(format!("保存设置失败：{err:#}"));
+            self.status = Status::Err(save_failed(&err));
         }
         cx.notify();
     }
@@ -195,8 +217,10 @@ impl ModelsPane {
         };
         let key = self.api_key.read(cx).value().to_string();
         self.status = match crate::models::set_api_key(&model, &key) {
-            Ok(()) if key.trim().is_empty() => Status::Ok("已从钥匙串删除 Key".into()),
-            Ok(()) => Status::Ok("Key 已存入钥匙串".into()),
+            Ok(()) if key.trim().is_empty() => {
+                Status::Ok(("已从钥匙串删除 Key", "Key removed from Keychain"))
+            }
+            Ok(()) => Status::Ok(("Key 已存入钥匙串", "Key saved to Keychain")),
             Err(err) => Status::Err(format!("{err:#}")),
         };
         self.key_dirty = false;
@@ -222,13 +246,13 @@ impl ModelsPane {
         let kind = ModelKind::OpenAiCompatible;
         let model = ModelConfig {
             id: id.clone(),
-            name: "新模型".into(),
+            name: tr("新模型", "New Model").into(),
             kind,
             base_url: crate::models::default_base_url(kind).into(),
             model: String::new(),
         };
         if let Err(err) = config::update(|config| config.models.push(model)) {
-            self.status = Status::Err(format!("保存设置失败：{err:#}"));
+            self.status = Status::Err(save_failed(&err));
             cx.notify();
             return;
         }
@@ -255,7 +279,7 @@ impl ModelsPane {
         });
         self.status = match result {
             Ok(()) => Status::Idle,
-            Err(err) => Status::Err(format!("保存设置失败：{err:#}")),
+            Err(err) => Status::Err(save_failed(&err)),
         };
         self.online.remove(&model.id);
         self.key_dirty = false;
@@ -317,8 +341,13 @@ impl ModelsPane {
                 }
                 if this.selected.as_deref() == Some(id.as_str()) {
                     this.status = match result {
-                        Ok(()) if kind == ModelKind::Ollama => Status::Ok("连接正常".into()),
-                        Ok(()) => Status::Ok("连接正常 · Key 已存入钥匙串".into()),
+                        Ok(()) if kind == ModelKind::Ollama => {
+                            Status::Ok(("连接正常", "Connected"))
+                        }
+                        Ok(()) => Status::Ok((
+                            "连接正常 · Key 已存入钥匙串",
+                            "Connected · Key saved to Keychain",
+                        )),
                         Err(err) => Status::Err(format!("{err:#}")),
                     };
                 }
@@ -358,7 +387,7 @@ impl ModelsPane {
 
     fn set_translate_model(&mut self, id: String, cx: &mut Context<Self>) {
         if let Err(err) = config::update(|config| config.translate.model_id = Some(id)) {
-            self.status = Status::Err(format!("保存设置失败：{err:#}"));
+            self.status = Status::Err(save_failed(&err));
         }
         self.menu = None;
         cx.notify();
@@ -366,7 +395,7 @@ impl ModelsPane {
 
     fn set_target(&mut self, code: String, cx: &mut Context<Self>) {
         if let Err(err) = config::update(|config| config.translate.target = code) {
-            self.status = Status::Err(format!("保存设置失败：{err:#}"));
+            self.status = Status::Err(save_failed(&err));
         }
         self.menu = None;
         cx.notify();
@@ -380,6 +409,10 @@ impl ModelsPane {
         };
         cx.notify();
     }
+}
+
+fn save_failed(err: &anyhow::Error) -> String {
+    trf!("保存设置失败：{err:#}", "Couldn't save settings: {err:#}")
 }
 
 fn subtitle(model: &ModelConfig) -> String {
@@ -396,7 +429,7 @@ fn subtitle(model: &ModelConfig) -> String {
                 .trim_start_matches("https://")
                 .trim_end_matches('/');
             if crate::models::is_local(model) {
-                format!("Ollama · 本机 {host}")
+                trf!("Ollama · 本机 {host}", "Ollama · {host} (local)")
             } else {
                 format!("Ollama · {host}")
             }
@@ -425,7 +458,7 @@ fn letter(model: &ModelConfig) -> (String, Hsla) {
 fn kind_short(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Anthropic => "Anthropic",
-        ModelKind::OpenAiCompatible => "OpenAI 兼容",
+        ModelKind::OpenAiCompatible => tr("OpenAI 兼容", "OpenAI-Compatible"),
         ModelKind::Ollama => "Ollama",
     }
 }
@@ -593,22 +626,33 @@ impl ModelsPane {
         let default_id = crate::models::translate_model(&config).map(|model| model.id.clone());
         let mut list = group(pal);
         if config.models.is_empty() {
-            list =
-                list.child(row(true, pal).min_h(px(46.)).text_color(pal.muted).child(
-                    "还没有接入模型。点下方 + 添加 Anthropic、OpenAI 兼容接口或本机 Ollama。",
-                ));
+            list = list.child(
+                row(true, pal)
+                    .min_h(px(46.))
+                    .text_color(pal.muted)
+                    .child(tr(
+                        "还没有接入模型。点下方 + 添加 Anthropic、OpenAI 兼容接口或本机 Ollama。",
+                        "No models yet. Click + below to add Anthropic, an OpenAI-compatible API, \
+                         or a local Ollama model.",
+                    )),
+            );
         }
         for (ix, model) in config.models.iter().enumerate() {
             let (letter, color) = letter(model);
             let on = self.selected.as_deref() == Some(model.id.as_str());
             let chip = if default_id.as_deref() == Some(model.id.as_str()) {
-                Some(chip("默认", pal.accent.opacity(0.12), pal.accent, None))
+                Some(chip(
+                    tr("默认", "Default"),
+                    pal.accent.opacity(0.12),
+                    pal.accent,
+                    None,
+                ))
             } else if model.kind == ModelKind::Ollama {
                 match self.online.get(&model.id) {
                     Some(true) => {
                         let (bg, fg) = style::tone_colors(crate::provider::Tone::Done, pal.dark);
                         Some(chip(
-                            "在线",
+                            tr("在线", "Online"),
                             bg,
                             fg,
                             Some(style::tint(crate::provider::Tint::Green)),
@@ -616,7 +660,7 @@ impl ModelsPane {
                     }
                     Some(false) => {
                         let (bg, fg) = style::tone_colors(crate::provider::Tone::Neutral, pal.dark);
-                        Some(chip("离线", bg, fg, Some(pal.muted)))
+                        Some(chip(tr("离线", "Offline"), bg, fg, Some(pal.muted)))
                     }
                     None => None,
                 }
@@ -746,9 +790,9 @@ impl ModelsPane {
         );
         let (status_text, status_color) = match &self.status {
             Status::Idle => (String::new(), pal.muted),
-            Status::Running => ("正在连接…".to_string(), pal.muted),
-            Status::Ok(text) => (
-                format!("✓ {text}"),
+            Status::Running => (tr("正在连接…", "Connecting…").to_string(), pal.muted),
+            Status::Ok((zh, en)) => (
+                format!("✓ {}", tr(zh, en)),
                 style::tone_colors(crate::provider::Tone::Done, pal.dark).1,
             ),
             Status::Err(text) => (text.clone(), pal.danger),
@@ -758,10 +802,14 @@ impl ModelsPane {
         group(pal)
             .child(
                 row(true, pal)
-                    .child(label("名称"))
+                    .child(label(tr("名称", "Name")))
                     .child(field(&self.name, false, pal)),
             )
-            .child(row(false, pal).child(label("接口类型")).child(kind_menu))
+            .child(
+                row(false, pal)
+                    .child(label(tr("接口类型", "API Type")))
+                    .child(kind_menu),
+            )
             .child(
                 row(false, pal)
                     .child(label("Base URL"))
@@ -776,7 +824,7 @@ impl ModelsPane {
             })
             .child(
                 row(false, pal)
-                    .child(label("模型名"))
+                    .child(label(tr("模型名", "Model")))
                     .child(field(&self.model, true, pal)),
             )
             .child(
@@ -794,9 +842,9 @@ impl ModelsPane {
                         pop_button_plain(
                             "model-test",
                             if running {
-                                "测试中…"
+                                tr("测试中…", "Testing…")
                             } else {
-                                "测试连接"
+                                tr("测试连接", "Test Connection")
                             },
                             pal,
                         )
@@ -818,13 +866,16 @@ impl ModelsPane {
             .collect();
         let model_label = current
             .map(|model| model.name.clone())
-            .unwrap_or_else(|| "未接入模型".into());
+            .unwrap_or_else(|| tr("未接入模型", "No Models").into());
         let model_value = current.map(|model| model.id.clone()).unwrap_or_default();
-        let mut targets = vec![("中英互译（自动）".to_string(), "auto".to_string())];
+        let mut targets = vec![(
+            tr("中英互译（自动）", "Auto (Chinese ↔ English)").to_string(),
+            "auto".to_string(),
+        )];
         targets.extend(
             crate::models::LANGUAGES
                 .iter()
-                .map(|(code, label, _)| (label.to_string(), code.to_string())),
+                .map(|(code, zh, en)| (tr(zh, en).to_string(), code.to_string())),
         );
         let target = config.translate.target.clone();
         let target_label = targets
@@ -853,8 +904,16 @@ impl ModelsPane {
             cx,
         );
         group(pal)
-            .child(row(true, pal).child("翻译").child(model_menu))
-            .child(row(false, pal).child("翻译默认目标语言").child(target_menu))
+            .child(
+                row(true, pal)
+                    .child(tr("翻译", "Translate"))
+                    .child(model_menu),
+            )
+            .child(
+                row(false, pal)
+                    .child(tr("翻译默认目标语言", "Default Target Language"))
+                    .child(target_menu),
+            )
     }
 }
 
@@ -895,6 +954,7 @@ impl Render for ModelsPane {
             self.selected = config.models.first().map(|model| model.id.clone());
         }
         self.load_selected(window, cx);
+        self.sync_placeholders(window, cx);
 
         let pal = style::palette(window);
         let selected = self.selected_model();
@@ -915,7 +975,7 @@ impl Render for ModelsPane {
                     .mb(px(6.))
                     .text_size(px(15.))
                     .font_weight(FontWeight::BOLD)
-                    .child("模型"),
+                    .child(tr("模型", "Models")),
             )
             .child(
                 div()
@@ -923,18 +983,21 @@ impl Render for ModelsPane {
                     .text_size(px(12.5))
                     .line_height(px(18.))
                     .text_color(pal.muted)
-                    .child(
+                    .child(tr(
                         "Helmp 不自带模型，也不经过任何中转。接入你自己的 API Key 或本机模型，\
                          用于翻译等功能；Key 只存在本机钥匙串里。",
-                    ),
+                        "Helmp doesn't ship with a model or route requests through any relay. \
+                         Connect your own API key or a local model to power features like \
+                         translation. Keys are stored only in your Mac's Keychain.",
+                    )),
             )
-            .child(heading("已接入", &pal))
+            .child(heading(tr("已接入", "Your Models"), &pal))
             .child(self.render_list(&pal, cx))
             .when_some(selected, |pane, model| {
                 pane.child(heading(model.name.clone(), &pal))
                     .child(self.render_editor(&model, &pal, cx))
             })
-            .child(heading("用途", &pal))
+            .child(heading(tr("用途", "Usage"), &pal))
             .child(self.render_usage(&pal, cx))
     }
 }

@@ -2,9 +2,10 @@
 
 use gpui_kit::*;
 
-use crate::config::{self, PanelScreen};
+use crate::config::{self, Language, PanelScreen};
+use crate::i18n::tr;
 use crate::settings::SettingsView;
-use crate::settings::model::{self, PANEL_SCREEN_OPTIONS, RESET_OPTIONS};
+use crate::settings::model::{self, LANGUAGE_OPTIONS, PANEL_SCREEN_OPTIONS, RESET_OPTIONS};
 use crate::settings::system::{self, LoginItemStatus};
 use crate::settings::widgets::{self, MenuChoice};
 use crate::style::Palette;
@@ -23,12 +24,15 @@ impl SettingsView {
                 .flex()
                 .flex_col()
                 .gap(px(2.))
-                .child(widgets::label("开机时自动启动", pal));
+                .child(widgets::label(tr("开机时自动启动", "Launch at login"), pal));
             if let Some(err) = &self.login_error {
                 text = text.child(widgets::error_text(err.clone(), pal));
             } else if !system::running_from_bundle() {
                 text = text.child(widgets::help_text(
-                    "需要从 Helmp.app 运行才能注册登录项（当前直接运行了二进制）",
+                    tr(
+                        "需要从 Helmp.app 运行才能注册登录项（当前直接运行了二进制）",
+                        "Run Helmp.app to add it as a login item (this is the bare binary).",
+                    ),
                     pal,
                 ));
             } else if self.login_status == Some(LoginItemStatus::RequiresApproval) {
@@ -38,12 +42,15 @@ impl SettingsView {
                         .items_center()
                         .gap(px(8.))
                         .child(widgets::help_text(
-                            "需要在系统设置的登录项中允许 Helmp",
+                            tr(
+                                "需要在系统设置的登录项中允许 Helmp",
+                                "Allow Helmp in Login Items in System Settings.",
+                            ),
                             pal,
                         ))
                         .child(widgets::push_button(
                             "open-login-items",
-                            "打开登录项设置",
+                            tr("打开登录项设置", "Open Login Items"),
                             false,
                             |_, _, _| system::open_login_items_settings(),
                         )),
@@ -54,7 +61,7 @@ impl SettingsView {
                 widgets::switch(
                     "launch-at-login",
                     general.launch_at_login,
-                    "开机时自动启动",
+                    tr("开机时自动启动", "Launch at login"),
                     pal,
                     cx.listener(|this, on: &bool, _, cx| this.set_launch_at_login(*on, cx)),
                 ),
@@ -63,10 +70,10 @@ impl SettingsView {
 
         let reset_choices: Vec<MenuChoice> = RESET_OPTIONS
             .iter()
-            .map(|(secs, label)| {
+            .map(|(secs, zh, en)| {
                 let secs = *secs;
                 (
-                    label.to_string(),
+                    tr(zh, en).to_string(),
                     general.reset_after_secs == secs,
                     self.setter(cx, move |c| c.general.reset_after_secs = secs),
                 )
@@ -74,12 +81,24 @@ impl SettingsView {
             .collect();
         let screen_choices: Vec<MenuChoice> = PANEL_SCREEN_OPTIONS
             .iter()
-            .map(|(screen, label)| {
+            .map(|(screen, zh, en)| {
                 let screen: PanelScreen = *screen;
                 (
-                    label.to_string(),
+                    tr(zh, en).to_string(),
                     general.panel_screen == screen,
                     self.setter(cx, move |c| c.general.panel_screen = screen),
+                )
+            })
+            .collect();
+        // 切换后 `i18n` 经配置订阅更新全局语言，save 里的 notify 让本窗口立即按新语言重绘。
+        let language_choices: Vec<MenuChoice> = LANGUAGE_OPTIONS
+            .iter()
+            .map(|(language, zh, en)| {
+                let language: Language = *language;
+                (
+                    tr(zh, en).to_string(),
+                    general.language == language,
+                    self.setter(cx, move |c| c.general.language = language),
                 )
             })
             .collect();
@@ -89,15 +108,18 @@ impl SettingsView {
             .flex_col()
             .child(widgets::group(
                 vec![
-                    widgets::row(widgets::label("唤起快捷键", pal), self.hotkey.clone())
-                        .into_any_element(),
+                    widgets::row(
+                        widgets::label(tr("唤起快捷键", "Keyboard shortcut"), pal),
+                        self.hotkey.clone(),
+                    )
+                    .into_any_element(),
                     launch.into_any_element(),
                     widgets::row(
-                        widgets::label("在菜单栏显示图标", pal),
+                        widgets::label(tr("在菜单栏显示图标", "Show in menu bar"), pal),
                         widgets::switch(
                             "show-menubar-icon",
                             general.show_menubar_icon,
-                            "在菜单栏显示图标",
+                            tr("在菜单栏显示图标", "Show in menu bar"),
                             pal,
                             cx.listener(|this, on: &bool, _, cx| {
                                 let on = *on;
@@ -106,16 +128,29 @@ impl SettingsView {
                         ),
                     )
                     .into_any_element(),
+                    // 中文界面的标签带上 "Language"：不认识中文的人误切过来也能找到这一行切回去。
+                    widgets::row(
+                        widgets::label(tr("语言 / Language", "Language"), pal),
+                        widgets::popup(
+                            "language",
+                            model::language_label(general.language),
+                            language_choices,
+                        ),
+                    )
+                    .into_any_element(),
                 ],
                 pal,
             ))
-            .child(widgets::group_header("面板", pal))
+            .child(widgets::group_header(tr("面板", "Panel"), pal))
             .child(widgets::group(
                 vec![
                     widgets::row(
                         widgets::label_with_help(
-                            "重新打开时清空输入",
-                            "在这段时间内重新唤起，会保留上次的输入并全选",
+                            tr("重新打开时清空输入", "Clear search after"),
+                            tr(
+                                "在这段时间内重新唤起，会保留上次的输入并全选",
+                                "Reopen within this time to keep your last search, selected.",
+                            ),
                             pal,
                         ),
                         widgets::popup(
@@ -127,14 +162,17 @@ impl SettingsView {
                     .into_any_element(),
                     widgets::row(
                         widgets::label_with_help(
-                            "唤起时切换到英文输入法",
-                            "中文输入法下，拼音缩写会进入组字，按键到不了搜索框",
+                            tr("唤起时切换到英文输入法", "Switch to ABC input source when opened"),
+                            tr(
+                                "中文输入法下，拼音缩写会进入组字，按键到不了搜索框",
+                                "With a Chinese or other IME, keystrokes go to composition instead of the search field.",
+                            ),
                             pal,
                         ),
                         widgets::switch(
                             "switch-input-source",
                             general.switch_input_source,
-                            "唤起时切换到英文输入法",
+                            tr("唤起时切换到英文输入法", "Switch to ABC input source when opened"),
                             pal,
                             cx.listener(|this, on: &bool, _, cx| {
                                 let on = *on;
@@ -144,7 +182,7 @@ impl SettingsView {
                     )
                     .into_any_element(),
                     widgets::row(
-                        widgets::label("面板出现在", pal),
+                        widgets::label(tr("面板出现在", "Show panel on"), pal),
                         widgets::popup(
                             "panel-screen",
                             model::panel_screen_label(general.panel_screen),
@@ -155,15 +193,18 @@ impl SettingsView {
                 ],
                 pal,
             ))
-            .child(widgets::group_header("更新", pal))
+            .child(widgets::group_header(tr("更新", "Updates"), pal))
             .child(widgets::group(
                 vec![
                     widgets::row(
-                        widgets::label("自动检查更新", pal),
+                        widgets::label(
+                            tr("自动检查更新", "Automatically check for updates"),
+                            pal,
+                        ),
                         widgets::switch(
                             "auto-check-updates",
                             general.auto_check_updates,
-                            "自动检查更新",
+                            tr("自动检查更新", "Automatically check for updates"),
                             pal,
                             cx.listener(|this, on: &bool, _, cx| {
                                 let on = *on;
@@ -178,8 +219,13 @@ impl SettingsView {
                             .text_color(pal.muted)
                             .child(format!("Helmp {}", env!("CARGO_PKG_VERSION"))),
                         // 还没有更新服务：按钮禁用，而不是点了假装「已是最新版本」。
-                        widgets::push_button("check-update", "立即检查", true, |_, _, _| {})
-                            .tooltip("更新服务尚未接入"),
+                        widgets::push_button(
+                            "check-update",
+                            tr("立即检查", "Check Now"),
+                            true,
+                            |_, _, _| {},
+                        )
+                        .tooltip(tr("更新服务尚未接入", "Update service isn't available yet")),
                     )
                     .into_any_element(),
                 ],

@@ -9,6 +9,7 @@
 use anyhow::{Context as _, Result, bail};
 
 use crate::engine::Engine;
+use crate::i18n::{tr, trf};
 use crate::provider::{Block, Outcome};
 
 /// 返回 `None` 表示不是 CLI 子命令，应启动图形界面。
@@ -34,7 +35,10 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
 
 fn start(engine: &Engine) {
     for (id, err) in engine.start_blocking() {
-        eprintln!("helmp: provider {id} 启动失败：{err:#}");
+        eprintln!(
+            "helmp: {}",
+            trf!("provider {id} 启动失败：{err:#}", "provider {id} failed to start: {err:#}")
+        );
     }
 }
 
@@ -61,10 +65,10 @@ fn query(engine: &Engine, text: &str) -> Result<()> {
 }
 
 fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
-    let id = id.context("用法：helmp run <id> [query]")?;
+    let id = id.context(tr("用法：helmp run <id> [query]", "Usage: helmp run <id> [query]"))?;
     start(engine);
     let Some(item) = lookup(engine, text).into_iter().find(|item| item.id == id) else {
-        bail!("查询 {text:?} 的结果里没有 {id}");
+        bail!(trf!("查询 {text:?} 的结果里没有 {id}", "No result {id} for query {text:?}"));
     };
     match item.action.run()? {
         Outcome::Done => println!("done"),
@@ -77,12 +81,14 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
             for block in detail.blocks {
                 match block {
                     Block::Text(text) | Block::Code(text) => println!("{text}"),
-                    Block::Quote { label, text } => println!("{label}：{text}"),
-                    Block::Image(path) => println!("[图片 {}]", path.display()),
+                    Block::Quote { label, text } => println!("{label}{}{text}", tr("：", ": ")),
+                    Block::Image(path) => {
+                        println!("{}", trf!("[图片 {}]", "[Image {}]", path.display()))
+                    }
                 }
             }
             for (key, value) in detail.metadata {
-                println!("{key}：{value}");
+                println!("{key}{}{value}", tr("：", ": "));
             }
         }
     }

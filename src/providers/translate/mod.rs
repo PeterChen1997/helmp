@@ -17,7 +17,8 @@ use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 
 use crate::config::{self, Config, ModelConfig};
-use crate::engine::COMMANDS_SECTION;
+use crate::engine::commands_section;
+use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::models;
 use crate::provider::{
@@ -26,14 +27,24 @@ use crate::provider::{
 };
 
 const SCOPE: &str = "translate";
-const BADGE: &str = "翻译";
 const ICON: Icon = Icon::Symbol {
     name: "languages",
     tint: Tint::Teal,
 };
 /// 打开翻译的全局快捷键（显示用；⌘⇧T 会抢浏览器「恢复标签页」，改成 ⌥⇧T）。
 const HOTKEY: &str = "⌥⇧T";
-const NO_MODEL: &str = "先在设置 › 模型里接入一个模型";
+
+/// 分组名（也是分组键）：在查询里取，查询已按语言固定。
+fn badge() -> &'static str {
+    tr("翻译", "Translate")
+}
+
+fn no_model() -> &'static str {
+    tr(
+        "先在设置 › 模型里接入一个模型",
+        "Add a model in Settings › Models first",
+    )
+}
 
 /// 选中文字的缓存时长：面板可见时每秒重查一次，不必每次都走 AX。
 const SELECTION_TTL: Duration = Duration::from_millis(1500);
@@ -68,10 +79,10 @@ impl Provider for Translate {
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
             id: SCOPE,
-            label: "翻译".into(),
+            label: tr("翻译", "Translate").into(),
             tint: Tint::Teal,
             prefixes: vec!["fy ".into(), "tr ".into(), "翻译 ".into()],
-            placeholder: "输入要翻译的文字".into(),
+            placeholder: tr("输入要翻译的文字", "Type text to translate").into(),
             filters: Vec::new(),
         })
     }
@@ -84,7 +95,7 @@ impl Provider for Translate {
             .iter()
             .filter_map(|keyword| matcher::score(query, keyword))
             .max()
-            .map(|score| vec![entry(BADGE, score)])
+            .map(|score| vec![entry(badge(), score)])
             .unwrap_or_default()
     }
 
@@ -107,7 +118,7 @@ impl Provider for Translate {
 
     fn suggestions(&self) -> Vec<Item> {
         // 设计稿首页顺序：截图识别文字（720）、翻译（710）、剪贴板历史（700）。
-        vec![entry(COMMANDS_SECTION, 710)]
+        vec![entry(commands_section(), 710)]
     }
 }
 
@@ -115,14 +126,18 @@ impl Provider for Translate {
 fn entry(badge: &str, score: u32) -> Item {
     Item {
         id: "translate:open".into(),
-        title: "翻译".into(),
-        subtitle: "用你自己的模型翻译输入或选中的文字".into(),
+        title: tr("翻译", "Translate").into(),
+        subtitle: tr(
+            "用你自己的模型翻译输入或选中的文字",
+            "Translate typed or selected text with your own model",
+        )
+        .into(),
         badge: badge.into(),
         score,
         icon: ICON,
         accessories: vec![Accessory::keys(HOTKEY)],
         action: Action::enter_scope(SCOPE),
-        action_title: "进入".into(),
+        action_title: tr("进入", "Open").into(),
         ..Item::blank()
     }
 }
@@ -130,13 +145,13 @@ fn entry(badge: &str, score: u32) -> Item {
 fn no_model_item() -> Item {
     Item {
         id: "translate:setup".into(),
-        title: "翻译".into(),
-        subtitle: NO_MODEL.into(),
-        badge: BADGE.into(),
+        title: tr("翻译", "Translate").into(),
+        subtitle: no_model().into(),
+        badge: badge().into(),
         score: 1000,
         icon: ICON,
         action: Action::new(|| Ok(Outcome::OpenSettings)),
-        action_title: "打开设置".into(),
+        action_title: tr("打开设置", "Open Settings").into(),
         ..Item::blank()
     }
 }
@@ -163,11 +178,17 @@ fn form_item(config: &Config, typed: &str, text: &str, from_selection: bool) -> 
     let languages = || {
         models::LANGUAGES
             .iter()
-            .map(|(code, label, _)| (label.to_string(), code.to_string()))
+            .map(|(code, label, english)| (tr(label, english).to_string(), code.to_string()))
     };
-    let mut sources = vec![("自动检测".to_string(), "auto".to_string())];
+    let mut sources = vec![(
+        tr("自动检测", "Detect Language").to_string(),
+        "auto".to_string(),
+    )];
     sources.extend(languages());
-    let mut targets = vec![("中英互译（自动）".to_string(), "auto".to_string())];
+    let mut targets = vec![(
+        tr("中英互译（自动）", "Chinese ⇄ English (Auto)").to_string(),
+        "auto".to_string(),
+    )];
     targets.extend(languages());
     let model_options = config
         .models
@@ -179,27 +200,41 @@ fn form_item(config: &Config, typed: &str, text: &str, from_selection: bool) -> 
             Field {
                 key: "text".into(),
                 label: if from_selection {
-                    "原文 · 来自选中文字".into()
+                    tr("原文 · 来自选中文字", "Source Text · From Selection").into()
                 } else {
-                    "原文".into()
+                    tr("原文", "Source Text").into()
                 },
                 kind: FieldKind::Text {
-                    placeholder: "输入或粘贴要翻译的文字".into(),
+                    placeholder: tr("输入或粘贴要翻译的文字", "Type or paste text to translate")
+                        .into(),
                     multiline: true,
                 },
                 value: defaults.text.clone(),
                 required: true,
             },
-            select("source", "源语言", sources, &defaults.source),
-            select("target", "目标语言", targets, &defaults.target),
-            select("model", "模型", model_options, &defaults.model),
+            select(
+                "source",
+                tr("源语言", "Source Language"),
+                sources,
+                &defaults.source,
+            ),
+            select(
+                "target",
+                tr("目标语言", "Target Language"),
+                targets,
+                &defaults.target,
+            ),
+            select("model", tr("模型", "Model"), model_options, &defaults.model),
         ],
     };
     let model_name = models::translate_model(config)
         .map(|m| m.name.clone())
         .unwrap_or_default();
     let subtitle = if text.is_empty() {
-        format!("输入文字后回车 · {model_name}")
+        trf!(
+            "输入文字后回车 · {model_name}",
+            "Type text, then press Return · {model_name}"
+        )
     } else {
         format!("{} · {model_name}", one_line(text, 60))
     };
@@ -207,17 +242,21 @@ fn form_item(config: &Config, typed: &str, text: &str, from_selection: bool) -> 
     Item {
         // 表单状态按 id 缓存：输入变了 id 才变，后台每秒刷新不会冲掉用户在表单里的修改。
         id: format!("translate:{}", digest(typed)),
-        title: "翻译".into(),
+        title: tr("翻译", "Translate").into(),
         subtitle,
-        badge: BADGE.into(),
+        badge: badge().into(),
         score: 1000,
         icon: ICON,
         action: Action::with_input(move |input| run(&run_defaults, input)),
-        action_title: "翻译".into(),
+        action_title: tr("翻译", "Translate").into(),
         actions: vec![
-            NamedAction::new("复制上次译文", Some("⌘⇧C"), Action::new(copy_last)),
             NamedAction::new(
-                "打开模型设置",
+                tr("复制上次译文", "Copy Last Translation"),
+                Some("⌘⇧C"),
+                Action::new(copy_last),
+            ),
+            NamedAction::new(
+                tr("打开模型设置", "Open Model Settings"),
                 None,
                 Action::new(|| Ok(Outcome::OpenSettings)),
             ),
@@ -263,7 +302,10 @@ fn run(defaults: &Defaults, input: &ActionInput) -> Result<Outcome> {
     }
     let text = value(input, "text", &defaults.text).trim();
     if text.is_empty() {
-        bail!("没有要翻译的文字：在原文里输入，或先在其他应用里选中文字再唤起");
+        bail!(tr(
+            "没有要翻译的文字：在原文里输入，或先在其他应用里选中文字再唤起",
+            "Nothing to translate: type some text, or select text in another app before opening Helmp"
+        ));
     }
     let model_id = value(input, "model", &defaults.model);
     let model = config
@@ -271,7 +313,10 @@ fn run(defaults: &Defaults, input: &ActionInput) -> Result<Outcome> {
         .iter()
         .find(|model| model.id == model_id)
         .or_else(|| models::translate_model(&config))
-        .context("找不到所选模型，可能已在设置里移除")?;
+        .context(tr(
+            "找不到所选模型，可能已在设置里移除",
+            "Can’t find the selected model; it may have been removed in Settings",
+        ))?;
     let source = value(input, "source", &defaults.source);
     let target = value(input, "target", &defaults.target);
     Ok(Outcome::Show(translate(model, source, target, text)?))
@@ -280,32 +325,49 @@ fn run(defaults: &Defaults, input: &ActionInput) -> Result<Outcome> {
 /// 调模型翻译，记下译文，返回详情。
 fn translate(model: &ModelConfig, source: &str, target: &str, text: &str) -> Result<Detail> {
     let target = resolve_target(target, text);
-    let translation = models::complete(model, &system_prompt(source, target), text)
-        .with_context(|| format!("用「{}」翻译失败", model.name))?;
+    let translation =
+        models::complete(model, &system_prompt(source, target), text).with_context(|| {
+            trf!(
+                "用「{}」翻译失败",
+                "Couldn’t translate with “{}”",
+                model.name
+            )
+        })?;
     let translation = translation.trim().to_string();
     *LAST.lock().expect("last translation poisoned") = Some(translation.clone());
     Ok(detail(model, target, translation))
 }
 
 fn detail(model: &ModelConfig, target: &str, translation: String) -> Detail {
-    let target_label = models::language_label(target).unwrap_or(target);
+    let target_label = match crate::i18n::lang() {
+        crate::i18n::Lang::Zh => models::language_label(target),
+        crate::i18n::Lang::En => models::language_english(target),
+    }
+    .unwrap_or(target);
     Detail {
         // 出结果后回车复制译文；⌘↵ 复制并替换前台 App 里的选中文字。
         actions: vec![
-            NamedAction::new("复制译文", None, Action::copy(translation.clone())),
             NamedAction::new(
-                "替换选中文字",
+                tr("复制译文", "Copy Translation"),
+                None,
+                Action::copy(translation.clone()),
+            ),
+            NamedAction::new(
+                tr("替换选中文字", "Replace Selection"),
                 Some("⌘↵"),
                 replace_selection(translation.clone()),
             ),
         ],
         icon: ICON,
-        title: format!("译文 · {target_label}"),
+        title: trf!("译文 · {target_label}", "Translation · {target_label}"),
         tag: None,
         blocks: vec![Block::Text(translation)],
         metadata: vec![
-            ("模型".into(), format!("由 {} 翻译", model.name)),
-            ("调用".into(), billing_note(model).into()),
+            (
+                tr("模型", "Model").into(),
+                trf!("由 {} 翻译", "Translated by {}", model.name),
+            ),
+            (tr("调用", "Usage").into(), billing_note(model).into()),
         ],
     }
 }
@@ -317,7 +379,11 @@ fn replace_selection(text: String) -> Action {
         Action::copy(text.clone()).run()?;
         if !crate::providers::clipboard::macos::accessibility_trusted() {
             return Ok(Outcome::Message(
-                "译文已复制。没有辅助功能权限，无法自动替换，请手动粘贴（⌘V）。".into(),
+                tr(
+                    "译文已复制。没有辅助功能权限，无法自动替换，请手动粘贴（⌘V）。",
+                    "Translation copied. Helmp can’t replace the selection without Accessibility permission, so paste it yourself (⌘V).",
+                )
+                .into(),
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
@@ -328,11 +394,11 @@ fn replace_selection(text: String) -> Action {
 
 fn billing_note(model: &ModelConfig) -> &'static str {
     if models::is_local(model) {
-        "本机 Ollama"
+        tr("本机 Ollama", "Local Ollama")
     } else if model.kind == config::ModelKind::Ollama {
-        "你自己的 Ollama 服务"
+        tr("你自己的 Ollama 服务", "Your own Ollama server")
     } else {
-        "使用你自己的 API Key"
+        tr("使用你自己的 API Key", "Your own API key")
     }
 }
 
@@ -382,7 +448,13 @@ fn copy_last() -> Result<Outcome> {
             write_text(&NSPasteboard::generalPasteboard(), &text)?;
             Ok(Outcome::Done)
         }
-        None => Ok(Outcome::Message("还没有译文，先翻译一段文字".into())),
+        None => Ok(Outcome::Message(
+            tr(
+                "还没有译文，先翻译一段文字",
+                "No translation yet. Translate some text first.",
+            )
+            .into(),
+        )),
     }
 }
 
@@ -393,7 +465,7 @@ fn write_text(pasteboard: &NSPasteboard, text: &str) -> Result<()> {
     let ty = unsafe { NSPasteboardTypeString };
     anyhow::ensure!(
         pasteboard.setString_forType(&NSString::from_str(text), ty),
-        "写入剪贴板失败"
+        tr("写入剪贴板失败", "Couldn’t write to the clipboard")
     );
     Ok(())
 }
@@ -484,7 +556,7 @@ mod tests {
     #[test]
     fn without_models_points_to_settings() {
         let item = no_model_item();
-        assert_eq!(item.subtitle, NO_MODEL);
+        assert_eq!(item.subtitle, no_model());
         assert!(item.form.is_none());
         assert_eq!(item.action.run().unwrap(), Outcome::OpenSettings);
     }
@@ -492,7 +564,7 @@ mod tests {
     #[test]
     fn suggestion_enters_scope_from_commands_section() {
         let item = Translate::default().suggestions().remove(0);
-        assert_eq!(item.badge, COMMANDS_SECTION);
+        assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
         assert_eq!(item.icon, ICON);
         assert_eq!(item.accessories, vec![Accessory::keys("⌥⇧T")]);
@@ -549,6 +621,46 @@ mod tests {
         assert!(prompt.contains("into English"), "{prompt}");
         assert!(prompt.contains("source language is Japanese"), "{prompt}");
         assert!(!system_prompt("auto", "zh-Hans").contains("source language"));
+    }
+
+    #[test]
+    fn english_ui_translates_labels_but_keeps_values_and_search() {
+        // 英文界面：标题、分组、表单标签和选项显示名换成英文，但选项的值（语言代码）不能变，
+        // 否则提交给模型的目标语言就错了；输入中文「翻译」或拼音 fy 仍要找到入口。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let found = Translate::default().query("翻译");
+            let entry = found.first().expect("英文界面输入中文应找到翻译");
+            assert_eq!(entry.title, "Translate");
+            assert_eq!(entry.badge, "Translate");
+            assert!(!Translate::default().query("fy").is_empty());
+
+            let config = config_with(vec![model("a", "Claude", ModelKind::Anthropic)]);
+            let fields = form_item(&config, "", "selected", true)
+                .form
+                .unwrap()
+                .fields;
+            assert_eq!(fields[0].label, "Source Text · From Selection");
+            assert_eq!(fields[1].label, "Source Language");
+            let FieldKind::Select { options } = &fields[2].kind else {
+                panic!("目标语言应是下拉框");
+            };
+            assert!(options.contains(&("Chinese ⇄ English (Auto)".into(), "auto".into())));
+            assert!(options.contains(&("Japanese".into(), "ja".into())));
+
+            let d = detail(
+                &model("a", "Claude Haiku 5.5", ModelKind::Anthropic),
+                "en",
+                "Hi".into(),
+            );
+            assert_eq!(d.title, "Translation · English");
+            assert_eq!(
+                d.metadata,
+                vec![
+                    ("Model".into(), "Translated by Claude Haiku 5.5".into()),
+                    ("Usage".into(), "Your own API key".into()),
+                ]
+            );
+        });
     }
 
     #[test]

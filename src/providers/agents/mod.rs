@@ -18,7 +18,8 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 
-use crate::engine::WAITING_SECTION;
+use crate::engine::waiting_section;
+use crate::i18n::tr;
 use crate::paths;
 use crate::provider::{
     Accessory, Action, Block, Detail, Icon, Item, NamedAction, Provider, Scope, Tint,
@@ -30,8 +31,10 @@ use self::state::{Session, Source};
 const TAIL_BYTES: u64 = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// 全局搜索里会话的分组名（设计稿 Results）。范围视图里按状态分组，首页用 `WAITING_SECTION`。
-const GLOBAL_SECTION: &str = "Agent 会话";
+/// 全局搜索里会话的分组名（设计稿 Results）。范围视图里按状态分组，首页用 `waiting_section()`。
+fn global_section() -> &'static str {
+    tr("Agent 会话", "Agent Sessions")
+}
 const SCOPE_ID: &str = "agents";
 
 /// 一轮扫描里遇到的问题。每条只在首次出现时打印到 stderr，避免每秒刷屏。
@@ -131,18 +134,23 @@ impl Provider for Agents {
         let now = now_ms();
         state::rank(&sessions, query, self.home.as_deref())
             .into_iter()
-            .map(|(i, score)| self.item(&sessions[i], score, GLOBAL_SECTION, now))
+            .map(|(i, score)| self.item(&sessions[i], score, global_section(), now))
             .collect()
     }
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
             id: SCOPE_ID,
-            label: "Agent 会话".into(),
+            label: tr("Agent 会话", "Agent Sessions").into(),
             tint: Tint::Purple,
             prefixes: vec!["ag ".into(), "agent ".into()],
-            placeholder: "按标题、项目或分支筛选".into(),
-            filters: vec!["全部".into(), "Claude".into(), "Codex".into()],
+            placeholder: tr(
+                "按标题、项目或分支筛选",
+                "Filter by title, project, or branch",
+            )
+            .into(),
+            // 筛选名会原样传回 `query_scoped`：只认 Claude / Codex（两种语言同名），其余（全部 / All）都不过滤。
+            filters: vec![tr("全部", "All").into(), "Claude".into(), "Codex".into()],
         })
     }
 
@@ -162,7 +170,7 @@ impl Provider for Agents {
         let now = now_ms();
         state::waiting(&sessions)
             .into_iter()
-            .map(|(i, score)| self.item(&sessions[i], score, WAITING_SECTION, now))
+            .map(|(i, score)| self.item(&sessions[i], score, waiting_section(), now))
             .collect()
     }
 }
@@ -182,7 +190,7 @@ impl Agents {
             badge: badge.into(),
             score,
             action: jump::action(session.jump.clone()),
-            action_title: "跳转到会话".into(),
+            action_title: tr("跳转到会话", "Switch to Session").into(),
             accessories: vec![Accessory::Tag { text: tag, tone }],
             actions: actions(session),
             detail: Some(detail(session, icon.clone(), home, now)),
@@ -197,19 +205,19 @@ fn actions(session: &Session) -> Vec<NamedAction> {
     let mut actions = Vec::new();
     if let Some(cwd) = session.cwd.as_deref().and_then(Path::to_str) {
         actions.push(NamedAction::new(
-            "在访达中显示项目",
+            tr("在访达中显示项目", "Show Project in Finder"),
             Some("⌘↵"),
             Action::reveal(cwd.to_string()),
         ));
         actions.push(NamedAction::new(
-            "复制项目路径",
+            tr("复制项目路径", "Copy Project Path"),
             Some("⌘⇧C"),
             Action::copy(cwd.to_string()),
         ));
     }
     // 会话 ID 用于 `claude --resume <id>` / `codex resume <id>`，或者在日志里查这个会话。
     actions.push(NamedAction::new(
-        "复制会话 ID",
+        tr("复制会话 ID", "Copy Session ID"),
         None,
         Action::copy(session.session_id.clone()),
     ));
@@ -220,13 +228,16 @@ fn actions(session: &Session) -> Vec<NamedAction> {
 fn detail(session: &Session, icon: Icon, home: Option<&Path>, now: u64) -> Detail {
     let mut metadata = Vec::new();
     if let Some(cwd) = &session.cwd {
-        metadata.push(("项目".into(), state::display_path(cwd, home)));
+        metadata.push((tr("项目", "Project").into(), state::display_path(cwd, home)));
     }
     if let Some(branch) = &session.branch {
-        metadata.push(("分支".into(), branch.clone()));
+        metadata.push((tr("分支", "Branch").into(), branch.clone()));
     }
-    metadata.push(("来源".into(), session.origin().into()));
-    metadata.push(("最后活动".into(), state::ago(now, session.last_activity_ms)));
+    metadata.push((tr("来源", "Source").into(), session.origin().into()));
+    metadata.push((
+        tr("最后活动", "Last Activity").into(),
+        state::ago(now, session.last_activity_ms),
+    ));
     Detail {
         actions: Vec::new(),
         icon,
@@ -236,7 +247,7 @@ fn detail(session: &Session, icon: Icon, home: Option<&Path>, now: u64) -> Detai
             .last_message
             .iter()
             .map(|text| Block::Quote {
-                label: "最后一条消息".into(),
+                label: tr("最后一条消息", "Last Message").into(),
                 text: text.clone(),
             })
             .collect(),
@@ -339,7 +350,7 @@ mod tests {
         );
         assert_eq!(item.subtitle, "~/code_hub/finder · main · 10 分钟前");
         assert_eq!(item.action_title, "跳转到会话");
-        assert_eq!(item.badge, GLOBAL_SECTION);
+        assert_eq!(item.badge, global_section());
         let shortcuts: Vec<_> = item
             .actions
             .iter()
@@ -421,19 +432,19 @@ mod tests {
             .iter()
             .find(|i| i.title == "Finder daily radar")
             .unwrap();
-        assert_eq!(waiting.badge, WAITING_SECTION);
+        assert_eq!(waiting.badge, waiting_section());
     }
 
     #[test]
     fn suggestions_are_waiting_sessions_under_waiting_section() {
-        // 菜单栏按 WAITING_SECTION 这个分组名读取；名字或内容不对，菜单栏的「等你处理」就是空的或错的。
+        // 菜单栏按 waiting_section() 这个分组名读取；名字或内容不对，菜单栏的「等你处理」就是空的或错的。
         let items = fixture().suggestions();
         let titles: Vec<_> = items.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(titles, ["Finder daily radar"]);
         assert!(
             items
                 .iter()
-                .all(|i| i.badge == WAITING_SECTION && i.score >= 900)
+                .all(|i| i.badge == waiting_section() && i.score >= 900)
         );
     }
 
@@ -444,6 +455,67 @@ mod tests {
         assert_eq!(agents.query("agent").len(), 3);
         assert_eq!(agents.query("会话").len(), 3);
         assert_eq!(agents.query("codex").len(), 1);
+    }
+
+    #[test]
+    fn english_ui_translates_labels_but_keeps_keywords_and_filters() {
+        // 英文界面下用户看到的分组、状态、操作、详情都应是英文，否则切了语言还是满屏中文。
+        // 范围筛选名会原样传回，进入范围后才切语言时传回的可能是中文「全部」，两种都必须照常列出；
+        // 全局关键词（会话 / agent）属于搜索逻辑，跟界面语言无关。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let agents = fixture();
+            let items = agents.query("radar");
+            let item = items.first().unwrap();
+            assert_eq!(item.badge, "Agent Sessions");
+            assert_eq!(item.action_title, "Switch to Session");
+            assert_eq!(
+                item.accessories,
+                [Accessory::Tag {
+                    text: "Needs permission".into(),
+                    tone: Tone::Waiting
+                }]
+            );
+            assert_eq!(item.subtitle, "~/code_hub/finder · main · 10 min ago");
+            let titles: Vec<_> = item.actions.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(
+                titles,
+                [
+                    "Show Project in Finder",
+                    "Copy Project Path",
+                    "Copy Session ID"
+                ]
+            );
+            let detail = item.detail.clone().unwrap();
+            assert_eq!(
+                detail.tag,
+                Some(("Waiting for permission".into(), Tone::Waiting))
+            );
+            let keys: Vec<_> = detail.metadata.iter().map(|(k, _)| k.as_str()).collect();
+            assert_eq!(keys, ["Project", "Branch", "Source", "Last Activity"]);
+            assert_eq!(detail.metadata[2].1, "Claude Desktop");
+
+            let scope = agents.scope().unwrap();
+            assert_eq!(scope.label, "Agent Sessions");
+            assert_eq!(scope.filters, ["All", "Claude", "Codex"]);
+            assert_eq!(agents.query_scoped("", "All").len(), 3);
+            assert_eq!(agents.query_scoped("", "全部").len(), 3);
+            let codex: Vec<_> = agents
+                .query_scoped("", "Codex")
+                .into_iter()
+                .map(|i| i.badge)
+                .collect();
+            assert_eq!(codex, ["Recently Completed"]);
+
+            assert_eq!(agents.query("会话").len(), 3);
+            assert_eq!(agents.query("sessions").len(), 3);
+            // 菜单栏按 waiting_section() 读首页等待会话：英文下也必须是同一个名字。
+            assert!(
+                agents
+                    .suggestions()
+                    .iter()
+                    .all(|i| i.badge == waiting_section())
+            );
+        });
     }
 
     /// 本机真实会话的列表与详情（只读 ~/.claude、~/.codex）：

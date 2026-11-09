@@ -17,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::config::{self, Config};
+use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
 use hotkey::{HotkeyEvent, HotkeyRecorder};
@@ -48,7 +49,7 @@ pub fn open(cx: &mut App) {
     let bounds = Bounds::centered(None, WINDOW_SIZE, cx);
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions {
-            title: Some("Helmp 设置".into()),
+            title: Some(window_title().into()),
             appears_transparent: true,
             traffic_light_position: Some(point(px(20.), px(20.))),
         }),
@@ -76,6 +77,14 @@ pub fn open(cx: &mut App) {
         }
         Err(err) => eprintln!("helmp: 打开设置窗口失败：{err:#}"),
     }
+}
+
+fn window_title() -> &'static str {
+    tr("Helmp 设置", "Helmp Settings")
+}
+
+fn search_placeholder() -> &'static str {
+    tr("搜索", "Search")
 }
 
 /// 同 `gpui_kit::open_window`，但 Root 底色透明：Root 默认铺主题底色（不透明），会盖住毛玻璃。
@@ -146,13 +155,15 @@ pub struct SettingsView {
     /// 已安排一次稍后重绘，等后台生成的 App 图标。
     icon_refresh_pending: bool,
     scroll: ScrollHandle,
+    /// 上次取界面文案时的 `i18n::generation()`；不同说明语言切换了，要刷新建窗口时写死的文案。
+    lang_generation: u64,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::dock::track_window(cx);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder()));
         let hotkey = cx.new(|cx| {
             HotkeyRecorder::new(
                 || Some(config::get().general.hotkey.clone()).filter(|hotkey| !hotkey.is_empty()),
@@ -198,10 +209,10 @@ impl SettingsView {
         let extensions = Self::extension_rows(window, cx, &mut subscriptions);
         let models = crate::models::settings_pane(window, cx);
 
-        // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页。
+        // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
         let page = std::env::var("HELMP_SETTINGS_PAGE")
             .ok()
-            .and_then(|name| Page::ALL.into_iter().find(|page| page.title() == name))
+            .and_then(|name| Page::from_name(&name))
             .unwrap_or(Page::General);
 
         Self {
@@ -219,6 +230,7 @@ impl SettingsView {
             app_paths: Default::default(),
             icon_refresh_pending: false,
             scroll: ScrollHandle::new(),
+            lang_generation: crate::i18n::generation(),
             _subscriptions: subscriptions,
         }
     }
@@ -310,7 +322,10 @@ impl SettingsView {
             Ok(()) => self.error = None,
             Err(err) => {
                 eprintln!("helmp: 保存设置失败：{err:#}");
-                self.error = Some(format!("保存设置失败：{err:#}"));
+                self.error = Some(trf!(
+                    "保存设置失败：{err:#}",
+                    "Couldn't save settings: {err:#}"
+                ));
             }
         }
         cx.notify();
@@ -332,6 +347,17 @@ impl SettingsView {
         })
     }
 
+    /// 语言切换后刷新建窗口时就固定下来的文案：窗口标题、搜索框占位。
+    /// 其余文案每次渲染现取，随 `cx.notify` 重绘自然更新。
+    /// 扩展行别名框的占位是插件默认前缀（或「—」），与语言无关，不用刷新。
+    fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.set_window_title(window_title());
+        self.search.update(cx, |search, cx| {
+            search.set_placeholder(search_placeholder(), window, cx)
+        });
+        cx.notify();
+    }
+
     fn select_page(&mut self, page: Page, cx: &mut Context<Self>) {
         if self.page != page {
             self.page = page;
@@ -350,7 +376,7 @@ impl SettingsView {
             let (icon, tint) = page.icon();
             nav = nav.child(
                 div()
-                    .id(SharedString::from(format!("nav-{}", page.title())))
+                    .id(SharedString::from(format!("nav-{page:?}")))
                     .flex()
                     .items_center()
                     .gap(px(9.))
@@ -435,6 +461,12 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let generation = crate::i18n::generation();
+        if generation != self.lang_generation {
+            self.lang_generation = generation;
+            // 渲染中不改别的实体（搜索框），推迟到本轮结束再刷新。
+            cx.defer_in(window, |this, window, cx| this.refresh_language(window, cx));
+        }
         let pal = style::palette(window);
         let page = self.render_page(&pal, window, cx);
         // 模型页由「翻译与模型」子任务整页提供，不套标题。

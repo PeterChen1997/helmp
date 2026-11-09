@@ -16,6 +16,7 @@ use notify::{RecursiveMode, Watcher as _};
 
 use objc2_app_kit::NSWorkspace;
 
+use crate::i18n::{tr, trf};
 use crate::matcher::{self, Candidate, Match, MatchKind};
 use crate::provider::{Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider};
 
@@ -103,12 +104,20 @@ fn search(apps: &[App], query: &str, running: impl FnOnce() -> HashSet<String>) 
 
 fn item(app: &App, name: &str, hit: &Match, running: bool) -> Item {
     let mut actions = vec![
-        NamedAction::new("在访达中显示", Some("⌘↵"), Action::reveal(app.path.clone())),
-        NamedAction::new("复制路径", Some("⌘⇧C"), Action::copy(app.path.clone())),
+        NamedAction::new(
+            tr("在访达中显示", "Show in Finder"),
+            Some("⌘↵"),
+            Action::reveal(app.path.clone()),
+        ),
+        NamedAction::new(
+            tr("复制路径", "Copy Path"),
+            Some("⌘⇧C"),
+            Action::copy(app.path.clone()),
+        ),
     ];
     if running {
         actions.push(NamedAction::new(
-            "退出应用",
+            tr("退出应用", "Quit App"),
             Some("⌘Q"),
             quit_action(app.real_path.clone()),
         ));
@@ -117,10 +126,10 @@ fn item(app: &App, name: &str, hit: &Match, running: bool) -> Item {
         id: format!("apps:{}", app.path),
         title: app.title.clone(),
         subtitle: hint(app, name, hit),
-        badge: "应用".into(),
+        badge: tr("应用", "Applications").into(),
         score: hit.score,
         action: Action::open(app.path.clone()),
-        action_title: "打开".into(),
+        action_title: tr("打开", "Open").into(),
         icon: Icon::File(PathBuf::from(&app.path)),
         actions,
         detail: Some(detail(app, hit)),
@@ -131,9 +140,16 @@ fn item(app: &App, name: &str, hit: &Match, running: bool) -> Item {
 /// 副标题：拼音命中时告诉用户怎么打出来的（设计稿「拼音 weixin · 首字母 wx」），否则显示位置。
 fn hint(app: &App, name: &str, hit: &Match) -> String {
     match &hit.pinyin {
-        Some(span) if span.whole => format!("拼音 {} · 首字母 {}", span.full, span.initials),
-        Some(span) if hit.kind == MatchKind::PinyinInitials => format!("首字母 {}", span.initials),
-        Some(span) => format!("拼音 {}", span.full),
+        Some(span) if span.whole => trf!(
+            "拼音 {} · 首字母 {}",
+            "Pinyin {} · Initials {}",
+            span.full,
+            span.initials
+        ),
+        Some(span) if hit.kind == MatchKind::PinyinInitials => {
+            trf!("首字母 {}", "Initials {}", span.initials)
+        }
+        Some(span) => trf!("拼音 {}", "Pinyin {}", span.full),
         // 命中的是英文名（输入 lark 找到「飞书」），把英文名带上，不然看不出为什么命中。
         None if name != app.title => format!("{name} · {}", app.location),
         None => app.location.clone(),
@@ -145,7 +161,7 @@ fn detail(app: &App, hit: &Match) -> Detail {
         .english
         .iter()
         .cloned()
-        .chain(app.version.iter().map(|v| format!("版本 {v}")))
+        .chain(app.version.iter().map(|v| trf!("版本 {v}", "Version {v}")))
         .collect();
     Detail {
         actions: Vec::new(),
@@ -158,8 +174,8 @@ fn detail(app: &App, hit: &Match) -> Detail {
             vec![Block::Text(line.join(" · "))]
         },
         metadata: vec![
-            ("位置".into(), app.location.clone()),
-            ("匹配方式".into(), hit.kind.label().into()),
+            (tr("位置", "Location").into(), app.location.clone()),
+            (tr("匹配方式", "Matched By").into(), hit.kind.label().into()),
         ],
     }
 }
@@ -194,8 +210,11 @@ fn quit_action(real_path: String) -> Action {
             Some(matching.iter().all(|app| app.terminate()))
         });
         match asked {
-            None => bail!("{real_path} 已经没有在运行"),
-            Some(false) => bail!("{real_path} 拒绝退出"),
+            None => bail!(trf!(
+                "{real_path} 已经没有在运行",
+                "{real_path} is no longer running"
+            )),
+            Some(false) => bail!(trf!("{real_path} 拒绝退出", "{real_path} refused to quit")),
             Some(true) => Ok(Outcome::Done),
         }
     })
@@ -537,6 +556,34 @@ mod tests {
             .map(|a| a.shortcut.as_deref().unwrap_or_default())
             .collect();
         assert_eq!(shortcuts, ["⌘↵", "⌘⇧C", "⌘Q"]);
+    }
+
+    #[test]
+    fn english_ui_translates_labels_but_pinyin_search_still_works() {
+        // 界面语言只影响文案：英文界面下 wx / weixin / 微信 仍必须第一条命中微信（索引里的中文名与拼音不受影响），
+        // 分组、回车操作、⌘K 操作名和拼音提示则要换成英文。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            for query in ["wx", "weixin", "微信", "wechat"] {
+                assert_eq!(top(query), "微信", "{query}");
+            }
+            let items = search(&fixture(), "wx");
+            let wechat = find(&items, "微信");
+            assert_eq!(wechat.badge, "Applications");
+            assert_eq!(wechat.action_title, "Open");
+            assert_eq!(wechat.subtitle, "Pinyin weixin · Initials wx");
+            assert_eq!(find(&items, "微信开发者工具").subtitle, "Initials wx");
+            let titles: Vec<_> = wechat.actions.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(titles, ["Show in Finder", "Copy Path"]);
+            let keys: Vec<_> = wechat
+                .detail
+                .as_ref()
+                .unwrap()
+                .metadata
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .collect();
+            assert_eq!(keys, ["Location", "Matched By"]);
+        });
     }
 
     #[test]

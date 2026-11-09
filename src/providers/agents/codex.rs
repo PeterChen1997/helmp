@@ -18,6 +18,7 @@ use serde_json::Value;
 
 use super::state::{self, Jump, Session, Source, Status};
 use super::{TAIL_BYTES, Warnings, read_tail, tail_lines};
+use crate::i18n::tr;
 
 /// 试锁判活。只读打开，不写不删。
 pub fn writer_alive(lock: &Path) -> std::io::Result<bool> {
@@ -121,6 +122,7 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
     }
     let status = match edge {
         Some(Edge::Aborted(reason)) => Status::Interrupted(reason),
+        // 标签存中文原文（缓存会跨语言切换），显示时由 `Status::label` / `tag` 翻译。
         _ if question.is_some() => Status::NeedsYou("等你回答".into()),
         Some(Edge::Started) => Status::Running,
         Some(Edge::Complete) => Status::Done,
@@ -442,7 +444,7 @@ impl CodexScanner {
                         .title
                         .clone()
                         .or_else(|| c.tail.last_user.clone())
-                        .unwrap_or_else(|| "（无标题会话）".into()),
+                        .unwrap_or_else(|| tr("（无标题会话）", "(Untitled session)").into()),
                     status: c.tail.status.clone(),
                     branch: cwd
                         .as_deref()

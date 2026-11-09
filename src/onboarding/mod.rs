@@ -17,6 +17,7 @@ use std::time::Duration;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{tr, trf};
 use crate::provider::Tint;
 use crate::settings::{brand_icon, open_transparent_window, sync_component_theme};
 use crate::style::{self, Palette};
@@ -48,19 +49,27 @@ impl Permission {
 
     pub fn title(self) -> &'static str {
         match self {
-            Permission::Accessibility => "辅助功能",
-            Permission::ScreenRecording => "录屏与系统录音",
-            Permission::Automation => "自动化",
+            Permission::Accessibility => tr("辅助功能", "Accessibility"),
+            Permission::ScreenRecording => tr("录屏与系统录音", "Screen & System Audio Recording"),
+            Permission::Automation => tr("自动化", "Automation"),
         }
     }
 
     pub fn help(self) -> &'static str {
         match self {
-            Permission::Accessibility => "选中剪贴板记录后自动粘贴到前台应用",
-            Permission::ScreenRecording => "区域截图与识别文字",
-            Permission::Automation => {
-                "跳转到 iTerm 或终端里正在运行的 Agent 会话；首次跳转时系统会询问"
-            }
+            Permission::Accessibility => tr(
+                "选中剪贴板记录后自动粘贴到前台应用",
+                "Paste a clipboard item straight into the app you're using",
+            ),
+            Permission::ScreenRecording => tr(
+                "区域截图与识别文字",
+                "Capture part of the screen and recognize its text",
+            ),
+            Permission::Automation => tr(
+                "跳转到 iTerm 或终端里正在运行的 Agent 会话；首次跳转时系统会询问",
+                "Jump to Agent sessions running in iTerm or Terminal. \
+                 macOS asks the first time you jump.",
+            ),
         }
     }
 
@@ -130,12 +139,12 @@ pub fn trailing(status: Status) -> Trailing {
     match status {
         Status::Granted => Trailing::Granted,
         Status::NotGranted => Trailing::Button {
-            label: "前往授权",
+            label: tr("前往授权", "Grant Access"),
             primary: true,
         },
         // 查不到状态：不催用户，给一个次要按钮，想提前看看也可以。
         Status::Unknown => Trailing::Button {
-            label: "打开设置",
+            label: tr("打开设置", "Open System Settings"),
             primary: false,
         },
     }
@@ -186,7 +195,7 @@ pub fn show(cx: &mut App) {
     }
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions {
-            title: Some("欢迎使用 Helmp".into()),
+            title: Some(window_title().into()),
             appears_transparent: true,
             traffic_light_position: Some(point(px(16.), px(16.))),
         }),
@@ -218,9 +227,16 @@ pub fn show(cx: &mut App) {
     }
 }
 
+/// 窗口标题（透明标题栏不画出来，但「窗口」菜单、调度中心里能看到）。
+fn window_title() -> &'static str {
+    tr("欢迎使用 Helmp", "Welcome to Helmp")
+}
+
 pub struct Onboarding {
     statuses: [Status; 3],
     error: Option<String>,
+    /// 上次渲染时的语言代数（`i18n::generation`）：设置里切换语言后，靠它刷新文案与窗口标题。
+    language: u64,
     _subscriptions: Vec<Subscription>,
     _refresh: Task<()>,
 }
@@ -253,12 +269,17 @@ impl Onboarding {
         Self {
             statuses,
             error: None,
+            language: crate::i18n::generation(),
             _subscriptions: subscriptions,
             _refresh: refresh,
         }
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
+        // 引导窗口开着时在设置里切换了语言：重画（render 里顺带更新窗口标题）。
+        if crate::i18n::generation() != self.language {
+            cx.notify();
+        }
         let statuses = Permission::ALL.map(Permission::status);
         if statuses != self.statuses {
             crate::trace::log(format!("引导页权限状态：{statuses:?}"));
@@ -284,7 +305,7 @@ impl Onboarding {
             }
             Err(err) => {
                 eprintln!("helmp: 保存引导状态失败：{err:#}");
-                self.error = Some(format!("保存失败：{err:#}"));
+                self.error = Some(trf!("保存失败：{err:#}", "Couldn't save: {err:#}"));
                 cx.notify();
             }
         }
@@ -310,7 +331,7 @@ impl Onboarding {
                         .text_color(granted_color(pal))
                         .size(px(15.)),
                 )
-                .child("已授权")
+                .child(tr("已授权", "Granted"))
                 .into_any_element(),
             Trailing::Button { label, primary } => {
                 let url = permission.settings_url();
@@ -399,6 +420,11 @@ fn granted_color(pal: &Palette) -> Hsla {
 
 impl Render for Onboarding {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::i18n::generation();
+        if language != self.language {
+            self.language = language;
+            window.set_window_title(window_title());
+        }
         let pal = style::palette(window);
 
         let mut group = div()
@@ -450,7 +476,7 @@ impl Render for Onboarding {
                     .on_click(
                         cx.listener(|this, _: &ClickEvent, window, cx| this.finish(window, cx)),
                     )
-                    .child("跳过"),
+                    .child(tr("跳过", "Skip")),
             )
             .child(
                 div()
@@ -468,7 +494,7 @@ impl Render for Onboarding {
                     .on_click(
                         cx.listener(|this, _: &ClickEvent, window, cx| this.finish(window, cx)),
                     )
-                    .child("继续"),
+                    .child(tr("继续", "Continue")),
             );
 
         div()
@@ -494,7 +520,7 @@ impl Render for Onboarding {
                             .mt(px(6.))
                             .text_size(px(22.))
                             .font_weight(FontWeight::BOLD)
-                            .child("授予权限"),
+                            .child(tr("授予权限", "Grant Permissions")),
                     )
                     .child(
                         div()
@@ -503,10 +529,13 @@ impl Render for Onboarding {
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .text_color(pal.muted)
-                            .child(
+                            .child(tr(
                                 "Helmp 只在需要时请求权限。不授权也能搜索应用、查看 Agent 会话和剪贴板历史，\
                                  下面三项用于更完整的体验。",
-                            ),
+                                "Helmp only asks for what it needs. Without these, you can still \
+                                 search apps, view Agent sessions, and browse clipboard history; \
+                                 the three below round out the experience.",
+                            )),
                     ),
             )
             .child(div().px(px(32.)).child(group))
@@ -517,6 +546,7 @@ impl Render for Onboarding {
 #[cfg(test)]
 mod tests {
     use super::{Permission, Status, Trailing, trailing};
+    use crate::i18n::{Lang, with_lang};
 
     #[test]
     fn status_maps_to_the_right_affordance() {
@@ -545,6 +575,38 @@ mod tests {
         assert!(urls[0].ends_with("Accessibility"));
         assert!(urls[1].ends_with("ScreenCapture"));
         assert!(urls[2].ends_with("Automation"));
+    }
+
+    #[test]
+    fn english_interface_uses_macos_wording() {
+        // 英文用户要照着这些名字去系统设置里找对应的列表：必须与 macOS 英文版的叫法一致
+        // （「Screen & System Audio Recording」而不是直译的 "Screen recording and system audio"）。
+        with_lang(Lang::En, || {
+            let titles: Vec<_> = Permission::ALL.iter().map(|p| p.title()).collect();
+            assert_eq!(
+                titles,
+                [
+                    "Accessibility",
+                    "Screen & System Audio Recording",
+                    "Automation"
+                ]
+            );
+            assert_eq!(
+                trailing(Status::NotGranted),
+                Trailing::Button {
+                    label: "Grant Access",
+                    primary: true
+                }
+            );
+            assert_eq!(
+                trailing(Status::Unknown),
+                Trailing::Button {
+                    label: "Open System Settings",
+                    primary: false
+                }
+            );
+            assert!(Permission::ALL.iter().all(|p| p.help().is_ascii()));
+        });
     }
 
     #[test]

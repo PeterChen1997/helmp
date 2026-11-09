@@ -10,6 +10,7 @@ mod dock;
 mod engine;
 mod history;
 mod hotkey;
+mod i18n;
 mod icons;
 mod input_source;
 mod launcher;
@@ -33,6 +34,8 @@ use engine::Engine;
 use launcher::{Launcher, LauncherHandle, PANEL_SIZE};
 
 fn main() {
+    // 先定语言：CLI 输出与图形界面都按它取文案。
+    i18n::init();
     let engine = Engine::new(providers::all());
 
     let args: Vec<String> = std::env::args().skip(1).collect();

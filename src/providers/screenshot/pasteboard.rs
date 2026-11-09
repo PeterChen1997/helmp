@@ -10,6 +10,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 
+use crate::i18n::tr;
+
 pub fn general() -> Retained<NSPasteboard> {
     NSPasteboard::generalPasteboard()
 }
@@ -31,7 +33,7 @@ pub fn write_text(pasteboard: &NSPasteboard, text: &str) -> Result<()> {
     let ty = unsafe { NSPasteboardTypeString };
     anyhow::ensure!(
         pasteboard.setString_forType(&NSString::from_str(text), ty),
-        "写入剪贴板失败"
+        tr("写入剪贴板失败", "Couldn't write to the clipboard")
     );
     Ok(())
 }

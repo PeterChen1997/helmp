@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::config;
+use crate::i18n::{tr, trf};
 use crate::settings::SettingsView;
 use crate::settings::model::{self, RETENTION_OPTIONS};
 use crate::settings::system;
@@ -24,11 +25,17 @@ fn clear_history() -> anyhow::Result<()> {
 /// 「共 3,482 条 · 占用 46 MB」。读不到时不显示，原因打到 stderr。
 fn stats_label() -> Option<String> {
     match crate::providers::clipboard::history_stats() {
-        Ok((count, bytes)) => Some(format!(
-            "共 {} 条 · 占用 {}",
-            thousands(count),
-            human_size(bytes)
-        )),
+        Ok((count, bytes)) => {
+            let (count_text, size) = (thousands(count), human_size(bytes));
+            Some(if count == 1 {
+                trf!("共 {count_text} 条 · 占用 {size}", "1 item · {size}")
+            } else {
+                trf!(
+                    "共 {count_text} 条 · 占用 {size}",
+                    "{count_text} items · {size}"
+                )
+            })
+        }
         Err(err) => {
             eprintln!("helmp: 读取剪贴板统计失败：{err:#}");
             None
@@ -69,10 +76,10 @@ impl SettingsView {
 
         let retention: Vec<MenuChoice> = RETENTION_OPTIONS
             .iter()
-            .map(|(days, label)| {
+            .map(|(days, zh, en)| {
                 let days = *days;
                 (
-                    label.to_string(),
+                    tr(zh, en).to_string(),
                     clip.retention_days == days,
                     self.setter(cx, move |c| c.clipboard.retention_days = days),
                 )
@@ -102,18 +109,18 @@ impl SettingsView {
             .child(widgets::group(
                 vec![
                     widgets::row(
-                        widgets::label("记录剪贴板历史", pal),
+                        widgets::label(tr("记录剪贴板历史", "Keep clipboard history"), pal),
                         toggle(
                             "clip-enabled",
                             clip.enabled,
-                            "记录剪贴板历史",
+                            tr("记录剪贴板历史", "Keep clipboard history"),
                             |c, on| c.clipboard.enabled = on,
                             cx,
                         ),
                     )
                     .into_any_element(),
                     widgets::row(
-                        widgets::label("保留时长", pal),
+                        widgets::label(tr("保留时长", "Keep history for"), pal),
                         widgets::popup(
                             "clip-retention",
                             model::retention_label(clip.retention_days),
@@ -122,11 +129,11 @@ impl SettingsView {
                     )
                     .into_any_element(),
                     widgets::row(
-                        widgets::label("记录图片和文件", pal),
+                        widgets::label(tr("记录图片和文件", "Save images and files"), pal),
                         toggle(
                             "clip-images",
                             clip.record_images,
-                            "记录图片和文件",
+                            tr("记录图片和文件", "Save images and files"),
                             |c, on| c.clipboard.record_images = on,
                             cx,
                         ),
@@ -135,19 +142,22 @@ impl SettingsView {
                 ],
                 pal,
             ))
-            .child(widgets::group_header("隐私", pal))
+            .child(widgets::group_header(tr("隐私", "Privacy"), pal))
             .child(widgets::group(
                 vec![
                     widgets::row(
                         widgets::label_with_help(
-                            "跳过标记为隐藏的内容",
-                            "密码 App、1Password 等标记为隐藏或临时的内容，不会写入磁盘",
+                            tr("跳过标记为隐藏的内容", "Ignore concealed content"),
+                            tr(
+                                "密码 App、1Password 等标记为隐藏或临时的内容，不会写入磁盘",
+                                "Content that Passwords, 1Password and similar apps mark as concealed or transient is never written to disk.",
+                            ),
                             pal,
                         ),
                         toggle(
                             "clip-concealed",
                             clip.skip_concealed,
-                            "跳过标记为隐藏的内容",
+                            tr("跳过标记为隐藏的内容", "Ignore concealed content"),
                             |c, on| c.clipboard.skip_concealed = on,
                             cx,
                         ),
@@ -157,19 +167,22 @@ impl SettingsView {
                 ],
                 pal,
             ))
-            .child(widgets::group_header("粘贴", pal))
+            .child(widgets::group_header(tr("粘贴", "Pasting"), pal))
             .child(widgets::group(
                 vec![
                     widgets::row(
                         widgets::label_with_help(
-                            "选中后自动粘贴到前台应用",
-                            "需要在「隐私与安全性 › 辅助功能」中允许 Helmp；未授权时只复制",
+                            tr("选中后自动粘贴到前台应用", "Paste into the frontmost app"),
+                            tr(
+                                "需要在「隐私与安全性 › 辅助功能」中允许 Helmp；未授权时只复制",
+                                "Requires allowing Helmp in Privacy & Security › Accessibility. Otherwise items are only copied.",
+                            ),
                             pal,
                         ),
                         toggle(
                             "clip-auto-paste",
                             clip.auto_paste,
-                            "选中后自动粘贴到前台应用",
+                            tr("选中后自动粘贴到前台应用", "Paste into the frontmost app"),
                             |c, on| c.clipboard.auto_paste = on,
                             cx,
                         ),
@@ -185,7 +198,7 @@ impl SettingsView {
                     .gap(px(12.))
                     .child(widgets::danger_button(
                         "clip-clear",
-                        "清空全部历史…",
+                        tr("清空全部历史…", "Clear All History…"),
                         CLEAR_HISTORY.is_none(),
                         pal,
                         cx.listener(|this, _: &ClickEvent, window, cx| {
@@ -193,7 +206,13 @@ impl SettingsView {
                         }),
                     ))
                     .when(CLEAR_HISTORY.is_none(), |el| {
-                        el.child(widgets::help_text("剪贴板插件尚未提供清空接口", pal))
+                        el.child(widgets::help_text(
+                            tr(
+                                "剪贴板插件尚未提供清空接口",
+                                "The clipboard extension can't clear history yet.",
+                            ),
+                            pal,
+                        ))
                     })
                     .when_some(stats_label(), |el, label| {
                         el.child(widgets::help_text(label, pal))
@@ -264,7 +283,10 @@ impl SettingsView {
                     .child(icon)
                     .child(div().text_color(pal.fg).child(name))
                     .when(app_path.is_none(), |el| {
-                        el.child(widgets::help_text(format!("{bundle_id}（未安装）"), pal))
+                        el.child(widgets::help_text(
+                            trf!("{bundle_id}（未安装）", "{bundle_id} (not installed)"),
+                            pal,
+                        ))
                     }),
             );
         }
@@ -291,11 +313,8 @@ impl SettingsView {
             can_remove,
             pal,
             cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.pick_path(
-                    false,
-                    "不记录",
-                    cx,
-                    |this, app, cx| match model::bundle_id_of(&app) {
+                this.pick_path(false, tr("不记录", "Ignore"), cx, |this, app, cx| {
+                    match model::bundle_id_of(&app) {
                         Ok(bundle_id) => {
                             this.selected_ignored_app = Some(bundle_id.clone());
                             this.save(cx, |c| {
@@ -303,11 +322,14 @@ impl SettingsView {
                             });
                         }
                         Err(err) => {
-                            this.error = Some(format!("无法识别所选应用：{err:#}"));
+                            this.error = Some(trf!(
+                                "无法识别所选应用：{err:#}",
+                                "Couldn't identify the selected app: {err:#}"
+                            ));
                             cx.notify();
                         }
-                    },
-                );
+                    }
+                });
             }),
             cx.listener(|this, _: &ClickEvent, _, cx| {
                 if let Some(bundle_id) = this.selected_ignored_app.take() {
@@ -324,7 +346,13 @@ impl SettingsView {
             .gap(px(8.))
             .px(px(14.))
             .py(px(10.))
-            .child(widgets::label("不记录以下应用复制的内容", pal))
+            .child(widgets::label(
+                tr(
+                    "不记录以下应用复制的内容",
+                    "Ignore content copied from these apps",
+                ),
+                pal,
+            ))
             .child(list)
             .into_any_element()
     }
@@ -338,17 +366,23 @@ impl SettingsView {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let this = this.clone();
             alert
-                .title("清空全部剪贴板历史？")
-                .description("所有记录（包括图片）都会被删除，无法恢复。")
+                .title(tr("清空全部剪贴板历史？", "Clear all clipboard history?"))
+                .description(tr(
+                    "所有记录（包括图片）都会被删除，无法恢复。",
+                    "All items, including images, will be deleted. This can't be undone.",
+                ))
                 .show_cancel(true)
-                .ok_text("清空")
-                .cancel_text("取消")
+                .ok_text(tr("清空", "Clear"))
+                .cancel_text(tr("取消", "Cancel"))
                 .on_ok(move |_, _, cx| {
                     let result = clear();
                     let _ = this.update(cx, |this, cx| {
                         if let Err(err) = result {
                             eprintln!("helmp: 清空剪贴板历史失败：{err:#}");
-                            this.error = Some(format!("清空剪贴板历史失败：{err:#}"));
+                            this.error = Some(trf!(
+                                "清空剪贴板历史失败：{err:#}",
+                                "Couldn't clear clipboard history: {err:#}"
+                            ));
                         }
                         cx.notify();
                     });

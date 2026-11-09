@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
+
+use crate::i18n::tr;
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSBundle, NSString};
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
@@ -38,7 +40,13 @@ pub fn login_item_status() -> LoginItemStatus {
 /// 注册 / 注销「开机时自动启动」。失败时返回给界面显示的原因。
 pub fn set_launch_at_login(enabled: bool) -> Result<()> {
     if !running_from_bundle() {
-        bail!("当前不是从 Helmp.app 运行（例如直接运行 target/ 里的二进制），系统不允许注册登录项");
+        bail!(
+            "{}",
+            tr(
+                "当前不是从 Helmp.app 运行（例如直接运行 target/ 里的二进制），系统不允许注册登录项",
+                "Helmp isn't running from Helmp.app (for example, a binary in target/), so macOS won't add it as a login item."
+            )
+        );
     }
     // SAFETY: SMAppService 的标准用法，在主线程调用。
     let result = unsafe {
@@ -51,7 +59,13 @@ pub fn set_launch_at_login(enabled: bool) -> Result<()> {
     };
     result.map_err(|err| anyhow!("{}", err.localizedDescription()))?;
     if enabled && login_item_status() == LoginItemStatus::RequiresApproval {
-        bail!("已注册，但需要在「系统设置 › 通用 › 登录项」中允许 Helmp");
+        bail!(
+            "{}",
+            tr(
+                "已注册，但需要在「系统设置 › 通用 › 登录项」中允许 Helmp",
+                "Registered, but Helmp needs to be allowed in System Settings › General › Login Items."
+            )
+        );
     }
     Ok(())
 }

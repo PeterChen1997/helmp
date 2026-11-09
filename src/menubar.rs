@@ -29,8 +29,9 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
-use crate::engine::WAITING_SECTION;
+use crate::engine::waiting_section;
 use crate::hotkey::{self, Command};
+use crate::i18n::{self, tr, trf};
 use crate::launcher::LauncherHandle;
 use crate::provider::{Accessory, Icon, Item};
 
@@ -79,6 +80,7 @@ pub fn install(cx: &mut App) {
     let mut bar = MenuBar::new(tx, mtm);
     bar.apply_visibility();
     let mut placement_logged = false;
+    let mut lang_generation = i18n::generation();
 
     // 自检：`HELMP_MENU_SELF_TEST=<菜单项标题>` 在菜单首次建好后程序化点击这一项，
     // 走完整的 target/action → channel → GPUI 链路（无法模拟真实鼠标点击时用）。
@@ -98,6 +100,12 @@ pub fn install(cx: &mut App) {
             if hotkey::generation() != bar.hotkey_generation {
                 bar.dirty = true;
             }
+            if i18n::generation() != lang_generation {
+                // 切换了界面语言：菜单要重建，等待会话的状态文字也要立即按新语言重查。
+                lang_generation = i18n::generation();
+                bar.dirty = true;
+                last_refresh = None;
+            }
             if !placement_logged && last_refresh.is_some() {
                 placement_logged = true;
                 bar.log_placement();
@@ -106,11 +114,12 @@ pub fn install(cx: &mut App) {
             if due && bar.visible {
                 last_refresh = Some(Instant::now());
                 if let Some(engine) = cx.update(|cx| hotkey::engine(cx)) {
-                    let items = cx
+                    // 查询与按分组名筛选在同一种语言里做：分组名随语言变。
+                    let waiting = cx
                         .background_executor()
-                        .spawn(async move { engine.query("") })
+                        .spawn(async move { i18n::pinned(|| waiting(engine.query(""))) })
                         .await;
-                    bar.set_waiting(waiting(items));
+                    bar.set_waiting(waiting);
                 }
             }
             if bar.dirty && !bar.target.ivars().open.get() {
@@ -150,14 +159,15 @@ fn run(command: MenuCommand, cx: &mut App) {
 fn waiting(items: Vec<Item>) -> Vec<Item> {
     items
         .into_iter()
-        .filter(|item| item.badge == WAITING_SECTION)
+        .filter(|item| item.badge == waiting_section())
         .collect()
 }
 
 fn waiting_summary(count: usize) -> String {
     match count {
-        0 => "没有会话在等你".into(),
-        n => format!("{n} 个会话在等你"),
+        0 => tr("没有会话在等你", "No sessions waiting").into(),
+        1 => tr("1 个会话在等你", "1 session waiting").into(),
+        n => trf!("{n} 个会话在等你", "{n} sessions waiting"),
     }
 }
 
@@ -294,9 +304,10 @@ fn show_update_notice(mtm: MainThreadMarker) {
         "Helmp {}",
         env!("CARGO_PKG_VERSION")
     )));
-    alert.setInformativeText(&NSString::from_str(&format!(
-        "当前版本 {}。Helmp 还没有发布渠道，暂时无法自动检查更新。",
-        env!("CARGO_PKG_VERSION")
+    let version = env!("CARGO_PKG_VERSION");
+    alert.setInformativeText(&NSString::from_str(&trf!(
+        "当前版本 {version}。Helmp 还没有发布渠道，暂时无法自动检查更新。",
+        "You're running version {version}. Helmp doesn't have a release channel yet, so it can't check for updates automatically."
     )));
     // 菜单栏工具型 App 不激活的话，提示框会躲在别的窗口后面。
     NSApplication::sharedApplication(mtm).activate();
@@ -415,7 +426,7 @@ impl MenuBar {
         if let Some(button) = self.item.button(self.mtm) {
             let tip = match count {
                 0 => "Helmp".to_string(),
-                _ => format!("Helmp，{}", waiting_summary(count)),
+                _ => trf!("Helmp，{}", "Helmp — {}", waiting_summary(count)),
             };
             button.setToolTip(Some(&NSString::from_str(&tip)));
             if let Some(dot) = &self.dot {
@@ -439,7 +450,7 @@ impl MenuBar {
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         self.menu.addItem(&NSMenuItem::sectionHeaderWithTitle(
-            &NSString::from_str("Agent 会话"),
+            &NSString::from_str(tr("Agent 会话", "Agent Sessions")),
             mtm,
         ));
         for item in self.waiting.iter().take(MAX_WAITING_IN_MENU) {
@@ -463,13 +474,16 @@ impl MenuBar {
         }
         if self.waiting.is_empty() {
             let empty = NSMenuItem::new(mtm);
-            empty.setTitle(&NSString::from_str("暂时没有等你处理的会话"));
+            empty.setTitle(&NSString::from_str(tr(
+                "暂时没有等你处理的会话",
+                "No sessions waiting for you",
+            )));
             empty.setEnabled(false);
             self.menu.addItem(&empty);
         }
         self.add(
             &mut commands,
-            "全部会话…",
+            tr("全部会话…", "All Sessions…"),
             MenuCommand::Scope("agents"),
             hotkey::active(Command::Scope("agents")),
         );
@@ -477,25 +491,25 @@ impl MenuBar {
 
         let entries: [(&str, &str, MenuCommand, Command); 4] = [
             (
-                "打开 Helmp",
+                tr("打开 Helmp", "Open Helmp"),
                 "magnifyingglass",
                 MenuCommand::Show,
                 Command::Toggle,
             ),
             (
-                "剪贴板历史",
+                tr("剪贴板历史", "Clipboard History"),
                 "list.clipboard",
                 MenuCommand::Scope("clipboard"),
                 Command::Scope("clipboard"),
             ),
             (
-                "截图识别文字",
+                tr("截图识别文字", "Recognize Text in Screenshot"),
                 "text.viewfinder",
                 MenuCommand::Run(OCR),
                 OCR,
             ),
             (
-                "翻译选中文字",
+                tr("翻译选中文字", "Translate Selection"),
                 "translate",
                 MenuCommand::Scope("translate"),
                 Command::Scope("translate"),
@@ -507,12 +521,17 @@ impl MenuBar {
         }
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        let settings = self.add(&mut commands, "设置…", MenuCommand::Settings, None);
+        let settings = self.add(&mut commands, tr("设置…", "Settings…"), MenuCommand::Settings, None);
         settings.setKeyEquivalent(&NSString::from_str(","));
         settings.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
-        self.add(&mut commands, "检查更新…", MenuCommand::CheckUpdates, None);
+        self.add(
+            &mut commands,
+            tr("检查更新…", "Check for Updates…"),
+            MenuCommand::CheckUpdates,
+            None,
+        );
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
-        let quit = self.add(&mut commands, "退出 Helmp", MenuCommand::Quit, None);
+        let quit = self.add(&mut commands, tr("退出 Helmp", "Quit Helmp"), MenuCommand::Quit, None);
         quit.setKeyEquivalent(&NSString::from_str("q"));
         quit.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
 
@@ -744,10 +763,10 @@ mod tests {
     fn only_waiting_sessions_are_listed() {
         // 菜单的「Agent 会话」只列等你处理的；把最近使用、快捷命令混进来，圆点和计数就失去意义。
         let items = vec![
-            item("Finder daily radar", WAITING_SECTION, vec![]),
-            item("微信", crate::engine::RECENT_SECTION, vec![]),
-            item("Godot 框架调研", WAITING_SECTION, vec![]),
-            item("剪贴板历史", crate::engine::COMMANDS_SECTION, vec![]),
+            item("Finder daily radar", waiting_section(), vec![]),
+            item("微信", crate::engine::recent_section(), vec![]),
+            item("Godot 框架调研", waiting_section(), vec![]),
+            item("剪贴板历史", crate::engine::commands_section(), vec![]),
         ];
         let titles: Vec<_> = waiting(items).into_iter().map(|item| item.title).collect();
         assert_eq!(titles, ["Finder daily radar", "Godot 框架调研"]);
@@ -761,11 +780,28 @@ mod tests {
     }
 
     #[test]
+    fn english_menu_finds_waiting_sessions_and_counts_them() {
+        // 英文界面下「等你处理」的分组名变成英文：菜单栏若还按中文名筛，圆点和列表就永远是空的。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let items = vec![
+                item("Fix login", waiting_section(), vec![]),
+                item("WeChat", crate::engine::recent_section(), vec![]),
+            ];
+            let titles: Vec<_> = waiting(items).into_iter().map(|i| i.title).collect();
+            assert_eq!(titles, ["Fix login"]);
+            // 英文要分单复数，0 时不说「0 sessions」。
+            assert_eq!(waiting_summary(0), "No sessions waiting");
+            assert_eq!(waiting_summary(1), "1 session waiting");
+            assert_eq!(waiting_summary(3), "3 sessions waiting");
+        });
+    }
+
+    #[test]
     fn status_prefers_the_tag() {
         // 右侧显示「等你确认 / 等你回答」，来自插件给的状态标签。
         let tagged = item(
             "a",
-            WAITING_SECTION,
+            waiting_section(),
             vec![
                 Accessory::Text("3 分钟前".into()),
                 Accessory::Tag {
@@ -777,22 +813,22 @@ mod tests {
         assert_eq!(status_text(&tagged).as_deref(), Some("等你确认"));
         let plain = item(
             "b",
-            WAITING_SECTION,
+            waiting_section(),
             vec![Accessory::Text("3 分钟前".into())],
         );
         assert_eq!(status_text(&plain).as_deref(), Some("3 分钟前"));
-        assert_eq!(status_text(&item("c", WAITING_SECTION, vec![])), None);
+        assert_eq!(status_text(&item("c", waiting_section(), vec![])), None);
     }
 
     #[test]
     fn signature_changes_only_when_visible_content_changes() {
         // 每 2 秒刷新一次；内容没变时重建菜单是浪费，变了却不重建就会显示过期会话。
-        let a = vec![item("a", WAITING_SECTION, vec![])];
-        let b = vec![item("a", WAITING_SECTION, vec![])];
+        let a = vec![item("a", waiting_section(), vec![])];
+        let b = vec![item("a", waiting_section(), vec![])];
         assert_eq!(signature(&a), signature(&b));
         let c = vec![item(
             "a",
-            WAITING_SECTION,
+            waiting_section(),
             vec![Accessory::Tag {
                 text: "等你回答".into(),
                 tone: Tone::Waiting,

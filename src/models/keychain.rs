@@ -6,6 +6,7 @@ use security_framework::base::Error;
 use security_framework::passwords;
 
 use crate::config::{KEYCHAIN_SERVICE, ModelConfig};
+use crate::i18n::{tr, trf};
 
 /// `errSecItemNotFound`：条目不存在。
 const NOT_FOUND: i32 = -25300;
@@ -16,18 +17,28 @@ fn is_not_found(err: &Error) -> bool {
 
 pub fn get_in(service: &str, account: &str) -> Result<Option<String>> {
     match passwords::get_generic_password(service, account) {
-        Ok(bytes) => Ok(Some(
-            String::from_utf8(bytes).context("钥匙串里的 API Key 不是 UTF-8 文本")?,
-        )),
+        Ok(bytes) => Ok(Some(String::from_utf8(bytes).context(tr(
+            "钥匙串里的 API Key 不是 UTF-8 文本",
+            "The API key in the Keychain isn't valid UTF-8 text",
+        ))?)),
         Err(err) if is_not_found(&err) => Ok(None),
-        Err(err) => Err(err).with_context(|| format!("读取钥匙串（{service} / {account}）失败")),
+        Err(err) => Err(err).with_context(|| {
+            trf!(
+                "读取钥匙串（{service} / {account}）失败",
+                "Couldn't read from the Keychain ({service} / {account})"
+            )
+        }),
     }
 }
 
 /// 写入（已存在则覆盖）。
 pub fn set_in(service: &str, account: &str, key: &str) -> Result<()> {
-    passwords::set_generic_password(service, account, key.as_bytes())
-        .with_context(|| format!("写入钥匙串（{service} / {account}）失败"))
+    passwords::set_generic_password(service, account, key.as_bytes()).with_context(|| {
+        trf!(
+            "写入钥匙串（{service} / {account}）失败",
+            "Couldn't save to the Keychain ({service} / {account})"
+        )
+    })
 }
 
 /// 删除；条目本来就不存在不算错。
@@ -35,7 +46,12 @@ pub fn delete_in(service: &str, account: &str) -> Result<()> {
     match passwords::delete_generic_password(service, account) {
         Ok(()) => Ok(()),
         Err(err) if is_not_found(&err) => Ok(()),
-        Err(err) => Err(err).with_context(|| format!("删除钥匙串（{service} / {account}）失败")),
+        Err(err) => Err(err).with_context(|| {
+            trf!(
+                "删除钥匙串（{service} / {account}）失败",
+                "Couldn't delete from the Keychain ({service} / {account})"
+            )
+        }),
     }
 }
 

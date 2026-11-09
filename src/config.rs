@@ -57,6 +57,8 @@ pub struct General {
     pub switch_input_source: bool,
     pub panel_screen: PanelScreen,
     pub auto_check_updates: bool,
+    /// 界面语言；旧配置没有这个字段时跟随系统。
+    pub language: Language,
 }
 
 impl Default for General {
@@ -69,8 +71,19 @@ impl Default for General {
             switch_input_source: true,
             panel_screen: PanelScreen::Mouse,
             auto_check_updates: true,
+            language: Language::System,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    /// 跟随系统首选语言（见 `i18n::resolve`）。
+    #[default]
+    System,
+    ZhHans,
+    En,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,8 +269,10 @@ pub fn update(f: impl FnOnce(&mut Config)) -> Result<()> {
     let text = serde_json::to_string_pretty(&next)?;
     // 先写临时文件再改名，避免写到一半断电留下坏文件。
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).with_context(|| format!("写入 {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("保存 {}", path.display()))?;
+    std::fs::write(&tmp, text)
+        .with_context(|| crate::i18n::trf!("写入 {}", "Couldn't write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| crate::i18n::trf!("保存 {}", "Couldn't save {}", path.display()))?;
     let next = Arc::new(next);
     *store.current.write().expect("config lock poisoned") = Arc::clone(&next);
     for listener in store
@@ -299,6 +314,19 @@ mod tests {
         assert_eq!(config.general.hotkey, "cmd-space");
         assert_eq!(config.general.reset_after_secs, 90);
         assert!(config.clipboard.skip_concealed);
+        // 加语言设置之前的配置：跟随系统，而不是读失败。
+        assert_eq!(config.general.language, Language::System);
+    }
+
+    #[test]
+    fn language_is_saved_with_stable_names() {
+        // config.json 里的取值是对外的格式，改名会让用户手选的语言在升级后丢失。
+        let mut config = Config::default();
+        config.general.language = Language::ZhHans;
+        let text = serde_json::to_string(&config).unwrap();
+        assert!(text.contains(r#""language":"zh_hans""#), "{text}");
+        let parsed: Config = serde_json::from_str(r#"{"general":{"language":"en"}}"#).unwrap();
+        assert_eq!(parsed.general.language, Language::En);
     }
 
     #[test]

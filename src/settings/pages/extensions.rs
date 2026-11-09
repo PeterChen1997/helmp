@@ -6,6 +6,7 @@ use gpui_kit::*;
 
 use super::{default_script_dir, display_path};
 use crate::config;
+use crate::i18n::{tr, trf};
 use crate::settings::SettingsView;
 use crate::settings::model;
 use crate::settings::system;
@@ -57,11 +58,11 @@ impl SettingsView {
 
         let mut rows = vec![
             cells(
-                header_cell("名称"),
-                header_cell("类型"),
-                header_cell("别名"),
-                header_cell("快捷键"),
-                header_cell("启用"),
+                header_cell(tr("名称", "Name")),
+                header_cell(tr("类型", "Type")),
+                header_cell(tr("别名", "Alias")),
+                header_cell(tr("快捷键", "Shortcut")),
+                header_cell(tr("启用", "On")),
             )
             .min_h(px(30.))
             .into_any_element(),
@@ -71,7 +72,13 @@ impl SettingsView {
                 div()
                     .px(px(14.))
                     .py(px(12.))
-                    .child(widgets::error_text("没有取到插件列表（启动器未创建）", pal))
+                    .child(widgets::error_text(
+                        tr(
+                            "没有取到插件列表（启动器未创建）",
+                            "Couldn't load extensions (the launcher isn't ready).",
+                        ),
+                        pal,
+                    ))
                     .into_any_element(),
             );
         }
@@ -117,7 +124,7 @@ impl SettingsView {
                     widgets::switch(
                         SharedString::from(format!("ext-enabled-{id}")),
                         enabled,
-                        &format!("启用{name}"),
+                        &trf!("启用{name}", "Enable {name}"),
                         pal,
                         cx.listener(move |this, on: &bool, _, cx| {
                             let on = *on;
@@ -141,11 +148,14 @@ impl SettingsView {
             .child(widgets::group(rows, pal).mb(px(if has_default_alias { 6. } else { 18. })))
             .when(has_default_alias, |el| {
                 el.child(div().mb(px(18.)).ml(px(4.)).child(widgets::help_text(
-                    "别名留空时使用插件默认前缀（灰色）；输入别名加空格即可进入该插件",
+                    tr(
+                        "别名留空时使用插件默认前缀（灰色）；输入别名加空格即可进入该插件",
+                        "Leave an alias empty to use the default prefix (in gray). Type an alias and a space to jump into that extension.",
+                    ),
                     pal,
                 )))
             })
-            .child(widgets::group_header("脚本目录", pal))
+            .child(widgets::group_header(tr("脚本目录", "Script Folders"), pal))
             .child(self.render_script_dirs(&config.script_dirs, pal, cx))
             .child(
                 div()
@@ -154,16 +164,19 @@ impl SettingsView {
                     .gap(px(12.))
                     .child(widgets::push_button(
                         "import-raycast",
-                        "从 Raycast 导入脚本…",
+                        tr("从 Raycast 导入脚本…", "Import from Raycast…"),
                         false,
                         cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.pick_path(true, "导入", cx, |this, dir, cx| {
+                            this.pick_path(true, tr("导入", "Import"), cx, |this, dir, cx| {
                                 this.add_script_dir(dir, cx)
                             });
                         }),
                     ))
                     .child(widgets::help_text(
-                        "兼容 Raycast Script Commands 的头注释格式",
+                        tr(
+                            "兼容 Raycast Script Commands 的头注释格式",
+                            "Works with Raycast Script Commands metadata comments.",
+                        ),
                         pal,
                     )),
             )
@@ -189,7 +202,10 @@ impl SettingsView {
             }
             Err(err) => {
                 list = list.child(div().px(px(14.)).py(px(8.)).child(widgets::error_text(
-                    format!("默认脚本目录不可用：{err:#}"),
+                    trf!(
+                        "默认脚本目录不可用：{err:#}",
+                        "Default script folder is unavailable: {err:#}"
+                    ),
                     pal,
                 )))
             }
@@ -229,7 +245,7 @@ impl SettingsView {
                 can_remove,
                 pal,
                 cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.pick_path(true, "添加", cx, |this, dir, cx| {
+                    this.pick_path(true, tr("添加", "Add"), cx, |this, dir, cx| {
                         this.add_script_dir(dir, cx)
                     });
                 }),
@@ -247,7 +263,10 @@ impl SettingsView {
         let default = match default_script_dir() {
             Ok(default) => default.to_string_lossy().into_owned(),
             Err(err) => {
-                self.error = Some(format!("默认脚本目录不可用：{err:#}"));
+                self.error = Some(trf!(
+                    "默认脚本目录不可用：{err:#}",
+                    "Default script folder is unavailable: {err:#}"
+                ));
                 cx.notify();
                 return;
             }
@@ -271,8 +290,9 @@ fn script_dir_row(
 ) -> AnyElement {
     let path = std::path::Path::new(dir);
     let count = match system::count_scripts(path) {
-        Some(n) => format!("{n} 个"),
-        None => "目录不存在".into(),
+        Some(1) => tr("1 个", "1 script").to_string(),
+        Some(n) => trf!("{n} 个", "{n} scripts"),
+        None => tr("目录不存在", "Folder not found").to_string(),
     };
     let mut row = div()
         .id(SharedString::from(format!("script-dir-{dir}")))
@@ -294,7 +314,9 @@ fn script_dir_row(
                 .text_color(pal.fg)
                 .child(display_path(path)),
         )
-        .when(!removable, |el| el.child(widgets::help_text("默认", pal)))
+        .when(!removable, |el| {
+            el.child(widgets::help_text(tr("默认", "Default"), pal))
+        })
         .child(widgets::help_text(count, pal));
     if let Some(on_click) = on_click {
         row = row.cursor_pointer().on_click(on_click);

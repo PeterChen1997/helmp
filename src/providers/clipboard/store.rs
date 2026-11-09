@@ -12,6 +12,8 @@ use anyhow::{Context as _, Result, bail};
 use rusqlite::{Connection, OptionalExtension as _, Row, params};
 use sha2::{Digest as _, Sha256};
 
+use crate::i18n::{tr, trf};
+
 pub const DB_FILE: &str = "clipboard.sqlite";
 pub const IMAGES_DIR: &str = "clipboard-images";
 
@@ -36,7 +38,10 @@ impl Kind {
             "text" => Kind::Text,
             "image" => Kind::Image,
             "files" => Kind::Files,
-            other => bail!("剪贴板库里有未知类型 {other:?}"),
+            other => bail!(trf!(
+                "剪贴板库里有未知类型 {other:?}",
+                "Unknown item type {other:?} in the clipboard database"
+            )),
         })
     }
 }
@@ -59,7 +64,10 @@ impl ImageFormat {
         match Path::new(name).extension().and_then(|ext| ext.to_str()) {
             Some("png") => Ok(ImageFormat::Png),
             Some("tiff") => Ok(ImageFormat::Tiff),
-            _ => bail!("剪贴板图片 {name:?} 扩展名不是 png/tiff"),
+            _ => bail!(trf!(
+                "剪贴板图片 {name:?} 扩展名不是 png/tiff",
+                "Clipboard image {name:?} isn’t a .png or .tiff file"
+            )),
         }
     }
 }
@@ -122,11 +130,21 @@ impl Store {
     /// 打开（必要时创建）`<dir>/clipboard.sqlite` 与图片目录。
     pub fn open(dir: &Path) -> Result<Self> {
         let images_dir = dir.join(IMAGES_DIR);
-        fs::create_dir_all(&images_dir)
-            .with_context(|| format!("创建剪贴板图片目录 {}", images_dir.display()))?;
+        fs::create_dir_all(&images_dir).with_context(|| {
+            trf!(
+                "创建剪贴板图片目录 {}",
+                "Couldn’t create the clipboard image folder {}",
+                images_dir.display()
+            )
+        })?;
         let db_path = dir.join(DB_FILE);
-        let conn = Connection::open(&db_path)
-            .with_context(|| format!("打开剪贴板数据库 {}", db_path.display()))?;
+        let conn = Connection::open(&db_path).with_context(|| {
+            trf!(
+                "打开剪贴板数据库 {}",
+                "Couldn’t open the clipboard database {}",
+                db_path.display()
+            )
+        })?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS clips (
@@ -143,7 +161,10 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS clips_seq ON clips(seq DESC);",
         )
-        .context("初始化剪贴板数据库表")?;
+        .context(tr(
+            "初始化剪贴板数据库表",
+            "Couldn’t set up the clipboard database tables",
+        ))?;
         let max_seq: i64 =
             conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM clips", [], |row| {
                 row.get(0)
@@ -235,9 +256,12 @@ impl Store {
             }
         };
         self.next_seq += 1;
-        let entry = self
-            .get(id)?
-            .with_context(|| format!("剪贴板第 {id} 条写入后读不回来"))?;
+        let entry = self.get(id)?.with_context(|| {
+            trf!(
+                "剪贴板第 {id} 条写入后读不回来",
+                "Clipboard item #{id} couldn’t be read back after saving"
+            )
+        })?;
         Ok((entry, added))
     }
 
@@ -247,10 +271,20 @@ impl Store {
             "UPDATE clips SET seq = ?1, copied_at = ?2 WHERE id = ?3",
             params![self.next_seq, now_ms, id],
         )?;
-        anyhow::ensure!(changed == 1, "剪贴板历史里没有第 {id} 条");
+        anyhow::ensure!(
+            changed == 1,
+            trf!(
+                "剪贴板历史里没有第 {id} 条",
+                "Clipboard history has no item #{id}"
+            )
+        );
         self.next_seq += 1;
-        self.get(id)?
-            .with_context(|| format!("剪贴板第 {id} 条更新后读不回来"))
+        self.get(id)?.with_context(|| {
+            trf!(
+                "剪贴板第 {id} 条更新后读不回来",
+                "Clipboard item #{id} couldn’t be read back after updating"
+            )
+        })
     }
 
     /// 完整内容。
@@ -308,7 +342,10 @@ impl Store {
         };
         self.conn
             .execute("DELETE FROM clips WHERE copied_at < ?1", [cutoff_ms])
-            .context("清理过期剪贴板历史")?;
+            .context(tr(
+                "清理过期剪贴板历史",
+                "Couldn’t remove expired clipboard history",
+            ))?;
         for image in expired.iter().filter_map(|(_, image)| image.as_deref()) {
             remove_image(&self.images_dir.join(image))?;
         }
@@ -320,16 +357,19 @@ impl Store {
         let removed = self
             .conn
             .execute("DELETE FROM clips", [])
-            .context("清空剪贴板历史")?;
+            .context(tr("清空剪贴板历史", "Couldn’t clear clipboard history"))?;
         let entries = match fs::read_dir(&self.images_dir) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
             Err(err) => {
-                return Err(err).with_context(|| format!("读取 {}", self.images_dir.display()));
+                return Err(err).with_context(|| {
+                    trf!("读取 {}", "Couldn’t read {}", self.images_dir.display())
+                });
             }
         };
         for entry in entries {
-            let entry = entry.with_context(|| format!("读取 {}", self.images_dir.display()))?;
+            let entry = entry
+                .with_context(|| trf!("读取 {}", "Couldn’t read {}", self.images_dir.display()))?;
             remove_image(&entry.path())?;
         }
         Ok(removed)
@@ -363,8 +403,20 @@ impl Store {
         }
         // 先写临时文件再改名，避免进程中途退出留下半张图。
         let tmp = self.images_dir.join(format!("{name}.tmp"));
-        fs::write(&tmp, bytes).with_context(|| format!("写剪贴板图片 {}", tmp.display()))?;
-        fs::rename(&tmp, &path).with_context(|| format!("保存剪贴板图片 {}", path.display()))?;
+        fs::write(&tmp, bytes).with_context(|| {
+            trf!(
+                "写剪贴板图片 {}",
+                "Couldn’t write clipboard image {}",
+                tmp.display()
+            )
+        })?;
+        fs::rename(&tmp, &path).with_context(|| {
+            trf!(
+                "保存剪贴板图片 {}",
+                "Couldn’t save clipboard image {}",
+                path.display()
+            )
+        })?;
         Ok(())
     }
 }
@@ -372,9 +424,13 @@ impl Store {
 /// 删图片文件；文件已经不在（用户手动清过目录）不算错误，其他 IO 错误照常上报。
 fn remove_image(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-            Err(err).with_context(|| format!("删除剪贴板图片 {}", path.display()))
-        }
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err).with_context(|| {
+            trf!(
+                "删除剪贴板图片 {}",
+                "Couldn’t delete clipboard image {}",
+                path.display()
+            )
+        }),
         _ => Ok(()),
     }
 }

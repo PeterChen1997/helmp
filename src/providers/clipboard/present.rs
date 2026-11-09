@@ -6,6 +6,7 @@ use std::path::Path;
 
 use super::Indexed;
 use super::store::Kind;
+use crate::i18n::{tr, trf};
 use crate::provider::{Block, Detail, Icon, Tint};
 
 /// 详情区最多展示的字符数，超出部分提示总字数。
@@ -152,10 +153,13 @@ pub fn icon(indexed: &Indexed) -> Icon {
 
 /// 「来源 App · 2 分钟前」，文件再加「· N 个文件」（与设计稿一致）。
 pub fn subtitle(indexed: &Indexed, clock: Clock) -> String {
-    let source = indexed.source.as_deref().unwrap_or("未知来源");
+    let source = indexed
+        .source
+        .as_deref()
+        .unwrap_or(tr("未知来源", "Unknown source"));
     let ago = ago(clock.now_ms - indexed.copied_at_ms);
     match indexed.kind {
-        Kind::Files => format!("{source} · {ago} · {} 个文件", indexed.count),
+        Kind::Files => format!("{source} · {ago} · {}", files_label(indexed.count)),
         Kind::Text | Kind::Image => format!("{source} · {ago}"),
     }
 }
@@ -170,8 +174,9 @@ pub fn detail(indexed: &Indexed, clock: Clock) -> Detail {
                 TextKind::Plain | TextKind::Link => Block::Text(body),
             });
             if indexed.count > DETAIL_CHARS {
-                blocks.push(Block::Text(format!(
+                blocks.push(Block::Text(trf!(
                     "……共 {} 字，这里只显示前 {DETAIL_CHARS} 字",
+                    "…{} characters in total; showing the first {DETAIL_CHARS}",
                     thousands(indexed.count)
                 )));
             }
@@ -192,66 +197,110 @@ pub fn detail(indexed: &Indexed, clock: Clock) -> Detail {
         blocks,
         metadata: vec![
             (
-                "来源".into(),
-                indexed.source.clone().unwrap_or_else(|| "未知".into()),
+                tr("来源", "Source").into(),
+                indexed
+                    .source
+                    .clone()
+                    .unwrap_or_else(|| tr("未知", "Unknown").into()),
             ),
-            ("复制于".into(), copied_at(clock, indexed.copied_at_ms)),
-            ("内容".into(), content_label(indexed)),
+            (
+                tr("复制于", "Copied").into(),
+                copied_at(clock, indexed.copied_at_ms),
+            ),
+            (tr("内容", "Content").into(), content_label(indexed)),
         ],
     }
 }
 
 fn content_label(indexed: &Indexed) -> String {
-    let chars = thousands(indexed.count);
+    let chars = match (crate::i18n::is_en(), indexed.count) {
+        (false, count) => format!("{} 字", thousands(count)),
+        (true, 1) => "1 character".into(),
+        (true, count) => format!("{} characters", thousands(count)),
+    };
+    let image = if crate::i18n::is_en() {
+        match indexed.image_format {
+            "" => "Image".to_string(),
+            format => format!("{format} image"),
+        }
+    } else {
+        format!("{} 图片", indexed.image_format)
+    };
     match indexed.kind {
         Kind::Text => match indexed.text_kind {
-            TextKind::Plain => format!("纯文本 · {chars} 字"),
-            TextKind::Link => format!("链接 · {chars} 字"),
-            TextKind::Command => format!("命令 · {chars} 字"),
+            TextKind::Plain => format!("{} · {chars}", tr("纯文本", "Plain text")),
+            TextKind::Link => format!("{} · {chars}", tr("链接", "Link")),
+            TextKind::Command => format!("{} · {chars}", tr("命令", "Command")),
         },
-        Kind::Files => format!("{chars} 个文件"),
-        Kind::Image if indexed.width > 0 && indexed.height > 0 => format!(
-            "{} 图片 · {} × {}",
-            indexed.image_format, indexed.width, indexed.height
-        ),
-        Kind::Image => format!("{} 图片", indexed.image_format),
+        Kind::Files => files_label(indexed.count),
+        Kind::Image if indexed.width > 0 && indexed.height > 0 => {
+            format!("{image} · {} × {}", indexed.width, indexed.height)
+        }
+        Kind::Image => image,
     }
 }
 
-/// 列表小节：今天 / 昨天 / 11月3日 / 2025年11月3日。
+/// 「3 个文件」/「3 files」。
+fn files_label(count: usize) -> String {
+    match (crate::i18n::is_en(), count) {
+        (true, 1) => "1 file".into(),
+        _ => trf!("{} 个文件", "{} files", thousands(count)),
+    }
+}
+
+/// 英文日期用的月份缩写。
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// 列表小节：今天 / 昨天 / 11月3日 / 2025年11月3日（英文 Today / Yesterday / Nov 3 / Nov 3, 2025）。
+/// 它也是分组键，在查询里现取（查询已按语言固定）。
 pub fn day_label(clock: Clock, at_ms: i64) -> String {
     if at_ms >= clock.today_start_ms {
-        return "今天".into();
+        return tr("今天", "Today").into();
     }
     if at_ms >= clock.yesterday_start_ms() {
-        return "昨天".into();
+        return tr("昨天", "Yesterday").into();
     }
     let then = local_time(at_ms);
-    if then.year == local_time(clock.now_ms).year {
+    let this_year = then.year == local_time(clock.now_ms).year;
+    if crate::i18n::is_en() {
+        let month = usize::try_from(then.month - 1)
+            .ok()
+            .and_then(|index| MONTHS.get(index))
+            .copied()
+            .unwrap_or_default();
+        if this_year {
+            format!("{month} {}", then.day)
+        } else {
+            format!("{month} {}, {}", then.day, then.year)
+        }
+    } else if this_year {
         format!("{}月{}日", then.month, then.day)
     } else {
         format!("{}年{}月{}日", then.year, then.month, then.day)
     }
 }
 
-/// 「今天 13:43」「昨天 09:05」「11月3日 13:43」。
+/// 「今天 13:43」「昨天 09:05」「11月3日 13:43」（英文 Today at 13:43）。
 pub fn copied_at(clock: Clock, at_ms: i64) -> String {
     let then = local_time(at_ms);
-    format!(
-        "{} {:02}:{:02}",
-        day_label(clock, at_ms),
-        then.hour,
-        then.minute
+    let day = day_label(clock, at_ms);
+    let (hour, minute) = (then.hour, then.minute);
+    trf!(
+        "{day} {hour:02}:{minute:02}",
+        "{day} at {hour:02}:{minute:02}"
     )
 }
 
 pub fn ago(elapsed_ms: i64) -> String {
     let seconds = elapsed_ms.max(0) / 1000;
     match seconds {
-        0..60 => "刚刚".into(),
-        60..3600 => format!("{} 分钟前", seconds / 60),
-        3600..86_400 => format!("{} 小时前", seconds / 3600),
-        _ => format!("{} 天前", seconds / 86_400),
+        0..60 => tr("刚刚", "Just now").into(),
+        60..3600 => trf!("{} 分钟前", "{} min ago", seconds / 60),
+        3600..86_400 => trf!("{} 小时前", "{} hr ago", seconds / 3600),
+        86_400..172_800 => tr("1 天前", "1 day ago").into(),
+        _ => trf!("{} 天前", "{} days ago", seconds / 86_400),
     }
 }
 
@@ -368,5 +417,29 @@ mod tests {
         assert_eq!(thousands(1_234_567), "1,234,567");
         assert_eq!(ago(2 * 60_000 + 5), "2 分钟前");
         assert_eq!(ago(2 * 86_400_000), "2 天前");
+    }
+
+    #[test]
+    fn english_days_and_relative_time() {
+        // 英文界面的分组名（也是分组键）和时间要是地道英文，而不是夹着中文的半成品。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let clock = Clock::now();
+            let at_1343 = clock.today_start_ms + (13 * 60 + 43) * 60_000;
+            assert_eq!(day_label(clock, at_1343), "Today");
+            assert_eq!(copied_at(clock, at_1343), "Today at 13:43");
+            let last_night = clock.today_start_ms - 60_000;
+            assert_eq!(copied_at(clock, last_night), "Yesterday at 23:59");
+            let older = day_label(clock, clock.today_start_ms - 3 * 86_400_000 + 3_600_000);
+            assert!(
+                MONTHS.iter().any(|month| older.starts_with(month)),
+                "{older}"
+            );
+            assert_eq!(ago(5_000), "Just now");
+            assert_eq!(ago(2 * 60_000 + 5), "2 min ago");
+            assert_eq!(ago(86_400_000), "1 day ago");
+            assert_eq!(ago(2 * 86_400_000), "2 days ago");
+            assert_eq!(files_label(1), "1 file");
+            assert_eq!(files_label(1200), "1,200 files");
+        });
     }
 }

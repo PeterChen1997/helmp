@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::history;
+use crate::i18n::{self, tr};
 use crate::provider::{Action, Icon, Item, Provider, Scope, Tint};
 
 /// 一次查询最多返回的结果数。剪贴板历史不设上限，但列表只展示前这么多条。
@@ -11,14 +12,27 @@ pub const MAX_RESULTS: usize = 200;
 /// 首页「最近使用」最多展示几项。
 const RECENT_ON_HOME: usize = 6;
 
-/// 首页「最近使用」的分组名。界面对这一组用图标平铺而不是列表。
-pub const RECENT_SECTION: &str = "最近使用";
+/// 首页「最近使用」的分组名。界面对这一组用图标平铺而不是列表（按 id 前缀 `RECENT_ID_PREFIX` 认，
+/// 不按分组名认：分组名随语言变）。
+pub fn recent_section() -> &'static str {
+    tr("最近使用", "Recent")
+}
+
+/// 「最近使用」结果的 id 前缀。
+pub const RECENT_ID_PREFIX: &str = "recent:";
 
 /// 首页「等你处理」：等待用户的 agent 会话。菜单栏也按这个分组名读取，score 应 ≥ 900。
-pub const WAITING_SECTION: &str = "等你处理";
+///
+/// 分组名既是显示文字也是分组键：取值随语言变，同一次查询内由 `i18n::pinned` 保证一致，
+/// 跨查询比较时要和查询在同一个 `pinned` 里取（见菜单栏）。
+pub fn waiting_section() -> &'static str {
+    tr("等你处理", "Waiting for You")
+}
 
 /// 首页「快捷命令」：各插件的入口命令，score 应 < 800。
-pub const COMMANDS_SECTION: &str = "快捷命令";
+pub fn commands_section() -> &'static str {
+    tr("快捷命令", "Commands")
+}
 
 /// 全局可达的引擎：设置窗口、菜单栏、快捷键查询用。
 /// 不要经由启动器实体去拿：在启动器自身更新期间读它会让 GPUI 直接中止进程。
@@ -80,24 +94,29 @@ impl Engine {
 
     /// 全局搜索；空查询返回首页（推荐项 + 最近使用）。
     pub fn query(&self, query: &str) -> Vec<Item> {
-        if query.trim().is_empty() {
-            return self.home();
-        }
-        let items = self
-            .enabled()
-            .flat_map(|provider| provider.query(query))
-            .collect();
-        group(items)
+        // 整次查询固定一种语言：分组名同时是分组键，不能一半中文一半英文。
+        i18n::pinned(|| {
+            if query.trim().is_empty() {
+                return self.home();
+            }
+            let items = self
+                .enabled()
+                .flat_map(|provider| provider.query(query))
+                .collect();
+            group(items)
+        })
     }
 
     /// 某个范围内的查询。
     pub fn query_scoped(&self, scope: &str, query: &str, filter: &str) -> Vec<Item> {
-        let items = self
-            .enabled()
-            .filter(|provider| provider.scope().is_some_and(|s| s.id == scope))
-            .flat_map(|provider| provider.query_scoped(query, filter))
-            .collect();
-        group(items)
+        i18n::pinned(|| {
+            let items = self
+                .enabled()
+                .filter(|provider| provider.scope().is_some_and(|s| s.id == scope))
+                .flat_map(|provider| provider.query_scoped(query, filter))
+                .collect();
+            group(items)
+        })
     }
 
     /// 首页：各 provider 的推荐项（等你处理、快捷命令）加最近使用。
@@ -112,24 +131,29 @@ impl Engine {
                 if entry.query.is_empty() && entry.scope.is_none() {
                     return None;
                 }
-                let icon = self.find(&entry.id, &entry.query, entry.scope.as_deref())?.icon;
+                let icon = self
+                    .find(&entry.id, &entry.query, entry.scope.as_deref())?
+                    .icon;
                 history::backfill_icon(&entry.id, &icon);
                 Some(icon)
             });
             let engine = self.clone();
             let (id, query, scope) = (entry.id.clone(), entry.query.clone(), entry.scope.clone());
             items.push(Item {
-                id: format!("recent:{}", entry.id),
+                id: format!("{RECENT_ID_PREFIX}{}", entry.id),
                 title: entry.title.clone(),
                 subtitle: entry.subtitle.clone(),
-                badge: RECENT_SECTION.into(),
+                badge: recent_section().into(),
                 // 位于「等你处理」（900+）与「快捷命令」（<800）之间。
                 score: 850,
                 icon,
                 action: Action::new(move || {
-                    let item = engine
-                        .find(&id, &query, scope.as_deref())
-                        .ok_or_else(|| anyhow::anyhow!("「{id}」已经找不到了"))?;
+                    let item = engine.find(&id, &query, scope.as_deref()).ok_or_else(|| {
+                        anyhow::anyhow!(i18n::trf!(
+                            "「{id}」已经找不到了",
+                            "\"{id}\" is no longer available"
+                        ))
+                    })?;
                     item.action.run()
                 }),
                 ..Item::blank()
@@ -238,14 +262,20 @@ mod tests {
     fn recent_tiles_never_render_blank() {
         // 首页「最近使用」是图标平铺：升级前的旧记录没存图标，格子里会是一块空白。
         let file = Icon::File("/Applications/WeChat.app".into());
-        let symbol = Icon::Symbol { name: "languages", tint: Tint::Teal };
+        let symbol = Icon::Symbol {
+            name: "languages",
+            tint: Tint::Teal,
+        };
         // 存了图标就不再现查（现查要跑一次完整查询）。
         assert_eq!(tile_icon(file.clone(), || panic!("不该现查")), file);
         // 旧记录：按原结果现查到的图标补上。
         assert_eq!(tile_icon(Icon::None, || Some(symbol.clone())), symbol);
         // 原结果已经找不到，或者它本身就没图标：用通用图标，不能是空白。
         for live in [None, Some(Icon::None)] {
-            assert!(matches!(tile_icon(Icon::None, || live), Icon::Symbol { .. }));
+            assert!(matches!(
+                tile_icon(Icon::None, || live),
+                Icon::Symbol { .. }
+            ));
         }
     }
 
@@ -257,6 +287,17 @@ mod tests {
         };
         let path = format!("icons/{name}.svg");
         assert!(gpui_kit::assets::AllAssets.load(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn home_sections_follow_the_interface_language() {
+        // 首页小节标题就是分组名：英文界面不能冒出中文标题；三个分组名也不能相同，否则会被并成一组。
+        use crate::i18n::{Lang, with_lang};
+        let names = || [recent_section(), waiting_section(), commands_section()];
+        assert_eq!(with_lang(Lang::Zh, names), ["最近使用", "等你处理", "快捷命令"]);
+        let en = with_lang(Lang::En, names);
+        assert_eq!(en, ["Recent", "Waiting for You", "Commands"]);
+        assert!(en[0] != en[1] && en[1] != en[2] && en[0] != en[2]);
     }
 
     #[test]

@@ -16,6 +16,7 @@ use anyhow::Result;
 use gpui_kit::*;
 
 use crate::config::{Config, ModelConfig, ModelKind};
+use crate::i18n::tr;
 
 pub use client::{default_base_url, needs_key, ollama_online};
 pub use keychain::{api_key, delete_api_key, set_api_key};
@@ -75,7 +76,7 @@ pub fn translate_model(config: &Config) -> Option<&ModelConfig> {
 pub fn kind_label(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Anthropic => "Anthropic",
-        ModelKind::OpenAiCompatible => "OpenAI 兼容接口",
+        ModelKind::OpenAiCompatible => tr("OpenAI 兼容接口", "OpenAI-Compatible API"),
         ModelKind::Ollama => "Ollama",
     }
 }
@@ -91,7 +92,7 @@ pub fn is_local(model: &ModelConfig) -> bool {
     }
 }
 
-/// 可选的目标语言：(代码, 中文名, 给模型看的英文名)。`auto` 不在其中。
+/// 可选的目标语言：(代码, 中文名, 英文名)。英文名既写进提示词，也是英文界面的显示名。`auto` 不在其中。
 pub const LANGUAGES: &[(&str, &str, &str)] = &[
     ("en", "英文", "English"),
     ("zh-Hans", "简体中文", "Simplified Chinese"),
@@ -104,12 +105,12 @@ pub const LANGUAGES: &[(&str, &str, &str)] = &[
     ("ru", "俄文", "Russian"),
 ];
 
-/// 语言代码对应的中文名。
+/// 语言代码对应的显示名（按界面语言）。
 pub fn language_label(code: &str) -> Option<&'static str> {
     LANGUAGES
         .iter()
         .find(|(c, _, _)| *c == code)
-        .map(|(_, label, _)| *label)
+        .map(|(_, zh, en)| tr(zh, en))
 }
 
 /// 语言代码对应的英文名（写进提示词）。
@@ -125,4 +126,28 @@ pub fn language_english(code: &str) -> Option<&'static str> {
 #[allow(dead_code)]
 pub fn settings_pane(window: &mut Window, cx: &mut App) -> AnyView {
     cx.new(|cx| pane::ModelsPane::new(window, cx)).into()
+}
+
+#[cfg(test)]
+mod tests {
+    // 不用 `super::*`：那会带进 gpui_kit 的 `test` 宏，盖掉标准的 `#[test]`。
+    use super::{ModelKind, kind_label, language_english, language_label};
+    use crate::i18n::{Lang, with_lang};
+
+    #[test]
+    fn language_names_follow_interface_but_prompt_names_do_not() {
+        // 目标语言菜单、翻译结果标题给用户看，要随界面语言；
+        // 写进提示词的英文名是给模型看的，换界面语言不能改变模型收到的指令。
+        assert_eq!(language_label("ja"), Some("日文"));
+        with_lang(Lang::En, || {
+            assert_eq!(language_label("ja"), Some("Japanese"));
+            assert_eq!(language_label("zh-Hans"), Some("Simplified Chinese"));
+            assert_eq!(
+                kind_label(ModelKind::OpenAiCompatible),
+                "OpenAI-Compatible API"
+            );
+            assert_eq!(language_english("ja"), Some("Japanese"));
+        });
+        assert_eq!(language_english("ja"), Some("Japanese"));
+    }
 }

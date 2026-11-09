@@ -17,6 +17,7 @@ use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
 use super::store::{Entry, ImageFormat, Kind, Source};
 use super::watcher::{Image, Pasteboard, TRANSIENT_TYPE};
+use crate::i18n::{tr, trf};
 
 pub struct SystemPasteboard;
 
@@ -102,8 +103,13 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
     // 图片在进 autoreleasepool 前读好，IO 错误直接带路径上报。
     let image = match entry.kind {
         Kind::Image => Some((
-            std::fs::read(image_path)
-                .with_context(|| format!("读取剪贴板图片 {}", image_path.display()))?,
+            std::fs::read(image_path).with_context(|| {
+                trf!(
+                    "读取剪贴板图片 {}",
+                    "Couldn’t read clipboard image {}",
+                    image_path.display()
+                )
+            })?,
             ImageFormat::from_file_name(&entry.content)?,
         )),
         _ => None,
@@ -122,7 +128,10 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
                 };
                 pasteboard.setData_forType(Some(&NSData::with_bytes(bytes)), ty)
             }
-            (Kind::Image, None) => bail!("图片条目没有读到图片数据"),
+            (Kind::Image, None) => bail!(tr(
+                "图片条目没有读到图片数据",
+                "The image item has no image data"
+            )),
             (Kind::Files, _) => {
                 let urls: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = entry
                     .content
@@ -133,14 +142,30 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
                         )))
                     })
                     .collect();
-                ensure!(!urls.is_empty(), "文件条目没有路径");
+                ensure!(
+                    !urls.is_empty(),
+                    tr("文件条目没有路径", "The file item has no paths")
+                );
                 pasteboard.writeObjects(&NSArray::from_retained_slice(&urls))
             }
         };
-        ensure!(written, "写入系统剪贴板失败（第 {} 条）", entry.id);
+        ensure!(
+            written,
+            trf!(
+                "写入系统剪贴板失败（第 {} 条）",
+                "Couldn’t write item #{} to the clipboard",
+                entry.id
+            )
+        );
         let marked = pasteboard
             .setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE));
-        ensure!(marked, "给剪贴板内容打 TransientType 标记失败");
+        ensure!(
+            marked,
+            tr(
+                "给剪贴板内容打 TransientType 标记失败",
+                "Couldn’t mark the clipboard content as transient"
+            )
+        );
         Ok(())
     })
 }
@@ -201,13 +226,16 @@ pub fn send_paste() -> Result<()> {
     unsafe {
         let source = CGEventSourceCreate(COMBINED_SESSION_STATE);
         if source.is_null() {
-            bail!("CGEventSourceCreate 失败");
+            bail!(tr("CGEventSourceCreate 失败", "CGEventSourceCreate failed"));
         }
         let mut result = Ok(());
         for key_down in [true, false] {
             let event = CGEventCreateKeyboardEvent(source, KEYCODE_V, key_down);
             if event.is_null() {
-                result = Err(anyhow::anyhow!("CGEventCreateKeyboardEvent 失败"));
+                result = Err(anyhow::anyhow!(tr(
+                    "CGEventCreateKeyboardEvent 失败",
+                    "CGEventCreateKeyboardEvent failed"
+                )));
                 break;
             }
             CGEventSetFlags(event, FLAG_COMMAND);

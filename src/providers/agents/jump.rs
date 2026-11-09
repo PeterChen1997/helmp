@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result, bail};
 
 use super::process;
 use super::state::Jump;
+use crate::i18n::trf;
 use crate::provider::{Action, Outcome};
 
 /// 一条要执行的外部命令。
@@ -45,14 +46,15 @@ impl Plan {
         let output = command(self.program)
             .args(&self.args)
             .output()
-            .with_context(|| format!("启动 {} 失败", self.program))?;
+            .with_context(|| trf!("启动 {} 失败", "Couldn’t start {}", self.program))?;
         if !output.status.success() {
-            bail!(
+            bail!(trf!(
                 "{} 失败（{}）：{}",
+                "{} failed ({}): {}",
                 self.program,
                 output.status,
                 String::from_utf8_lossy(&output.stderr).trim()
-            );
+            ));
         }
         Ok(())
     }
@@ -84,7 +86,11 @@ pub fn action(jump: Jump) -> Action {
     Action::new(move || {
         let plan = plan(&jump)?;
         if dry_run() {
-            return Ok(Outcome::Message(format!("将执行：{}", plan.render())));
+            return Ok(Outcome::Message(trf!(
+                "将执行：{}",
+                "Would run: {}",
+                plan.render()
+            )));
         }
         plan.execute()?;
         Ok(Outcome::Done)
@@ -106,11 +112,17 @@ fn lock_holder(lock: &Path) -> Result<i32> {
         .arg("-t")
         .arg(lock)
         .output()
-        .context("运行 lsof 失败")?;
+        .with_context(|| trf!("运行 lsof 失败", "Couldn’t run lsof"))?;
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .find_map(|line| line.trim().parse().ok())
-        .with_context(|| format!("没有进程持有 {}，会话可能刚结束", lock.display()))
+        .with_context(|| {
+            trf!(
+                "没有进程持有 {}，会话可能刚结束",
+                "No process holds {}; the session may have just ended",
+                lock.display()
+            )
+        })
 }
 
 fn terminal_plan(pid: i32) -> Result<Plan> {
@@ -127,7 +139,12 @@ fn terminal_plan(pid: i32) -> Result<Plan> {
         host_app(pid),
         env_var("__CFBundleIdentifier").as_deref(),
     )
-    .with_context(|| format!("定位进程 {pid} 的窗口"))
+    .with_context(|| {
+        trf!(
+            "定位进程 {pid} 的窗口",
+            "Locating the window of process {pid}"
+        )
+    })
 }
 
 /// 纯决策部分，单独拿出来便于测试。
@@ -164,7 +181,10 @@ pub fn choose_plan(
             args: vec!["-b".into(), id.into()],
         });
     }
-    bail!("找不到宿主 App（tty={tty:?}，TERM_PROGRAM={term_program:?}）")
+    bail!(trf!(
+        "找不到宿主 App（tty={tty:?}，TERM_PROGRAM={term_program:?}）",
+        "Couldn’t find the host app (tty={tty:?}, TERM_PROGRAM={term_program:?})"
+    ))
 }
 
 fn ps(pid: i32, args: &[&str]) -> Result<String> {
@@ -173,9 +193,12 @@ fn ps(pid: i32, args: &[&str]) -> Result<String> {
         .arg("-p")
         .arg(pid.to_string())
         .output()
-        .context("运行 ps 失败")?;
+        .with_context(|| trf!("运行 ps 失败", "Couldn’t run ps"))?;
     if !output.status.success() {
-        bail!("进程 {pid} 已不存在");
+        bail!(trf!(
+            "进程 {pid} 已不存在",
+            "Process {pid} no longer exists"
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -202,7 +225,10 @@ fn applescript_string(text: &str) -> String {
 
 fn iterm_script(tty: &str) -> String {
     let dev = applescript_string(&format!("/dev/{tty}"));
-    let missing = applescript_string(&format!("iTerm2 里找不到 tty 为 /dev/{tty} 的会话"));
+    let missing = applescript_string(&trf!(
+        "iTerm2 里找不到 tty 为 /dev/{tty} 的会话",
+        "No iTerm2 session with tty /dev/{tty}"
+    ));
     format!(
         "tell application id \"com.googlecode.iterm2\"
 \trepeat with w in windows
@@ -225,7 +251,10 @@ error {missing}"
 
 fn terminal_script(tty: &str) -> String {
     let dev = applescript_string(&format!("/dev/{tty}"));
-    let missing = applescript_string(&format!("Terminal 里找不到 tty 为 /dev/{tty} 的标签页"));
+    let missing = applescript_string(&trf!(
+        "Terminal 里找不到 tty 为 /dev/{tty} 的标签页",
+        "No Terminal tab with tty /dev/{tty}"
+    ));
     format!(
         "tell application id \"com.apple.Terminal\"
 \trepeat with w in windows

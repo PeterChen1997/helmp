@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use super::state::{self, Jump, Session, Source, Status};
 use super::{TAIL_BYTES, Warnings, mtime_ms, process, read_tail};
+use crate::i18n::{tr, trf};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +38,7 @@ pub fn parse_registry(text: &str) -> Result<RegistryEntry> {
 }
 
 /// 注册表 status → 统一状态。`waiting` 一律算「等你」，`waitingFor` 决定标签。
+/// 标签存中文原文（缓存会跨语言切换），显示时由 `Status::label` / `tag` 翻译。
 pub fn status_of(entry: &RegistryEntry) -> Status {
     match entry.status.as_deref() {
         Some("busy") => Status::Running,
@@ -83,12 +85,26 @@ pub struct PendingTool {
 
 impl PendingTool {
     /// 「需要你确认：是否允许运行 npm test？」这类一句话（设计稿 Agents 的「最后一条消息」）。
+    /// 每轮扫描都从缓存的 `PendingTool` 重新生成，所以切换语言后下一轮就是新语言。
     pub fn describe(&self) -> String {
-        match (self.name.as_str(), self.summary.as_deref()) {
+        let name = match self.name.as_str() {
+            "" => tr("工具", "this tool"),
+            name => name,
+        };
+        match (name, self.summary.as_deref()) {
             ("AskUserQuestion", Some(question)) => question.to_string(),
-            ("Bash", Some(command)) => format!("需要你确认：是否允许运行 {command}？"),
-            (name, Some(arg)) => format!("需要你确认：是否允许 {name} {arg}？"),
-            (name, None) => format!("需要你确认：是否允许 {name}？"),
+            ("Bash", Some(command)) => trf!(
+                "需要你确认：是否允许运行 {command}？",
+                "Approval needed: run {command}?"
+            ),
+            (name, Some(arg)) => trf!(
+                "需要你确认：是否允许 {name} {arg}？",
+                "Approval needed: allow {name} {arg}?"
+            ),
+            (name, None) => trf!(
+                "需要你确认：是否允许 {name}？",
+                "Approval needed: allow {name}?"
+            ),
         }
     }
 }
@@ -128,7 +144,8 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> Tail {
                         }
                         Some("tool_use") => {
                             let id = block["id"].as_str().unwrap_or_default().to_string();
-                            let name = block["name"].as_str().unwrap_or("工具").to_string();
+                            // 缺名字时留空，`describe` 显示时再填「工具」，避免把某一种语言存进缓存。
+                            let name = block["name"].as_str().unwrap_or_default().to_string();
                             let summary = tool_summary(&name, &block["input"]);
                             pending = Some((id, PendingTool { name, summary }));
                         }
@@ -323,7 +340,7 @@ fn to_session(cached: &Cached) -> Session {
         .or(nonempty(entry.name.as_deref()))
         .map(|t| state::one_line(t, 80))
         .or_else(|| cached.tail.title.clone())
-        .unwrap_or_else(|| "（无标题会话）".into());
+        .unwrap_or_else(|| tr("（无标题会话）", "(Untitled session)").into());
 
     let status = status_of(entry);
     // 等你的会话优先说清楚在等什么（哪条命令要确认、问了什么）；拿不到就退回最后一段回复。

@@ -18,6 +18,7 @@ use objc2::rc::Retained;
 use super::native::{self, DragTileView};
 use super::placement::{self, Phase, Rect, Tick};
 use super::{Onboarding, Permission, Status};
+use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
 const POLL: Duration = Duration::from_millis(500);
@@ -132,6 +133,8 @@ pub struct GuidePanel {
     shown: bool,
     last_frame: Option<Rect>,
     drag_tile: Option<Retained<DragTileView>>,
+    /// 语言代数（`i18n::generation`）：浮窗开着时切换了语言，下次轮询重画。
+    language: u64,
     _poll: Task<()>,
     _close: Option<Task<()>>,
 }
@@ -164,6 +167,7 @@ impl GuidePanel {
             shown: false,
             last_frame: None,
             drag_tile: None,
+            language: crate::i18n::generation(),
             _poll: poll,
             _close: None,
         }
@@ -183,6 +187,12 @@ impl GuidePanel {
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ensure_drag_tile(window);
+
+        let language = crate::i18n::generation();
+        if language != self.language {
+            self.language = language;
+            cx.notify();
+        }
 
         if !self.granted && self.permission.status() == Status::Granted {
             self.granted = true;
@@ -266,11 +276,15 @@ impl GuidePanel {
     fn instruction(&self) -> String {
         let name = self.permission.title();
         match (self.phase(), self.permission) {
-            (Phase::Granted, _) => format!("已授权「{name}」"),
-            (_, Permission::ScreenRecording) => {
-                format!("把 Helmp 拖进「{name}」列表并打开开关；之后需重新打开 Helmp 才生效")
-            }
-            _ => format!("把 Helmp 拖进「{name}」列表，然后打开它的开关"),
+            (Phase::Granted, _) => trf!("已授权「{name}」", "{name} access granted"),
+            (_, Permission::ScreenRecording) => trf!(
+                "把 Helmp 拖进「{name}」列表并打开开关；之后需重新打开 Helmp 才生效",
+                "Drag Helmp into the {name} list and turn it on, then reopen Helmp to apply"
+            ),
+            _ => trf!(
+                "把 Helmp 拖进「{name}」列表，然后打开它的开关",
+                "Drag Helmp into the {name} list, then turn it on"
+            ),
         }
     }
 
@@ -278,10 +292,16 @@ impl GuidePanel {
         let phase = self.phase();
         let (title, note) = match phase {
             Phase::NoBundle => (
-                "无法拖拽：当前不是从 Helmp.app 运行",
-                "请在列表下方点 + 手动选择",
+                tr(
+                    "无法拖拽：当前不是从 Helmp.app 运行",
+                    "Can't drag: not running from Helmp.app",
+                ),
+                tr("请在列表下方点 + 手动选择", "Use + below the list instead"),
             ),
-            _ => ("Helmp", "或通过 + 选择应用"),
+            _ => (
+                "Helmp",
+                tr("或通过 + 选择应用", "Or click + to choose the app"),
+            ),
         };
         div()
             .absolute()

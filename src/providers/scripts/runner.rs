@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::header::Mode;
+use crate::i18n::{tr, trf};
 
 /// 单次执行的硬上限。
 pub const TIMEOUT: Duration = Duration::from_secs(30);
@@ -34,13 +35,14 @@ pub struct RunOutput {
 
 /// 可执行文件直接 exec；否则按 shebang 调解释器。不会 chmod 用户文件。
 pub fn command_for(path: &Path) -> Result<Command> {
-    let metadata = fs::metadata(path).with_context(|| format!("读取 {}", path.display()))?;
+    let metadata =
+        fs::metadata(path).with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
     if metadata.permissions().mode() & 0o111 != 0 {
         return Ok(Command::new(path));
     }
     let mut first_line = String::new();
     fs::File::open(path)
-        .with_context(|| format!("打开 {}", path.display()))?
+        .with_context(|| trf!("打开 {}", "Couldn't open {}", path.display()))?
         .take(4096)
         .read_to_string(&mut first_line)
         .ok();
@@ -51,13 +53,17 @@ pub fn command_for(path: &Path) -> Result<Command> {
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .with_context(|| {
-            format!(
+            trf!(
                 "{} 既不可执行也没有 shebang 行，无法确定解释器（可以 chmod +x 或加 #!）",
+                "{} isn’t executable and has no shebang line, so there’s no interpreter to run it \
+                 (chmod +x it or add a #! line)",
                 path.display()
             )
         })?;
     let mut parts = shebang.split_whitespace();
-    let program = parts.next().context("shebang 为空")?;
+    let program = parts
+        .next()
+        .with_context(|| tr("shebang 为空", "The shebang line is empty"))?;
     let mut command = Command::new(program);
     command.args(parts).arg(path);
     Ok(command)
@@ -65,10 +71,12 @@ pub fn command_for(path: &Path) -> Result<Command> {
 
 /// `currentDirectoryPath`（支持 `~`，相对路径相对脚本所在目录），缺省为脚本所在目录。
 pub fn working_dir(configured: Option<&str>, script: &Path) -> Result<PathBuf> {
-    let script_dir = script
-        .parent()
-        .map(Path::to_path_buf)
-        .context("脚本路径没有上级目录")?;
+    let script_dir = script.parent().map(Path::to_path_buf).with_context(|| {
+        tr(
+            "脚本路径没有上级目录",
+            "The script path has no parent folder",
+        )
+    })?;
     let Some(configured) = configured else {
         return Ok(script_dir);
     };
@@ -81,8 +89,11 @@ pub fn working_dir(configured: Option<&str>, script: &Path) -> Result<PathBuf> {
     };
     anyhow::ensure!(
         dir.is_dir(),
-        "currentDirectoryPath {configured} 不是存在的目录（{}）",
-        dir.display()
+        trf!(
+            "currentDirectoryPath {configured} 不是存在的目录（{}）",
+            "currentDirectoryPath {configured} isn’t an existing folder ({})",
+            dir.display()
+        )
     );
     Ok(dir)
 }
@@ -100,23 +111,33 @@ pub fn execute(path: &Path, args: &[String], cwd: &Path, timeout: Duration) -> R
         .process_group(0);
     let mut child = command
         .spawn()
-        .with_context(|| format!("启动脚本 {}", path.display()))?;
-    let pgid = i32::try_from(child.id()).context("pid 超出 i32")?;
+        .with_context(|| trf!("启动脚本 {}", "Couldn't start script {}", path.display()))?;
+    let pgid = i32::try_from(child.id())
+        .with_context(|| tr("pid 超出 i32", "The process ID doesn’t fit in i32"))?;
 
     let (sender, receiver) = mpsc::channel();
     spawn_reader(
         0,
-        child.stdout.take().context("stdout 管道未创建")?,
+        child
+            .stdout
+            .take()
+            .with_context(|| tr("stdout 管道未创建", "The stdout pipe wasn’t created"))?,
         sender.clone(),
     );
-    spawn_reader(1, child.stderr.take().context("stderr 管道未创建")?, sender);
+    let stderr = child
+        .stderr
+        .take()
+        .with_context(|| tr("stderr 管道未创建", "The stderr pipe wasn’t created"))?;
+    spawn_reader(1, stderr, sender);
 
     let deadline = Instant::now() + timeout;
     let mut status = None;
     let mut outputs: [Option<Vec<u8>>; 2] = [None, None];
     loop {
         if status.is_none() {
-            status = child.try_wait().context("等待脚本退出")?;
+            status = child
+                .try_wait()
+                .with_context(|| tr("等待脚本退出", "Couldn't wait for the script to exit"))?;
         }
         if let (Some(status), [Some(_), Some(_)]) = (status, &outputs) {
             let [stdout, stderr] = outputs
@@ -131,11 +152,12 @@ pub fn execute(path: &Path, args: &[String], cwd: &Path, timeout: Duration) -> R
         if now >= deadline {
             kill_group(pgid);
             let _ = child.wait();
-            bail!(
+            bail!(trf!(
                 "脚本 {} 超过 {} 秒未结束，已终止其进程组",
+                "Script {} didn’t finish within {} seconds, so its process group was killed",
                 path.display(),
                 timeout.as_secs_f32()
-            );
+            ));
         }
         let wait = (deadline - now).min(Duration::from_millis(10));
         if let Ok((slot, bytes)) = receiver.recv_timeout(wait)
@@ -187,7 +209,8 @@ fn read_tail(mut pipe: impl std::io::Read) -> Vec<u8> {
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
             Err(err) => {
-                kept.extend_from_slice(format!("\n[读取输出失败：{err}]").as_bytes());
+                let note = trf!("\n[读取输出失败：{err}]", "\n[Couldn't read output: {err}]");
+                kept.extend_from_slice(note.as_bytes());
                 break;
             }
         }
@@ -197,7 +220,9 @@ fn read_tail(mut pipe: impl std::io::Read) -> Vec<u8> {
         truncated = true;
     }
     if truncated {
-        let mut marked = "[...前面的输出已截断]\n".as_bytes().to_vec();
+        let mut marked = tr("[...前面的输出已截断]\n", "[…earlier output truncated]\n")
+            .as_bytes()
+            .to_vec();
         marked.extend(kept);
         return marked;
     }
@@ -217,9 +242,9 @@ fn last_lines(text: &str, count: usize) -> String {
 pub fn shown_output(title: &str, mode: Mode, output: &RunOutput) -> Result<Option<String>> {
     if !output.status.success() {
         let how = match (output.status.code(), output.status.signal()) {
-            (Some(code), _) => format!("退出码 {code}"),
-            (None, Some(signal)) => format!("被信号 {signal} 终止"),
-            (None, None) => format!("异常退出（{}）", output.status),
+            (Some(code), _) => trf!("退出码 {code}", "exit code {code}"),
+            (None, Some(signal)) => trf!("被信号 {signal} 终止", "killed by signal {signal}"),
+            (None, None) => trf!("异常退出（{}）", "abnormal exit: {}", output.status),
         };
         let detail = if output.stderr.trim().is_empty() {
             &output.stdout
@@ -228,12 +253,23 @@ pub fn shown_output(title: &str, mode: Mode, output: &RunOutput) -> Result<Optio
         };
         let tail = last_lines(detail, ERROR_TAIL_LINES);
         return Err(if tail.is_empty() {
-            anyhow!("脚本「{title}」失败，{how}")
+            anyhow!(trf!(
+                "脚本「{title}」失败，{how}",
+                "Script “{title}” failed ({how})"
+            ))
         } else {
-            anyhow!("脚本「{title}」失败，{how}：\n{tail}")
+            anyhow!(trf!(
+                "脚本「{title}」失败，{how}：\n{tail}",
+                "Script “{title}” failed ({how}):\n{tail}"
+            ))
         });
     }
-    let nothing = || format!("「{title}」已完成（没有输出）");
+    let nothing = || {
+        trf!(
+            "「{title}」已完成（没有输出）",
+            "“{title}” finished with no output"
+        )
+    };
     Ok(match mode {
         Mode::Silent => None,
         Mode::Compact | Mode::Inline => {

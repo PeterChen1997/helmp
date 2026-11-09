@@ -2,7 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::engine::WAITING_SECTION;
+use crate::engine::waiting_section;
+use crate::i18n::{is_en, tr, trf};
 use crate::matcher;
 use crate::provider::Tone;
 
@@ -34,7 +35,8 @@ impl Source {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Running,
-    /// 等你：权限确认 / 提问。字符串是给人看的短标签。
+    /// 等你：权限确认 / 提问。字符串是中文短标签（「等你确认权限」「等你回答」「等你：…」），
+    /// 扫描时生成、会跨语言切换保存，所以存中文原文当键，显示时再按语言翻译（见 `label` / `tag`）。
     NeedsYou(String),
     Idle,
     Done,
@@ -51,15 +53,15 @@ impl Status {
 
     pub fn label(&self) -> String {
         match self {
-            Status::Running => "运行中".into(),
-            Status::NeedsYou(label) => label.clone(),
-            Status::Idle => "空闲".into(),
-            Status::Done => "已完成".into(),
+            Status::Running => tr("运行中", "Running").into(),
+            Status::NeedsYou(label) => needs_you_label(label),
+            Status::Idle => tr("空闲", "Idle").into(),
+            Status::Done => tr("已完成", "Done").into(),
             Status::Interrupted(reason) if reason == "interrupted" || reason.is_empty() => {
-                "已中断".into()
+                tr("已中断", "Interrupted").into()
             }
-            Status::Interrupted(reason) => format!("已中断（{reason}）"),
-            Status::Unknown => "状态未知".into(),
+            Status::Interrupted(reason) => trf!("已中断（{reason}）", "Interrupted ({reason})"),
+            Status::Unknown => tr("状态未知", "Unknown").into(),
         }
     }
 
@@ -67,12 +69,18 @@ impl Status {
     pub fn tag(&self) -> (String, Tone) {
         match self {
             Status::NeedsYou(label) if label.starts_with("等你确认") => {
-                ("等你确认".into(), Tone::Waiting)
+                (tr("等你确认", "Needs permission").into(), Tone::Waiting)
             }
             Status::NeedsYou(label) if label.starts_with("等你：") => {
-                ("等你处理".into(), Tone::Waiting)
+                (tr("等你处理", "Needs you").into(), Tone::Waiting)
             }
-            Status::NeedsYou(label) => (label.clone(), Tone::Waiting),
+            Status::NeedsYou(label) if is_en() && label == "等你回答" => {
+                ("Needs answer".into(), Tone::Waiting)
+            }
+            Status::NeedsYou(label) if is_en() && label == "等你" => {
+                ("Needs you".into(), Tone::Waiting)
+            }
+            Status::NeedsYou(label) => (needs_you_label(label), Tone::Waiting),
             Status::Running => (self.label(), Tone::Running),
             Status::Done => (self.label(), Tone::Done),
             Status::Idle | Status::Interrupted(_) | Status::Unknown => {
@@ -89,17 +97,29 @@ impl Status {
     /// 分组的先后由组内最高分决定，基础分保证这个顺序。
     fn section(&self) -> (&'static str, u32) {
         match self {
-            Status::NeedsYou(_) => (WAITING_SECTION, 900),
-            Status::Running => (RUNNING_SECTION, 800),
-            Status::Done | Status::Idle => (FINISHED_SECTION, 700),
-            Status::Interrupted(_) | Status::Unknown => (OTHER_SECTION, 600),
+            Status::NeedsYou(_) => (waiting_section(), 900),
+            Status::Running => (tr("进行中", "In Progress"), 800),
+            Status::Done | Status::Idle => (tr("最近完成", "Recently Completed"), 700),
+            Status::Interrupted(_) | Status::Unknown => (tr("其他", "Other"), 600),
         }
     }
 }
 
-const RUNNING_SECTION: &str = "进行中";
-const FINISHED_SECTION: &str = "最近完成";
-const OTHER_SECTION: &str = "其他";
+/// `NeedsYou` 的中文短标签 → 当前语言的说明（详情标签用）。认不出的原样返回。
+fn needs_you_label(label: &str) -> String {
+    if !is_en() {
+        return label.into();
+    }
+    match label {
+        "等你确认权限" => "Waiting for permission".into(),
+        "等你回答" => "Waiting for your answer".into(),
+        "等你" => "Waiting for you".into(),
+        _ => match label.strip_prefix("等你：") {
+            Some(what) => format!("Waiting for {what}"),
+            None => label.into(),
+        },
+    }
+}
 
 /// 回车后怎么跳过去。终端类目标在执行时才解析 tty，因为 tty 只在那一刻有意义。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,9 +158,9 @@ impl Session {
     pub fn origin(&self) -> &'static str {
         let desktop = matches!(self.jump, Jump::DeepLink(_));
         match (self.source, desktop) {
-            (Source::Claude, true) => "Claude 桌面版",
-            (Source::Claude, false) => "Claude Code 终端",
-            (Source::Codex, true) => "Codex 桌面版",
+            (Source::Claude, true) => tr("Claude 桌面版", "Claude Desktop"),
+            (Source::Claude, false) => tr("Claude Code 终端", "Claude Code (Terminal)"),
+            (Source::Codex, true) => tr("Codex 桌面版", "Codex Desktop"),
             (Source::Codex, false) => "Codex CLI",
         }
     }
@@ -159,10 +179,10 @@ impl Session {
     }
 }
 
-/// 列出全部会话的关键词。`claude` / `codex` 只列对应来源。
+/// 列出全部会话的关键词（与界面语言无关，中英都认）。`claude` / `codex` 只列对应来源。
 fn keyword_filter(query: &str) -> Option<Option<Source>> {
     match query.trim().to_lowercase().as_str() {
-        "" | "agent" | "agents" | "会话" => Some(None),
+        "" | "agent" | "agents" | "会话" | "session" | "sessions" => Some(None),
         "claude" => Some(Some(Source::Claude)),
         "codex" => Some(Some(Source::Codex)),
         _ => None,
@@ -287,10 +307,11 @@ pub fn display_path(path: &Path, home: Option<&Path>) -> String {
 pub fn ago(now_ms: u64, then_ms: u64) -> String {
     let secs = now_ms.saturating_sub(then_ms) / 1000;
     match secs {
-        0..60 => "刚刚".into(),
-        60..3600 => format!("{} 分钟前", secs / 60),
-        3600..86_400 => format!("{} 小时前", secs / 3600),
-        _ => format!("{} 天前", secs / 86_400),
+        0..60 => tr("刚刚", "Just now").into(),
+        60..3600 => trf!("{} 分钟前", "{} min ago", secs / 60),
+        3600..86_400 => trf!("{} 小时前", "{} hr ago", secs / 3600),
+        86_400..172_800 => trf!("{} 天前", "{} day ago", 1),
+        _ => trf!("{} 天前", "{} days ago", secs / 86_400),
     }
 }
 
@@ -526,8 +547,8 @@ mod tests {
         assert_eq!(
             scoped(&sessions, "", None),
             [
-                ("等你新".to_string(), WAITING_SECTION),
-                ("等你旧".to_string(), WAITING_SECTION),
+                ("等你新".to_string(), waiting_section()),
+                ("等你旧".to_string(), waiting_section()),
                 ("在跑".to_string(), "进行中"),
                 ("完成".to_string(), "最近完成"),
                 ("空闲".to_string(), "最近完成"),
@@ -587,6 +608,38 @@ mod tests {
         assert_eq!(s.origin(), "Claude 桌面版");
         s.source = Source::Codex;
         assert_eq!(s.origin(), "Codex 桌面版");
+    }
+
+    #[test]
+    fn english_ui_translates_status_and_age_at_display_time() {
+        // 「等你」标签在扫描时以中文存进会话（缓存跨语言切换），所以必须在显示时翻译；
+        // 否则切到英文后，列表里最显眼的状态标签还是中文。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let permission = Status::NeedsYou("等你确认权限".into());
+            assert_eq!(permission.label(), "Waiting for permission");
+            assert_eq!(permission.tag().0, "Needs permission");
+            let answer = Status::NeedsYou("等你回答".into());
+            assert_eq!(answer.label(), "Waiting for your answer");
+            assert_eq!(answer.tag().0, "Needs answer");
+            let other = Status::NeedsYou("等你：input".into());
+            assert_eq!(other.label(), "Waiting for input");
+            assert_eq!(other.tag(), ("Needs you".into(), Tone::Waiting));
+            assert_eq!(Status::Running.tag(), ("Running".into(), Tone::Running));
+            assert_eq!(
+                Status::Interrupted("replaced".into()).label(),
+                "Interrupted (replaced)"
+            );
+            assert_eq!(ago(60_000, 0), "1 min ago");
+            assert_eq!(ago(30, 0), "Just now");
+            assert_eq!(ago(86_400_000, 0), "1 day ago");
+            assert_eq!(ago(3 * 86_400_000, 0), "3 days ago");
+            // 分组名随语言变，但仍按状态分组。
+            assert_eq!(Status::Done.section().0, "Recently Completed");
+            assert_eq!(
+                Status::NeedsYou("等你".into()).section().0,
+                waiting_section()
+            );
+        });
     }
 
     #[test]

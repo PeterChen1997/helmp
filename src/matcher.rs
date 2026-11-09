@@ -15,6 +15,8 @@
 
 use pinyin::{ToPinyin, ToPinyinMulti};
 
+use crate::i18n::tr;
+
 const EXACT: u32 = 1000;
 const PREFIX: u32 = 900;
 const PINYIN_FULL: u32 = 850;
@@ -74,15 +76,15 @@ impl MatchKind {
     /// 给人看的名字，用于详情里的「匹配方式」。
     pub fn label(self) -> &'static str {
         match self {
-            MatchKind::Exact => "名称完全匹配",
-            MatchKind::Prefix => "名称开头",
-            MatchKind::WordInitials => "单词首字母",
-            MatchKind::Substring => "名称包含",
-            MatchKind::Subsequence => "模糊匹配",
-            MatchKind::PinyinInitials => "拼音首字母",
-            MatchKind::PinyinFull => "全拼",
-            MatchKind::PinyinMixed => "拼音",
-            MatchKind::PinyinFuzzy => "拼音模糊匹配",
+            MatchKind::Exact => tr("名称完全匹配", "Exact name"),
+            MatchKind::Prefix => tr("名称开头", "Name prefix"),
+            MatchKind::WordInitials => tr("单词首字母", "Word initials"),
+            MatchKind::Substring => tr("名称包含", "Part of name"),
+            MatchKind::Subsequence => tr("模糊匹配", "Fuzzy"),
+            MatchKind::PinyinInitials => tr("拼音首字母", "Pinyin initials"),
+            MatchKind::PinyinFull => tr("全拼", "Full pinyin"),
+            MatchKind::PinyinMixed => tr("拼音", "Pinyin"),
+            MatchKind::PinyinFuzzy => tr("拼音模糊匹配", "Fuzzy pinyin"),
         }
     }
 }

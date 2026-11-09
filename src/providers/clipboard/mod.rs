@@ -24,16 +24,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result};
 
 use crate::config::ClipboardConfig;
-use crate::engine::{COMMANDS_SECTION, MAX_RESULTS};
+use crate::engine::{MAX_RESULTS, commands_section};
+use crate::i18n::{Lang, tr, trf};
 use crate::provider::{Accessory, Action, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint};
 use present::{Clock, TextKind};
 use store::{Entry, Kind, NewClip, Source, Store};
 use watcher::Read;
 
 const PROVIDER_ID: &str = "clipboard";
-const BADGE: &str = "剪贴板";
 const PREFIXES: [&str; 4] = ["cb ", "clip ", "剪贴板 ", "剪切板 "];
-const FILTERS: [&str; 4] = ["全部", "文本", "图片", "文件"];
+/// 分段筛选：(中文, 英文, 类型)。筛选名既是显示文字也是传回 `query_scoped` 的键，
+/// 进入范围后可能切换语言，所以比较时中英两种名字都认。
+const FILTERS: [(&str, &str, Option<Kind>); 4] = [
+    ("全部", "All", None),
+    ("文本", "Text", Some(Kind::Text)),
+    ("图片", "Images", Some(Kind::Image)),
+    ("文件", "Files", Some(Kind::Files)),
+];
 /// 内存索引里每条保留的字符数。超出部分不参与搜索（避免巨型文本拖慢每次按键）。
 const PREVIEW_CHARS: usize = 4096;
 const TITLE_CHARS: usize = 80;
@@ -76,10 +83,14 @@ impl Clipboard {
             let inner = Arc::clone(&self.inner);
             Action::new(move || inner.paste(id, mode))
         };
-        let mut actions = vec![NamedAction::new("复制", Some("⌘C"), pick(PasteMode::Copy))];
+        let mut actions = vec![NamedAction::new(
+            tr("复制", "Copy"),
+            Some("⌘C"),
+            pick(PasteMode::Copy),
+        )];
         if indexed.kind != Kind::Image {
             actions.push(NamedAction::new(
-                "粘贴为纯文本",
+                tr("粘贴为纯文本", "Paste as Plain Text"),
                 Some("⌥↵"),
                 pick(PasteMode::PlainText),
             ));
@@ -88,7 +99,7 @@ impl Clipboard {
             && let Some(url) = present::link_url(&indexed.preview)
         {
             actions.push(NamedAction::new(
-                "在浏览器中打开",
+                tr("在浏览器中打开", "Open in Browser"),
                 Some("⌘O"),
                 Action::open(url),
             ));
@@ -98,14 +109,14 @@ impl Clipboard {
         {
             let path = first.to_string();
             actions.push(NamedAction::new(
-                "在访达中显示",
+                tr("在访达中显示", "Show in Finder"),
                 Some("⌘↵"),
                 Action::new(move || reveal_in_finder(&path)),
             ));
         }
         let inner = Arc::clone(&self.inner);
         actions.push(NamedAction::new(
-            "删除",
+            tr("删除", "Delete"),
             Some("⌘⌫"),
             // 删除后面板不隐藏、原地刷新列表。
             Action::new(move || {
@@ -116,7 +127,7 @@ impl Clipboard {
         ));
         Item {
             id: format!("{PROVIDER_ID}:{id}"),
-            title: indexed.title.clone(),
+            title: indexed.title_in(crate::i18n::lang()),
             subtitle: present::subtitle(indexed, view.clock),
             badge,
             score,
@@ -183,7 +194,10 @@ impl Provider for Clipboard {
                     }
                 }
             })
-            .context("启动剪贴板轮询线程")?;
+            .context(tr(
+                "启动剪贴板轮询线程",
+                "Couldn’t start the clipboard polling thread",
+            ))?;
         Ok(())
     }
 
@@ -195,7 +209,7 @@ impl Provider for Clipboard {
         }
         let view = View::now();
         hits.into_iter()
-            .map(|(position, score)| self.item(&index[position], score, BADGE.into(), &view))
+            .map(|(position, score)| self.item(&index[position], score, badge().into(), &view))
             .collect()
     }
 
@@ -208,11 +222,22 @@ impl Provider for Clipboard {
             .len();
         Some(Scope {
             id: PROVIDER_ID,
-            label: "剪贴板".into(),
+            label: tr("剪贴板", "Clipboard").into(),
             tint: Tint::Orange,
             prefixes: PREFIXES.iter().map(|prefix| prefix.to_string()).collect(),
-            placeholder: format!("搜索 {} 条记录", present::thousands(count)),
-            filters: FILTERS.iter().map(|filter| filter.to_string()).collect(),
+            placeholder: if count == 1 {
+                tr("搜索 1 条记录", "Search 1 item").into()
+            } else {
+                trf!(
+                    "搜索 {} 条记录",
+                    "Search {} items",
+                    present::thousands(count)
+                )
+            },
+            filters: FILTERS
+                .iter()
+                .map(|(zh, en, _)| tr(zh, en).to_string())
+                .collect(),
         })
     }
 
@@ -228,7 +253,7 @@ impl Provider for Clipboard {
                 let badge = if query.is_empty() {
                     present::day_label(view.clock, indexed.copied_at_ms)
                 } else {
-                    BADGE.into()
+                    badge().into()
                 };
                 self.item(indexed, score, badge, &view)
             })
@@ -238,9 +263,9 @@ impl Provider for Clipboard {
     fn suggestions(&self) -> Vec<Item> {
         vec![Item {
             id: format!("{PROVIDER_ID}:open"),
-            title: "剪贴板历史".into(),
-            subtitle: "Clipboard History".into(),
-            badge: COMMANDS_SECTION.into(),
+            title: tr("剪贴板历史", "Clipboard History").into(),
+            subtitle: tr("Clipboard History", "Browse and paste what you’ve copied").into(),
+            badge: commands_section().into(),
             score: SUGGESTION_SCORE,
             icon: Icon::Symbol {
                 name: "clipboard-list",
@@ -248,7 +273,7 @@ impl Provider for Clipboard {
             },
             accessories: vec![Accessory::keys("⌘⇧V")],
             action: Action::enter_scope(PROVIDER_ID),
-            action_title: "打开".into(),
+            action_title: tr("打开", "Open").into(),
             ..Item::blank()
         }]
     }
@@ -272,7 +297,7 @@ pub fn history_stats() -> Result<(usize, u64)> {
     match SHARED.get() {
         Some(inner) => {
             let guard = inner.store.lock().expect("clipboard store poisoned");
-            guard.as_ref().context("剪贴板存储未初始化")?.stats(&dir)
+            guard.as_ref().context(not_ready())?.stats(&dir)
         }
         None => Store::open(&dir)?.stats(&dir),
     }
@@ -289,11 +314,11 @@ impl View {
         let action_title = if will_autopaste(&crate::config::get().clipboard) {
             // 面板是非激活面板，前台应用就是用户正在用的 App。
             match macos::frontmost_app() {
-                Some(app) => format!("粘贴到{}", app.name),
-                None => "粘贴到前台应用".into(),
+                Some(app) => trf!("粘贴到{}", "Paste to {}", app.name),
+                None => tr("粘贴到前台应用", "Paste to Frontmost App").into(),
             }
         } else {
-            "复制到剪贴板".into()
+            tr("复制到剪贴板", "Copy to Clipboard").into()
         };
         Self {
             clock: Clock::now(),
@@ -341,7 +366,7 @@ impl Inner {
 
     fn record(&self, clip: NewClip, source: Option<&Source>) -> Result<()> {
         let mut guard = self.store.lock().expect("clipboard store poisoned");
-        let store = guard.as_mut().context("剪贴板存储未初始化")?;
+        let store = guard.as_mut().context(not_ready())?;
         let (entry, _) = store.add(clip, source, now_ms())?;
         self.move_to_front(&entry, image_path(store, &entry));
         Ok(())
@@ -359,7 +384,7 @@ impl Inner {
             return Ok(0);
         };
         let mut guard = self.store.lock().expect("clipboard store poisoned");
-        let store = guard.as_mut().context("剪贴板存储未初始化")?;
+        let store = guard.as_mut().context(not_ready())?;
         let removed = store.prune_before(cutoff)?;
         if !removed.is_empty() {
             self.index
@@ -372,8 +397,8 @@ impl Inner {
 
     fn delete(&self, id: i64) -> Result<()> {
         let mut guard = self.store.lock().expect("clipboard store poisoned");
-        let store = guard.as_mut().context("剪贴板存储未初始化")?;
-        anyhow::ensure!(store.delete(id)?, "剪贴板历史里没有第 {id} 条");
+        let store = guard.as_mut().context(not_ready())?;
+        anyhow::ensure!(store.delete(id)?, missing(id));
         self.index
             .write()
             .expect("clipboard index poisoned")
@@ -383,7 +408,7 @@ impl Inner {
 
     fn clear(&self) -> Result<usize> {
         let mut guard = self.store.lock().expect("clipboard store poisoned");
-        let store = guard.as_mut().context("剪贴板存储未初始化")?;
+        let store = guard.as_mut().context(not_ready())?;
         let removed = store.clear()?;
         self.index
             .write()
@@ -396,10 +421,8 @@ impl Inner {
     fn paste(&self, id: i64, mode: PasteMode) -> Result<Outcome> {
         let (entry, image_path) = {
             let guard = self.store.lock().expect("clipboard store poisoned");
-            let store = guard.as_ref().context("剪贴板存储未初始化")?;
-            let entry = store
-                .get(id)?
-                .with_context(|| format!("剪贴板历史里没有第 {id} 条"))?;
+            let store = guard.as_ref().context(not_ready())?;
+            let entry = store.get(id)?.with_context(|| missing(id))?;
             let image_path = store.image_path(&entry);
             (entry, image_path)
         };
@@ -410,7 +433,7 @@ impl Inner {
         macos::write(&written, &image_path)?;
         {
             let mut guard = self.store.lock().expect("clipboard store poisoned");
-            let store = guard.as_mut().context("剪贴板存储未初始化")?;
+            let store = guard.as_mut().context(not_ready())?;
             let touched = store.touch(id, now_ms())?;
             let path = self::image_path(store, &touched);
             self.move_to_front(&touched, path);
@@ -430,7 +453,10 @@ fn image_path(store: &Store, entry: &Entry) -> Option<PathBuf> {
 
 /// 文本原样；文件变成每行一个路径；图片没有纯文本形式。
 fn as_plain_text(entry: &Entry) -> Result<Entry> {
-    anyhow::ensure!(entry.kind != Kind::Image, "图片没有纯文本形式");
+    anyhow::ensure!(
+        entry.kind != Kind::Image,
+        tr("图片没有纯文本形式", "Images have no plain-text form")
+    );
     Ok(Entry {
         kind: Kind::Text,
         ..entry.clone()
@@ -441,8 +467,14 @@ fn reveal_in_finder(path: &str) -> Result<Outcome> {
     let status = std::process::Command::new("open")
         .args(["-R", path])
         .status()
-        .context("启动 open")?;
-    anyhow::ensure!(status.success(), "在访达中显示 {path} 失败：{status}");
+        .context(tr("启动 open", "Couldn’t run open"))?;
+    anyhow::ensure!(
+        status.success(),
+        trf!(
+            "在访达中显示 {path} 失败：{status}",
+            "Couldn’t show {path} in Finder: {status}"
+        )
+    );
     Ok(Outcome::Done)
 }
 
@@ -466,13 +498,28 @@ fn retention_cutoff(config: &ClipboardConfig, now_ms: i64) -> Option<i64> {
     Some(now_ms - days * 86_400_000)
 }
 
+/// 筛选名 → 类型，中英两种名字都认；未知（如 `find` 重放时传空串）按「全部」。
 fn kind_filter(filter: &str) -> Option<Kind> {
-    match filter {
-        "文本" => Some(Kind::Text),
-        "图片" => Some(Kind::Image),
-        "文件" => Some(Kind::Files),
-        _ => None,
-    }
+    FILTERS
+        .iter()
+        .find(|(zh, en, _)| filter == *zh || filter == *en)
+        .and_then(|(_, _, kind)| *kind)
+}
+
+/// 分组名（也是分组键）：在查询里取，查询已按语言固定。
+fn badge() -> &'static str {
+    tr("剪贴板", "Clipboard")
+}
+
+fn not_ready() -> &'static str {
+    tr("剪贴板存储未初始化", "Clipboard storage isn’t ready yet")
+}
+
+fn missing(id: i64) -> String {
+    trf!(
+        "剪贴板历史里没有第 {id} 条",
+        "Clipboard history has no item #{id}"
+    )
 }
 
 /// 内存索引中的一条。
@@ -482,7 +529,9 @@ struct Indexed {
     kind: Kind,
     /// 文本条目的细分（非文本为 `Plain`）。
     text_kind: TextKind,
+    /// 标题里不随语言变的部分：文本首行、第一个文件名；图片和空白文本为空。显示用 `title_in`。
     title: String,
+    /// 首行档位用的小写标题，固定按中文标题算（与界面语言无关，搜索结果不随切换语言变）。
     title_lower: String,
     /// 小写化的可搜索文本（截断到 `PREVIEW_CHARS`）。
     haystack: String,
@@ -504,7 +553,7 @@ impl Indexed {
         let (haystack, count) = match entry.kind {
             Kind::Text => (entry.content.to_lowercase(), entry.chars),
             Kind::Files => (entry.content.to_lowercase(), entry.content.lines().count()),
-            Kind::Image => (title.to_lowercase(), 0),
+            Kind::Image => (String::new(), 0),
         };
         let preview = match entry.kind {
             Kind::Text | Kind::Files => prefix_chars(&entry.content, present::DETAIL_CHARS),
@@ -514,11 +563,11 @@ impl Indexed {
             Kind::Text => present::classify(&entry.content),
             Kind::Files | Kind::Image => TextKind::Plain,
         };
-        Self {
+        let mut indexed = Self {
             id: entry.id,
             kind: entry.kind,
             text_kind,
-            title_lower: title.to_lowercase(),
+            title_lower: String::new(),
             title,
             haystack,
             preview,
@@ -532,6 +581,39 @@ impl Indexed {
             height: entry.height,
             source: entry.source.as_ref().map(|source| source.name.clone()),
             copied_at_ms: entry.copied_at_ms,
+        };
+        indexed.title_lower = indexed.title_in(Lang::Zh).to_lowercase();
+        if entry.kind == Kind::Image {
+            // 图片没有正文，只能按标题搜：中英两种叫法（「图片」/ image）都要搜得到。
+            indexed.haystack = format!(
+                "{}\n{}",
+                indexed.title_lower,
+                indexed.title_in(Lang::En).to_lowercase()
+            );
+        }
+        indexed
+    }
+
+    /// 列表标题：按语言补上「（空白）」「等 N 个文件」「图片 W × H」。
+    /// 渲染时现取，不缓存，切换语言后立即生效。
+    fn title_in(&self, lang: Lang) -> String {
+        let zh = lang == Lang::Zh;
+        match self.kind {
+            Kind::Text if self.title.is_empty() => if zh { "（空白）" } else { "(Blank)" }.into(),
+            Kind::Text => self.title.clone(),
+            Kind::Files if self.count > 1 => {
+                if zh {
+                    format!("{} 等 {} 个文件", self.title, self.count)
+                } else {
+                    format!("{} and {} more", self.title, self.count - 1)
+                }
+            }
+            Kind::Files => self.title.clone(),
+            Kind::Image if self.width > 0 && self.height > 0 => {
+                let label = if zh { "图片" } else { "Image" };
+                format!("{label} {} × {}", self.width, self.height)
+            }
+            Kind::Image => if zh { "图片" } else { "Image" }.into(),
         }
     }
 }
@@ -552,6 +634,7 @@ fn truncated(entry: &Entry) -> Entry {
     entry
 }
 
+/// 标题里不随语言变的部分（见 `Indexed::title`）。
 fn title_of(entry: &Entry) -> String {
     match entry.kind {
         Kind::Text => entry
@@ -560,23 +643,15 @@ fn title_of(entry: &Entry) -> String {
             .map(str::trim)
             .find(|line| !line.is_empty())
             .map(|line| ellipsize(line, TITLE_CHARS))
-            .unwrap_or_else(|| "（空白）".into()),
+            .unwrap_or_default(),
         Kind::Files => {
-            let mut paths = entry.content.lines();
-            let first = paths.next().unwrap_or_default();
-            let name = std::path::Path::new(first)
+            let first = entry.content.lines().next().unwrap_or_default();
+            std::path::Path::new(first)
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| first.to_string());
-            match paths.count() {
-                0 => name,
-                rest => format!("{name} 等 {} 个文件", rest + 1),
-            }
+                .unwrap_or_else(|| first.to_string())
         }
-        Kind::Image if entry.width > 0 && entry.height > 0 => {
-            format!("图片 {} × {}", entry.width, entry.height)
-        }
-        Kind::Image => "图片".into(),
+        Kind::Image => String::new(),
     }
 }
 
@@ -788,7 +863,7 @@ mod tests {
         let items = provider.query_scoped(" deploy ", "全部");
         // 首行命中排在正文命中之前；正文第二行的命中也要找得到。
         assert_eq!(titles(&items), vec!["deploy script", "第一行"]);
-        assert!(items.iter().all(|item| item.badge == BADGE));
+        assert!(items.iter().all(|item| item.badge == badge()));
     }
 
     #[test]
@@ -809,7 +884,7 @@ mod tests {
         let items = provider.query("safari");
         assert_eq!(items.len(), AMBIENT_LIMIT);
         assert!(items.iter().all(|item| item.score < AMBIENT_CEILING));
-        assert!(items.iter().all(|item| item.badge == BADGE));
+        assert!(items.iter().all(|item| item.badge == badge()));
         // 正文才命中的不算高度匹配。
         assert!(!titles(&items).contains(&"body"));
         // 新的在前。
@@ -1078,7 +1153,7 @@ mod tests {
         let items = provider.suggestions();
         assert_eq!(items.len(), 1);
         let item = &items[0];
-        assert_eq!(item.badge, COMMANDS_SECTION);
+        assert_eq!(item.badge, commands_section());
         assert!(item.score < 800);
         assert_eq!(item.accessories, vec![Accessory::keys("⌘⇧V")]);
         assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("clipboard"));
@@ -1174,19 +1249,70 @@ mod tests {
             copied_at_ms: 0,
             seq: 1,
         };
+        let title =
+            |kind, content: &str| Indexed::new(&entry(kind, content), None).title_in(Lang::Zh);
+        assert_eq!(title(Kind::Text, "\n  第一行  \n第二行"), "第一行");
+        assert_eq!(title(Kind::Text, " \n "), "（空白）");
         assert_eq!(
-            title_of(&entry(Kind::Text, "\n  第一行  \n第二行")),
-            "第一行"
-        );
-        assert_eq!(title_of(&entry(Kind::Text, " \n ")), "（空白）");
-        assert_eq!(
-            title_of(&entry(Kind::Text, &"字".repeat(100))),
+            title(Kind::Text, &"字".repeat(100)),
             format!("{}…", "字".repeat(TITLE_CHARS))
         );
-        assert_eq!(title_of(&entry(Kind::Files, "/a/b/报告.pdf")), "报告.pdf");
+        assert_eq!(title(Kind::Files, "/a/b/报告.pdf"), "报告.pdf");
         assert_eq!(
-            title_of(&entry(Kind::Files, "/a/x.txt\n/a/y.txt")),
+            title(Kind::Files, "/a/x.txt\n/a/y.txt"),
             "x.txt 等 2 个文件"
+        );
+    }
+
+    #[test]
+    fn english_ui_labels_filters_and_days_while_search_stays_the_same() {
+        // 英文界面：分组（Today）、筛选名、动作名、标题都要是英文；
+        // 筛选名会原样传回，进入范围后切了语言，中英两种名字都得认，否则筛选失效。
+        // 搜索与界面语言无关：中文内容照样能搜到，图片在英文界面下按 image 也能搜到。
+        let dir = TempDir::new("english");
+        let provider = provider_with(&dir, &["会议改到周四下午三点"]);
+        png(&provider, b"\x89PNG en", 640, 220, None);
+        files(&provider, &["/tmp/a.txt", "/tmp/b.txt"]);
+        crate::i18n::with_lang(Lang::En, || {
+            let scope = provider.scope().unwrap();
+            assert_eq!(scope.label, "Clipboard");
+            assert_eq!(scope.filters, ["All", "Text", "Images", "Files"]);
+            assert_eq!(scope.placeholder, "Search 3 items");
+
+            let items = provider.query_scoped("", "All");
+            assert_eq!(items.len(), 3);
+            assert!(items.iter().all(|item| item.badge == "Today"));
+            let image = &provider.query_scoped("", "Images")[0];
+            assert_eq!(image.title, "Image 640 × 220");
+            assert_eq!(image.subtitle, "Unknown source · Just now");
+            // 进入范围时还是中文，筛选名「图片」原样传回来。
+            assert_eq!(
+                titles(&provider.query_scoped("", "图片")),
+                ["Image 640 × 220"]
+            );
+            assert_eq!(
+                titles(&provider.query_scoped("", "Files")),
+                ["a.txt and 1 more"]
+            );
+
+            let found = provider.query_scoped("周四", "All");
+            assert_eq!(titles(&found), ["会议改到周四下午三点"]);
+            assert_eq!(found[0].badge, "Clipboard");
+            let actions: Vec<&str> = found[0].actions.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(actions, ["Copy", "Paste as Plain Text", "Delete"]);
+            assert_eq!(
+                titles(&provider.query_scoped("image", "All")),
+                ["Image 640 × 220"]
+            );
+            assert_eq!(
+                titles(&provider.query_scoped("图片", "All")),
+                ["Image 640 × 220"]
+            );
+        });
+        // 中文界面下用英文筛选名（语言从英文切回中文时）也要生效。
+        assert_eq!(
+            titles(&provider.query_scoped("", "Images")),
+            ["图片 640 × 220"]
         );
     }
 }

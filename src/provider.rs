@@ -19,6 +19,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::i18n::{tr, trf};
+
 /// 执行一个结果后的去向。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -74,7 +76,10 @@ impl Action {
         let target = target.into();
         Self::new(move || {
             let status = std::process::Command::new("open").arg(&target).status()?;
-            anyhow::ensure!(status.success(), "open {target} 失败：{status}");
+            anyhow::ensure!(
+                status.success(),
+                trf!("open {target} 失败：{status}", "Couldn't open {target}: {status}")
+            );
             Ok(Outcome::Done)
         })
     }
@@ -108,10 +113,13 @@ impl Action {
             child
                 .stdin
                 .take()
-                .ok_or_else(|| anyhow::anyhow!("pbcopy 没有 stdin"))?
+                .ok_or_else(|| anyhow::anyhow!(tr("pbcopy 没有 stdin", "pbcopy has no stdin")))?
                 .write_all(text.as_bytes())?;
             let status = child.wait()?;
-            anyhow::ensure!(status.success(), "写入剪贴板失败：{status}");
+            anyhow::ensure!(
+                status.success(),
+                trf!("写入剪贴板失败：{status}", "Couldn't copy to the clipboard: {status}")
+            );
             Ok(Outcome::Done)
         })
     }
@@ -124,7 +132,10 @@ impl Action {
                 .arg("-R")
                 .arg(&path)
                 .status()?;
-            anyhow::ensure!(status.success(), "在访达中显示 {path} 失败：{status}");
+            anyhow::ensure!(
+                status.success(),
+                trf!("在访达中显示 {path} 失败：{status}", "Couldn't show {path} in Finder: {status}")
+            );
             Ok(Outcome::Done)
         })
     }
@@ -332,7 +343,7 @@ impl Item {
             badge: String::new(),
             score: 0,
             action: Action::new(|| Ok(Outcome::Done)),
-            action_title: "打开".into(),
+            action_title: tr("打开", "Open").into(),
             icon: Icon::None,
             accessories: Vec::new(),
             actions: Vec::new(),

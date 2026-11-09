@@ -8,7 +8,8 @@
 //!   等兼容实现不认 `developer`），回复取 `choices[0].message.content`。
 //! - Ollama：`POST {base}/api/chat`，`stream: false`，回复取 `message.content`。
 //!
-//! 错误一律翻译成用户看得懂的中文（Key 无效、地址不可达、超时……），并附上服务端原话。
+//! 错误一律翻译成用户看得懂的话（按界面语言：Key 无效、地址不可达、超时……），并附上服务端原话。
+//! 发给模型的提示词不经过界面语言。
 
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::config::{ModelConfig, ModelKind};
+use crate::i18n::{tr, trf};
 
 /// 单次请求的总超时。
 pub const TIMEOUT: Duration = Duration::from_secs(30);
@@ -66,11 +68,19 @@ fn base(model: &ModelConfig) -> String {
 
 pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<HttpRequest> {
     if model.model.trim().is_empty() {
-        bail!("「{}」还没有填写模型名", model.name);
+        bail!(trf!(
+            "「{}」还没有填写模型名",
+            "Enter a model name for “{}”",
+            model.name
+        ));
     }
     let key = key.map(str::trim).filter(|key| !key.is_empty());
     if needs_key(model.kind) && key.is_none() {
-        bail!("「{}」还没有填写 API Key", model.name);
+        bail!(trf!(
+            "「{}」还没有填写 API Key",
+            "Enter an API key for “{}”",
+            model.name
+        ));
     }
     let base = base(model);
     let name = model.model.trim();
@@ -163,8 +173,12 @@ pub fn send(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Str
 
 /// 取出回复文本。
 pub fn parse_reply(kind: ModelKind, body: &str) -> Result<String> {
-    let value: Value = serde_json::from_str(body)
-        .map_err(|err| anyhow!("返回内容不是 JSON，可能 Base URL 填错了：{err}"))?;
+    let value: Value = serde_json::from_str(body).map_err(|err| {
+        anyhow!(trf!(
+            "返回内容不是 JSON，可能 Base URL 填错了：{err}",
+            "The response isn't JSON; the base URL may be wrong: {err}"
+        ))
+    })?;
     let text = match kind {
         ModelKind::Anthropic => value["content"].as_array().map(|blocks| {
             blocks
@@ -180,7 +194,13 @@ pub fn parse_reply(kind: ModelKind, body: &str) -> Result<String> {
             .map(str::to_string),
         ModelKind::Ollama => value["message"]["content"].as_str().map(str::to_string),
     };
-    text.ok_or_else(|| anyhow!("返回内容里没有找到回复文本：{}", clip(body, 300)))
+    text.ok_or_else(|| {
+        anyhow!(trf!(
+            "返回内容里没有找到回复文本：{}",
+            "No reply text found in the response: {}",
+            clip(body, 300)
+        ))
+    })
 }
 
 /// 服务端返回的错误原因：Anthropic / OpenAI 是 `error.message`，Ollama 是 `error`。
@@ -197,50 +217,80 @@ fn server_message(body: &str) -> Option<String> {
 /// 把 HTTP 状态码翻译成用户能看懂的话。
 pub fn status_error(kind: ModelKind, status: u16, body: &str) -> String {
     let headline = match status {
-        401 => "API Key 无效".to_string(),
-        403 => "API Key 没有权限访问这个模型".to_string(),
-        404 if kind == ModelKind::Ollama => "本机 Ollama 里没有这个模型（先 ollama pull）".into(),
-        404 => "地址或模型名不对".to_string(),
-        408 => "服务端等待超时".to_string(),
-        413 => "文字太长了".to_string(),
-        429 => "请求太频繁，或账户额度已用完".to_string(),
-        400..=499 => "请求被拒绝".to_string(),
-        529 => "服务端繁忙，请稍后再试".to_string(),
-        500..=599 => "服务端出错，请稍后再试".to_string(),
-        _ => "意外的响应".to_string(),
+        401 => tr("API Key 无效", "Invalid API key"),
+        403 => tr(
+            "API Key 没有权限访问这个模型",
+            "This API key doesn't have access to this model",
+        ),
+        404 if kind == ModelKind::Ollama => tr(
+            "本机 Ollama 里没有这个模型（先 ollama pull）",
+            "This model isn't installed in Ollama (run ollama pull first)",
+        ),
+        404 => tr("地址或模型名不对", "Wrong address or model name"),
+        408 => tr("服务端等待超时", "The server timed out"),
+        413 => tr("文字太长了", "The text is too long"),
+        429 => tr(
+            "请求太频繁，或账户额度已用完",
+            "Too many requests, or your account is out of credit",
+        ),
+        400..=499 => tr("请求被拒绝", "Request rejected"),
+        529 => tr(
+            "服务端繁忙，请稍后再试",
+            "The server is busy; try again later",
+        ),
+        500..=599 => tr("服务端出错，请稍后再试", "Server error; try again later"),
+        _ => tr("意外的响应", "Unexpected response"),
     };
     let detail = server_message(body).unwrap_or_else(|| clip(body.trim(), 200));
     if detail.is_empty() {
-        format!("{headline}（HTTP {status}）")
+        trf!("{headline}（HTTP {status}）", "{headline} (HTTP {status})")
     } else {
-        format!("{headline}（HTTP {status}）：{detail}")
+        trf!(
+            "{headline}（HTTP {status}）：{detail}",
+            "{headline} (HTTP {status}): {detail}"
+        )
     }
 }
 
 /// 网络层错误：连不上、域名解析失败、超时、证书……
 fn transport_error(model: &ModelConfig, url: &str, err: ureq::Error) -> anyhow::Error {
     let hint = if model.kind == ModelKind::Ollama {
-        "，确认 Ollama 已经启动"
+        tr("，确认 Ollama 已经启动", "; make sure Ollama is running")
     } else {
         ""
     };
-    let message = match &err {
-        ureq::Error::Timeout(_) => format!("等了 {} 秒没有响应：{url}", TIMEOUT.as_secs()),
-        ureq::Error::HostNotFound => format!("地址不可达，找不到这个域名：{url}"),
-        ureq::Error::ConnectionFailed => format!("地址不可达，连不上 {url}{hint}"),
-        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => {
-            format!("地址不可达，连不上 {url}{hint}")
-        }
-        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => {
-            format!("等了 {} 秒没有响应：{url}", TIMEOUT.as_secs())
-        }
-        ureq::Error::BadUri(_) | ureq::Error::Http(_) => format!("Base URL 格式不对：{url}"),
-        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => {
-            format!("HTTPS 证书校验失败：{url}")
-        }
-        _ => format!("请求 {url} 失败"),
+    let secs = TIMEOUT.as_secs();
+    let timeout = || {
+        trf!(
+            "等了 {secs} 秒没有响应：{url}",
+            "No response after {secs} seconds: {url}"
+        )
     };
-    anyhow!("{message}（{err}）")
+    let refused = || {
+        trf!(
+            "地址不可达，连不上 {url}{hint}",
+            "Address unreachable: couldn't connect to {url}{hint}"
+        )
+    };
+    let message = match &err {
+        ureq::Error::Timeout(_) => timeout(),
+        ureq::Error::HostNotFound => trf!(
+            "地址不可达，找不到这个域名：{url}",
+            "Address unreachable: couldn't find the host for {url}"
+        ),
+        ureq::Error::ConnectionFailed => refused(),
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::ConnectionRefused => refused(),
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => timeout(),
+        ureq::Error::BadUri(_) | ureq::Error::Http(_) => {
+            trf!("Base URL 格式不对：{url}", "Invalid base URL: {url}")
+        }
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => trf!(
+            "HTTPS 证书校验失败：{url}",
+            "HTTPS certificate verification failed: {url}"
+        ),
+        _ => trf!("请求 {url} 失败", "Request to {url} failed"),
+    };
+    anyhow!(trf!("{message}（{err}）", "{message} ({err})"))
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -491,6 +541,33 @@ pub(crate) mod tests {
         let m = model(ModelKind::OpenAiCompatible, "http://127.0.0.1:9", "x");
         let err = send(&m, Some("  "), &REQ).unwrap_err().to_string();
         assert_eq!(err, "「测试模型」还没有填写 API Key");
+    }
+
+    #[test]
+    fn errors_follow_english_interface() {
+        // 测试连接、翻译失败时这些话直接显示给用户：英文界面下必须是英文，
+        // 服务端原话、HTTP 状态码照旧附上（排查要靠它们）。
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            assert_eq!(
+                status_error(
+                    ModelKind::Anthropic,
+                    401,
+                    r#"{"error":{"message":"invalid x-api-key"}}"#
+                ),
+                "Invalid API key (HTTP 401): invalid x-api-key"
+            );
+            assert_eq!(
+                status_error(ModelKind::Ollama, 404, ""),
+                "This model isn't installed in Ollama (run ollama pull first) (HTTP 404)"
+            );
+            let m = model(ModelKind::OpenAiCompatible, "http://127.0.0.1:9", "x");
+            let err = send(&m, None, &REQ).unwrap_err().to_string();
+            assert_eq!(err, "Enter an API key for “测试模型”");
+            let err = parse_reply(ModelKind::Ollama, "<html>")
+                .unwrap_err()
+                .to_string();
+            assert!(err.starts_with("The response isn't JSON"), "{err}");
+        });
     }
 
     #[test]

@@ -40,9 +40,22 @@ pub enum ArgKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Argument {
     pub kind: ArgKind,
+    /// 脚本头里写的 placeholder，没写时为空串（界面名用 `label`）。
     pub placeholder: String,
     pub optional: bool,
     pub percent_encoded: bool,
+}
+
+impl Argument {
+    /// 界面上的参数名：脚本头里的 placeholder；没写时是「参数N」（`position` 从 1 起）。
+    /// 默认名按当前语言现取，不存进解析结果——索引常驻内存，切换语言后存下的文字不会更新。
+    pub fn label(&self, position: usize) -> String {
+        if self.placeholder.is_empty() {
+            crate::i18n::trf!("参数{position}", "Argument {position}")
+        } else {
+            self.placeholder.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,8 +199,8 @@ fn parse_argument(index: usize, raw: &str) -> Result<Argument, String> {
     let placeholder = map
         .get("placeholder")
         .and_then(Value::as_str)
-        .filter(|p| !p.is_empty())
-        .map_or_else(|| format!("参数{index}"), str::to_string);
+        .unwrap_or_default()
+        .to_string();
     // 旧字段 `secure: true` 等价于 `type: password`。
     let kind = match map.get("type").and_then(Value::as_str).unwrap_or("text") {
         "text" if flag("secure") => ArgKind::Password,

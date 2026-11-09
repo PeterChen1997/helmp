@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 
+use crate::i18n::tr;
 use crate::style::Palette;
 
 /// 把一次按键转成配置字符串。只按了修饰键、或者没有 ⌘ / ⌃ / ⌥ 时返回 None：
@@ -175,8 +176,8 @@ pub struct HotkeyRecorder {
     read: Rc<dyn Fn() -> Option<String>>,
     recording: bool,
     held: Modifiers,
-    /// 按了不能用的组合时给出的提示。
-    hint: Option<&'static str>,
+    /// 按了不能用的组合（缺少 ⌘ / ⌃ / ⌥）。提示文字渲染时按当前语言取。
+    invalid: bool,
     allow_clear: bool,
     compact: bool,
     _blur: Subscription,
@@ -195,7 +196,7 @@ impl HotkeyRecorder {
         let focus = cx.focus_handle();
         let blur = cx.on_blur(&focus, window, |this: &mut Self, _, cx| {
             this.recording = false;
-            this.hint = None;
+            this.invalid = false;
             this.held = Modifiers::default();
             cx.notify();
         });
@@ -204,7 +205,7 @@ impl HotkeyRecorder {
             read: Rc::new(read),
             recording: false,
             held: Modifiers::default(),
-            hint: None,
+            invalid: false,
             allow_clear,
             compact,
             _blur: blur,
@@ -214,7 +215,7 @@ impl HotkeyRecorder {
     fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::hotkey::set_suspended(true);
         self.recording = true;
-        self.hint = None;
+        self.invalid = false;
         self.focus.focus(window, cx);
         cx.notify();
     }
@@ -222,7 +223,7 @@ impl HotkeyRecorder {
     fn stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::hotkey::set_suspended(false);
         self.recording = false;
-        self.hint = None;
+        self.invalid = false;
         self.held = Modifiers::default();
         window.blur(cx);
         cx.notify();
@@ -249,7 +250,7 @@ impl HotkeyRecorder {
                 self.stop(window, cx);
             }
             None => {
-                self.hint = Some("需要包含 ⌘、⌃ 或 ⌥");
+                self.invalid = true;
                 cx.notify();
             }
         }
@@ -274,16 +275,19 @@ impl HotkeyRecorder {
         } else {
             value.as_deref().map(hotkey_keycaps).unwrap_or_default()
         };
+        let hint = self
+            .invalid
+            .then(|| tr("需要包含 ⌘、⌃ 或 ⌥", "Include ⌘, ⌃ or ⌥"));
         let placeholder = if self.recording {
-            self.hint.unwrap_or(if self.compact {
-                "按下…"
+            hint.unwrap_or(if self.compact {
+                tr("按下…", "Press…")
             } else {
-                "按下快捷键…"
+                tr("按下快捷键…", "Press shortcut…")
             })
         } else if self.compact {
             "—"
         } else {
-            "点按以录制"
+            tr("点按以录制", "Record Shortcut")
         };
 
         let mut field = div()
@@ -314,11 +318,11 @@ impl HotkeyRecorder {
             } else {
                 pal.separator
             });
-        if caps.is_empty() || (self.recording && self.hint.is_some()) {
+        if caps.is_empty() || (self.recording && hint.is_some()) {
             field = field.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(if self.hint.is_some() {
+                    .text_color(if hint.is_some() {
                         pal.danger
                     } else {
                         pal.muted
@@ -327,7 +331,7 @@ impl HotkeyRecorder {
                     .child(placeholder),
             );
         }
-        if !(self.recording && self.hint.is_some()) {
+        if !(self.recording && hint.is_some()) {
             for cap in caps {
                 field = field.child(keycap(cap, pal));
             }

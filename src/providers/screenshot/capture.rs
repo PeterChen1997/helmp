@@ -9,9 +9,17 @@ use std::process::{Command, Output};
 use anyhow::{Context as _, Result};
 
 use super::pasteboard;
+use crate::i18n::{tr, trf};
 
-pub const NO_SCREEN_ACCESS: &str = "Helmp 没有屏幕录制权限，无法截图。\n\
-请到「系统设置 → 隐私与安全性 → 录屏与系统录音」里允许 Helmp（从终端运行时是允许该终端），然后重试。";
+pub fn no_screen_access() -> &'static str {
+    tr(
+        "Helmp 没有屏幕录制权限，无法截图。\n\
+请到「系统设置 → 隐私与安全性 → 录屏与系统录音」里允许 Helmp（从终端运行时是允许该终端），然后重试。",
+        "Helmp doesn’t have Screen Recording permission, so it can’t take screenshots.\n\
+Allow Helmp in System Settings → Privacy & Security → Screen & System Audio Recording \
+(when running from Terminal, allow that terminal app instead), then try again.",
+    )
+}
 
 pub fn has_screen_access() -> bool {
     crate::permissions::screen_recording_granted()
@@ -23,7 +31,7 @@ pub fn to_file(path: &Path) -> Result<bool> {
         .arg("-i")
         .arg(path)
         .output()
-        .context("启动 screencapture 失败")?;
+        .with_context(|| tr("启动 screencapture 失败", "Couldn't start screencapture"))?;
     judge(path.exists(), &output)
 }
 
@@ -34,7 +42,7 @@ pub fn to_clipboard() -> Result<bool> {
     let output = Command::new("screencapture")
         .args(["-i", "-c"])
         .output()
-        .context("启动 screencapture 失败")?;
+        .with_context(|| tr("启动 screencapture 失败", "Couldn't start screencapture"))?;
     judge(pb.changeCount() != before, &output)
 }
 
@@ -50,8 +58,11 @@ fn judge(produced: bool, output: &Output) -> Result<bool> {
     let stderr = stderr.trim();
     anyhow::ensure!(
         stderr.is_empty(),
-        "screencapture 失败（{}）：{stderr}",
-        output.status
+        trf!(
+            "screencapture 失败（{}）：{stderr}",
+            "screencapture failed ({}): {stderr}",
+            output.status
+        )
     );
     Ok(false)
 }

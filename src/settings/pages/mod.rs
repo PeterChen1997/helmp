@@ -32,7 +32,10 @@ impl SettingsView {
                 Ok(Ok(None)) => None,
                 Ok(Err(err)) => {
                     let _ = this.update(cx, |this, cx| {
-                        this.error = Some(format!("打开选择面板失败：{err:#}"));
+                        this.error = Some(crate::i18n::trf!(
+                            "打开选择面板失败：{err:#}",
+                            "Couldn't open the file picker: {err:#}"
+                        ));
                         cx.notify();
                     });
                     None
