@@ -177,6 +177,7 @@ impl Engine {
             });
             let engine = self.clone();
             let (id, query, scope) = (entry.id.clone(), entry.query.clone(), entry.scope.clone());
+            let name = title.clone();
             items.push(Item {
                 id: format!("{RECENT_ID_PREFIX}{}", entry.id),
                 title,
@@ -187,9 +188,10 @@ impl Engine {
                 icon,
                 action: Action::new(move || {
                     let item = engine.find(&id, &query, scope.as_deref()).ok_or_else(|| {
+                        // 这句话显示在面板上：写用户认得的名字，不写 `apps:/…` 这种内部 id。
                         anyhow::anyhow!(i18n::trf!(
-                            "「{id}」已经找不到了",
-                            "\"{id}\" is no longer available"
+                            "「{name}」已经找不到了，可能已被删除或卸载",
+                            "“{name}” is no longer available. It may have been removed."
                         ))
                     })?;
                     item.action.run()
