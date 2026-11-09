@@ -216,12 +216,16 @@ pub enum Tone {
     Waiting,
     Running,
     Done,
+    // 插件 API 的一部分，界面已支持；内置插件暂时没用到。
+    #[allow(dead_code)]
     Accent,
 }
 
 /// 列表行右侧的附件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Accessory {
+    // 插件 API 的一部分，界面已支持；内置插件暂时没用到。
+    #[allow(dead_code)]
     Text(String),
     Tag {
         text: String,
