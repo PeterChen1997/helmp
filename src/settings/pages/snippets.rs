@@ -31,6 +31,8 @@ pub struct SnippetsPane {
     notice: Option<String>,
     /// 输入框占位文字按哪一代语言设置的（`i18n::generation`）。
     placeholders_for: Option<u64>,
+    /// 上次读到的片段文件修改时间：启动器里新建 / 删除后，本页重绘时跟着刷新。
+    loaded_at: Option<std::time::SystemTime>,
 }
 
 impl SnippetsPane {
@@ -46,6 +48,7 @@ impl SnippetsPane {
             error: None,
             notice: None,
             placeholders_for: None,
+            loaded_at: None,
         };
         pane.reload();
         pane
@@ -53,6 +56,7 @@ impl SnippetsPane {
 
     /// 重新读文件。文件坏了要显示原因，不能当成空列表（否则「保存」会覆盖掉用户的片段）。
     fn reload(&mut self) {
+        self.loaded_at = snippets::modified();
         match snippets::load() {
             Ok(list) => {
                 self.snippets = list;
@@ -389,6 +393,9 @@ impl SnippetsPane {
 impl Render for SnippetsPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_placeholders(window, cx);
+        if snippets::modified() != self.loaded_at {
+            self.reload();
+        }
         // 启动器里按了「编辑」：打开本页后选中那个片段。
         if let Some(id) = snippets::take_pending_edit() {
             self.reload();

@@ -351,7 +351,7 @@ mod tests {
             ("next display", "window:next-display"),
         ] {
             let mut items = provider.query(query);
-            items.sort_by(|a, b| b.score.cmp(&a.score));
+            items.sort_by_key(|item| std::cmp::Reverse(item.score));
             assert_eq!(items.first().map(|i| i.id.as_str()), Some(id), "{query}: {:?}", titles(&items));
         }
         assert!(provider.query("").is_empty());

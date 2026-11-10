@@ -59,6 +59,14 @@ pub fn load() -> Result<Vec<Snippet>> {
     store::load()
 }
 
+/// 片段文件的修改时间（设置页据此发现启动器里新建 / 删除的片段）。
+pub fn modified() -> Option<SystemTime> {
+    store::path()
+        .ok()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok())
+}
+
 /// 修改全部片段并保存（设置窗口用）。
 pub fn update<T>(f: impl FnOnce(&mut Vec<Snippet>) -> Result<T>) -> Result<T> {
     store::update(f)
@@ -88,10 +96,12 @@ pub fn import(path: &std::path::Path) -> Result<ImportReport> {
     store::update(|snippets| Ok(store::merge(snippets, incoming)))
 }
 
+/// (文件修改时间, 片段)：文件没变就不重新读。
+type Cache = Option<(Option<SystemTime>, Arc<Vec<Snippet>>)>;
+
 #[derive(Default)]
 pub struct Snippets {
-    /// (文件修改时间, 片段)：文件没变就不重新读。
-    cache: Mutex<Option<(Option<SystemTime>, Arc<Vec<Snippet>>)>>,
+    cache: Mutex<Cache>,
 }
 
 impl Snippets {
