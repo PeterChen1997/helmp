@@ -185,6 +185,9 @@ pub struct SettingsView {
     web_engine_editing: Option<String>,
     /// 表单填写有误的原因（显示时按语言取文案）。
     web_engine_error: Option<model::EngineError>,
+    /// 扩展页「文件搜索」：搜索范围、排除目录（逗号分隔），失焦或回车保存。
+    files_roots: Entity<InputState>,
+    files_excluded: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -254,6 +257,23 @@ impl SettingsView {
         let models = crate::models::settings_pane(window, cx);
         let snippets = pages::snippets_pane(window, cx);
         Self::watch_hotkey_registry(cx);
+        let files = config::get().files.clone();
+        let files_roots = Self::list_input(
+            files.roots,
+            "~",
+            |config, list| config.files.roots = list,
+            window,
+            cx,
+            &mut subscriptions,
+        );
+        let files_excluded = Self::list_input(
+            files.excluded,
+            "node_modules, target",
+            |config, list| config.files.excluded = list,
+            window,
+            cx,
+            &mut subscriptions,
+        );
 
         // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
         let page = std::env::var("HELMP_SETTINGS_PAGE")
@@ -282,8 +302,37 @@ impl SettingsView {
             web_engine_url,
             web_engine_editing: None,
             web_engine_error: None,
+            files_roots,
+            files_excluded,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// 逗号分隔的列表输入框（文件搜索的范围、排除目录）：失焦或回车时解析并保存。
+    fn list_input(
+        current: Vec<String>,
+        placeholder: &'static str,
+        apply: fn(&mut Config, Vec<String>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> Entity<InputState> {
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+            state.set_value(model::format_list(&current), window, cx);
+            state
+        });
+        subscriptions.push(cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    let list = model::parse_list(&input.read(cx).value());
+                    this.save(cx, move |config| apply(config, list));
+                }
+            },
+        ));
+        input
     }
 
     /// 插件列表来自启动器的引擎；启动器还没创建（理论上不会）时表格为空并打印原因。

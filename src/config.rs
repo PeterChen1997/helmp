@@ -27,6 +27,9 @@ pub struct Config {
     pub web_search: WebSearchConfig,
     #[serde(default)]
     pub system_commands: SystemCommandsConfig,
+    /// 文件搜索：搜索范围、排除目录、是否混入根搜索。
+    #[serde(default)]
+    pub files: FilesConfig,
     pub appearance: Appearance,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
@@ -45,6 +48,7 @@ impl Default for Config {
             screenshot: ScreenshotConfig::default(),
             web_search: WebSearchConfig::default(),
             system_commands: SystemCommandsConfig::default(),
+            files: FilesConfig::default(),
             appearance: Appearance::System,
             script_dirs: Vec::new(),
             onboarding_done: false,
@@ -355,6 +359,29 @@ impl Default for SystemCommandsConfig {
     fn default() -> Self {
         Self {
             confirm_dangerous: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct FilesConfig {
+    /// 搜索范围（目录，`~` 开头表示家目录）。
+    pub roots: Vec<String>,
+    /// 排除的目录：不含 `/` 的是目录名（任意层级都排除，如 `node_modules`），含 `/` 的是路径前缀。
+    pub excluded: Vec<String>,
+    /// 根搜索里是否混入文件结果（查询至少 2 个字符）。
+    pub in_root_search: bool,
+}
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            roots: vec!["~".into()],
+            excluded: ["node_modules", ".git", "Library", "target"]
+                .map(str::to_string)
+                .to_vec(),
+            in_root_search: true,
         }
     }
 }
