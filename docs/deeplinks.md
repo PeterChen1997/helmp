@@ -23,6 +23,8 @@ The scheme is declared in the `Info.plist` that `script/bundle.sh` writes, so li
 | `helmp://settings` | Open the settings window |
 | `helmp://settings/<page>` | Open the settings window on one page |
 | `helmp://hide` | Hide the panel |
+| `helmp://plugin/<plugin-id>/<command-id>` | Invoke a [plugin](plugins.md) command |
+| `helmp://plugin/<plugin-id>/<command-id>?q=<text>` | Same, as if you typed the command's keyword, a space and `<text>` |
 
 Extension ids for `scope/`:
 
@@ -32,7 +34,7 @@ Extension ids for `scope/`:
 | `clipboard` | Clipboard history |
 | `agents` | Agent sessions |
 
-Settings pages (case-insensitive): `general`, `extensions`, `models`, `agents`, `clipboard`, `screenshot`, `appearance`, `about`.
+Settings pages (case-insensitive): `general`, `extensions`, `plugins`, `models`, `agents`, `clipboard`, `screenshot`, `appearance`, `about`.
 
 ### Details
 
@@ -40,7 +42,8 @@ Settings pages (case-insensitive): `general`, `extensions`, `models`, `agents`, 
 - `helmp://scope/translate` without `q` behaves like the Translate hotkey: it picks up the text selected in the front app (see [privacy.md](privacy.md#what-helmp-reads-but-doesnt-store) for how). With `q`, that text is translated instead and nothing is read from the front app.
 - If the extension is turned off in Settings › Extensions, or the id doesn't exist, the panel still opens and Helmp prints `helmp: 没有名为 <id> 的范围（扩展可能被停用）` to stderr.
 - A link Helmp doesn't understand (unknown path, unknown settings page) is ignored and reported on stderr as `helmp: 不认识的链接 <url>`. Run Helmp from a terminal (`target/release/Helmp.app/Contents/MacOS/helmp`) to see these messages.
-- Deep links never send anything over the network.
+- `plugin/` links run a command right away only when it just opens a link (the Quick Search commands, for example) and nothing required is missing. Commands with a form, an HTTP request, a script or clipboard access are shown in the panel instead and wait for you to press Return, so a link on a web page can't submit anything on your behalf. If the plugin or command doesn't exist or is turned off, the panel opens and Helmp prints the reason to stderr (`helmp: 深链接 plugin/<plugin-id>/<command-id>：…`).
+- Deep links never send anything over the network themselves (a plugin command that opens a web page hands it to your browser).
 
 ### Examples
 
@@ -53,6 +56,12 @@ open "helmp://scope/clipboard?q=invoice"
 
 # Jump to the model settings
 open "helmp://settings/models"
+
+# Search npm with the bundled Quick Search plugin
+open "helmp://plugin/dev.helmp.quicklinks/npm?q=react"
+
+# Show the flomo form pre-filled (you still press Return to save)
+open "helmp://plugin/dev.helmp.flomo/memo?q=%23idea%20write%20docs"
 ```
 
 ## 简体中文
@@ -76,6 +85,8 @@ open "helmp://show?q=wx"
 | `helmp://settings` | 打开设置窗口 |
 | `helmp://settings/<页面>` | 打开设置窗口的某一页 |
 | `helmp://hide` | 收起面板 |
+| `helmp://plugin/<插件 id>/<命令 id>` | 调用某个[插件](plugins.zh-CN.md)命令 |
+| `helmp://plugin/<插件 id>/<命令 id>?q=<文字>` | 同上，相当于输入命令的关键词、空格和 `<文字>` |
 
 `scope/` 可用的扩展 id：
 
@@ -85,7 +96,7 @@ open "helmp://show?q=wx"
 | `clipboard` | 剪贴板历史 |
 | `agents` | Agent 会话 |
 
-设置页面（不区分大小写）：`general`（通用）、`extensions`（扩展）、`models`（模型）、`agents`（Agent）、`clipboard`（剪贴板）、`screenshot`（截图）、`appearance`（外观）、`about`（关于）。
+设置页面（不区分大小写）：`general`（通用）、`extensions`（扩展）、`plugins`（插件）、`models`（模型）、`agents`（Agent）、`clipboard`（剪贴板）、`screenshot`（截图）、`appearance`（外观）、`about`（关于）。
 
 ### 细节
 
@@ -93,7 +104,8 @@ open "helmp://show?q=wx"
 - 不带 `q` 的 `helmp://scope/translate` 和翻译快捷键一样，会读取前台 App 里选中的文字（怎么读的见 [privacy.zh-CN.md](privacy.zh-CN.md#会读取但不保存的内容)）。带了 `q` 就翻译 `q` 的内容，不再读前台 App。
 - 扩展在「设置 › 扩展」里被停用、或者 id 不存在时，面板照常打开，Helmp 在 stderr 打印 `helmp: 没有名为 <id> 的范围（扩展可能被停用）`。
 - 不认识的链接（路径不对、设置页面名不对）会被忽略，并在 stderr 打印 `helmp: 不认识的链接 <url>`。想看这些信息，从终端启动 Helmp（`target/release/Helmp.app/Contents/MacOS/helmp`）。
-- 深链接不会发出任何网络请求。
+- `plugin/` 链接只有在命令只是打开一个链接（比如「快捷搜索」里的命令）、且必填内容都有时才直接执行；带表单、发 HTTP 请求、跑脚本或读写剪贴板的命令只在面板里显示出来，等你自己回车。这样网页里的链接没法替你提交任何内容。插件或命令不存在、被停用时，面板照常打开，Helmp 在 stderr 打印原因（`helmp: 深链接 plugin/<插件 id>/<命令 id>：…`）。
+- 深链接本身不会发出任何网络请求（插件命令打开网页时，是交给浏览器去打开）。
 
 ### 示例
 
@@ -106,4 +118,10 @@ open "helmp://scope/clipboard?q=%E5%8F%91%E7%A5%A8"
 
 # 直接打开模型设置
 open "helmp://settings/models"
+
+# 用自带的「快捷搜索」插件搜 npm
+open "helmp://plugin/dev.helmp.quicklinks/npm?q=react"
+
+# 打开预先填好的 flomo 表单（仍需你回车才会记录）
+open "helmp://plugin/dev.helmp.flomo/memo?q=%23%E7%81%B5%E6%84%9F%20%E5%86%99%E6%96%87%E6%A1%A3"
 ```

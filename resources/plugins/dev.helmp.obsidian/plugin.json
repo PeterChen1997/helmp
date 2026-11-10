@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.helmp.obsidian",
+  "name": "Obsidian",
+  "description": {
+    "en": "Capture a new note into an Obsidian vault with the obsidian://new URL scheme. Nothing leaves your Mac.",
+    "zh-Hans": "用 obsidian://new 链接在 Obsidian 仓库里新建一条笔记，内容不经过网络。"
+  },
+  "version": "1.0.0",
+  "author": "Helmp",
+  "homepage": "https://help.obsidian.md/Extending+Obsidian/Obsidian+URI",
+  "icon": "notebook-pen",
+  "tint": "purple",
+  "preferences": [
+    {
+      "id": "vault",
+      "type": "text",
+      "title": { "en": "Vault name", "zh-Hans": "仓库名" },
+      "description": {
+        "en": "The vault's name as shown in Obsidian's vault switcher.",
+        "zh-Hans": "Obsidian 仓库切换器里显示的仓库名字。"
+      },
+      "placeholder": "My Notes",
+      "required": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "capture",
+      "title": { "en": "Quick Capture to Obsidian", "zh-Hans": "Obsidian 快速记录" },
+      "subtitle": { "en": "New note in your vault", "zh-Hans": "在仓库里新建一条笔记" },
+      "keywords": ["obsidian", "ob", "quick capture", "速记"],
+      "form": [
+        {
+          "id": "content",
+          "type": "textarea",
+          "label": { "en": "Note", "zh-Hans": "内容" },
+          "required": true,
+          "default": "{{query}}"
+        },
+        {
+          "id": "name",
+          "type": "text",
+          "label": { "en": "Title", "zh-Hans": "标题" },
+          "required": true,
+          "default": "{{date:%Y-%m-%d %H%M}}"
+        }
+      ],
+      "action": {
+        "type": "open",
+        "url": "obsidian://new?vault={{pref.vault|url}}&name={{form.name|url}}&content={{form.content|url}}"
+      }
+    }
+  ]
+}

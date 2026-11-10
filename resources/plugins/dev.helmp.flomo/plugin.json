@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.helmp.flomo",
+  "name": "flomo",
+  "description": {
+    "en": "Save a memo to flomo through your personal webhook (a flomo PRO feature). #tags in the text become flomo tags.",
+    "zh-Hans": "用你的记录 API（flomo 会员功能）把一段文字记到 flomo，正文里的 #标签 就是 flomo 标签。"
+  },
+  "version": "1.0.0",
+  "author": "Helmp",
+  "homepage": "https://flomoapp.com/mine?source=incoming_webhook",
+  "icon": "feather",
+  "tint": "green",
+  "preferences": [
+    {
+      "id": "webhook",
+      "type": "secret",
+      "title": { "en": "Webhook URL", "zh-Hans": "记录 API 地址" },
+      "description": {
+        "en": "Copy it from flomo on the web: Account › API (flomoapp.com/mine?source=incoming_webhook). It is stored in the Keychain only.",
+        "zh-Hans": "在 flomo 网页版「账号详情 › 记录 API」复制（flomoapp.com/mine?source=incoming_webhook），只存在钥匙串里。"
+      },
+      "placeholder": "https://flomoapp.com/iwh/xxxx/yyyy/",
+      "required": true,
+      "allowedHosts": ["flomoapp.com"]
+    }
+  ],
+  "commands": [
+    {
+      "id": "memo",
+      "title": { "en": "Save to flomo", "zh-Hans": "记到 flomo" },
+      "subtitle": { "en": "Write a memo, #tags included", "zh-Hans": "写一条 MEMO，可以带 #标签" },
+      "keywords": ["flomo", "浮墨", "memo", "记一笔"],
+      "form": [
+        {
+          "id": "content",
+          "type": "textarea",
+          "label": { "en": "Memo", "zh-Hans": "内容" },
+          "placeholder": { "en": "What's on your mind? #tag", "zh-Hans": "记点什么… #标签" },
+          "required": true,
+          "default": "{{query}}"
+        }
+      ],
+      "action": {
+        "type": "http",
+        "method": "POST",
+        "url": "{{pref.webhook}}",
+        "json": { "content": "{{form.content}}" },
+        "timeoutMs": 10000,
+        "success": { "jsonPath": "code", "equals": 0, "optional": true },
+        "message": { "en": "Saved to flomo", "zh-Hans": "已记录" },
+        "errorPath": "message"
+      }
+    }
+  ]
+}

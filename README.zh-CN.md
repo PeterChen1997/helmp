@@ -185,12 +185,18 @@ date "+%Y-%m-%d %H:%M:%S %Z"
 
 更多例子见 [`examples/scripts`](examples/scripts)，完整的字段说明见 [docs/scripts.zh-CN.md](docs/scripts.zh-CN.md)。
 
+## 插件
+
+插件就是一个带声明式 `plugin.json` 的文件夹：表单、偏好设置（密钥只进钥匙串）、HTTP 请求、URL Scheme、脚本驱动的列表，不用写代码。自带 flomo、Obsidian 快速记录和「快捷搜索」（`gh`、`npm`、`crates`、`mdn`、`gt`、`zhihu`、`bili`、`xhs`）。在「设置 › 插件」里管理；你自己的插件放在 `~/Library/Application Support/Helmp/plugins/`，看过权限并启用后才生效。教程与完整参考见 [docs/plugins.zh-CN.md](docs/plugins.zh-CN.md)。
+
 ## 命令行
 
 ```bash
 cargo run -- query wx            # 打印结果：分组、标题、副标题、id
 cargo run -- run <id> [query]    # 执行某个结果
-cargo run -- providers           # 列出已注册的插件
+cargo run -- providers           # 列出已注册的 provider
+cargo run -- plugins             # 列出清单插件及其状态
+cargo run -- plugins validate <目录>   # 检查正在写的插件
 HELMP_DRY_RUN=1 cargo run -- run <id> agent   # 只打印 Agent 跳转命令，不执行
 HELMP_TRACE=1 cargo run          # 把界面事件打到 stderr
 ```

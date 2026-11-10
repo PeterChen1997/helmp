@@ -7,6 +7,7 @@
 mod hotkey;
 mod model;
 mod pages;
+mod plugins_pane;
 pub(crate) mod system;
 mod widgets;
 
@@ -160,6 +161,8 @@ pub struct SettingsView {
     hotkey: Entity<HotkeyRecorder>,
     extensions: Vec<ExtensionRow>,
     models: AnyView,
+    /// 「插件」页（清单插件的管理），整页由 `plugins_pane` 提供。
+    plugins: AnyView,
     /// 扩展页脚本目录列表里选中的一项（用于「−」）。
     selected_script_dir: Option<String>,
     /// 剪贴板页忽略列表里选中的 bundle id。
@@ -251,6 +254,7 @@ impl SettingsView {
             InputState::new(window, cx).placeholder("https://example.com/search?q={query}")
         });
         let models = crate::models::settings_pane(window, cx);
+        let plugins = plugins_pane::new(window, cx);
         Self::watch_hotkey_registry(cx);
 
         // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
@@ -266,6 +270,7 @@ impl SettingsView {
             hotkey,
             extensions,
             models,
+            plugins,
             selected_script_dir: None,
             selected_ignored_app: None,
             error: None,
@@ -530,6 +535,7 @@ impl SettingsView {
         match self.page {
             Page::General => self.render_general(pal, cx),
             Page::Extensions => self.render_extensions(pal, window, cx),
+            Page::Plugins => self.plugins.clone().into_any_element(),
             Page::Models => self.models.clone().into_any_element(),
             Page::Agents => self.render_agents(pal, cx),
             Page::Clipboard => self.render_clipboard(pal, window, cx),

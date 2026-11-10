@@ -5,6 +5,9 @@
 //! helmp://scope/<id>[?q=文字]    进入某个扩展（translate、clipboard、agents）
 //! helmp://settings[/<页面>]      打开设置（general、extensions、models、agents、clipboard、screenshot、appearance、about）
 //! helmp://hide                   收起面板
+//! helmp://plugin/<插件 id>/<命令 id>[?q=文字]
+//!                                调用插件命令：只打开链接的命令直接执行；
+//!                                表单、http、脚本类命令只在面板里显示出来，等用户回车
 //! ```
 //!
 //! 验收专用：设置了环境变量 `HELMP_SNAPSHOT_DIR` 时，`helmp://debug/snapshot?q=名字` 把 Helmp
@@ -25,6 +28,11 @@ pub enum Link {
     Scope { id: String, query: Option<String> },
     Settings { page: Option<Page> },
     Hide,
+    Plugin {
+        plugin: String,
+        command: String,
+        query: Option<String>,
+    },
     Snapshot { name: String },
 }
 
@@ -38,6 +46,15 @@ pub fn parse(url: &str) -> Option<Link> {
         .find(|(key, _)| *key == "q")
         .map(|(_, value)| percent_decode(value))
         .filter(|value| !value.is_empty());
+    if let Some(rest) = path.trim_matches('/').strip_prefix("plugin/") {
+        let (plugin, command) = rest.split_once('/')?;
+        let valid = |part: &str| !part.is_empty() && !part.contains('/');
+        return (valid(plugin) && valid(command)).then(|| Link::Plugin {
+            plugin: plugin.to_string(),
+            command: command.to_string(),
+            query: q,
+        });
+    }
     let mut parts = path.trim_matches('/').split('/');
     match (parts.next()?, parts.next()) {
         ("show" | "", None) => Some(Link::Show { query: q }),
@@ -134,6 +151,25 @@ fn open(link: Link, cx: &mut App) {
             None => crate::settings::open(cx),
         }),
         Link::Hide => LauncherHandle::update(cx, |launcher, window, cx| launcher.hide(window, cx)),
+        Link::Plugin {
+            plugin,
+            command,
+            query,
+        } => LauncherHandle::update(cx, |launcher, window, cx| {
+            let q = query.unwrap_or_default();
+            match crate::providers::plugins::link_target(&plugin, &command, &q) {
+                Ok(target) if target.run_now => launcher.run_item(target.item, window, cx),
+                Ok(target) => {
+                    launcher.show(window, cx);
+                    launcher.reset_view(window, cx);
+                    launcher.set_query(&target.query, window, cx);
+                }
+                Err(reason) => {
+                    eprintln!("helmp: 深链接 plugin/{plugin}/{command}：{reason}");
+                    launcher.show(window, cx);
+                }
+            }
+        }),
         Link::Snapshot { name } => snapshot(&name),
     }
 }
@@ -216,6 +252,22 @@ mod tests {
         );
         assert_eq!(parse("helmp://settings"), Some(Link::Settings { page: None }));
         assert_eq!(parse("helmp://hide"), Some(Link::Hide));
+        assert_eq!(
+            parse("helmp://plugin/dev.helmp.quicklinks/npm?q=react%20dom"),
+            Some(Link::Plugin {
+                plugin: "dev.helmp.quicklinks".into(),
+                command: "npm".into(),
+                query: Some("react dom".into())
+            })
+        );
+        assert_eq!(
+            parse("helmp://plugin/dev.helmp.flomo/memo"),
+            Some(Link::Plugin {
+                plugin: "dev.helmp.flomo".into(),
+                command: "memo".into(),
+                query: None
+            })
+        );
     }
 
     #[test]
@@ -225,6 +277,9 @@ mod tests {
             "helmp://settings/nope",
             "helmp://scope/",
             "helmp://launch",
+            "helmp://plugin/dev.helmp.flomo",
+            "helmp://plugin//memo",
+            "helmp://plugin/dev.helmp.flomo/memo/extra",
             "https://example.com",
         ] {
             assert_eq!(parse(url), None, "{url}");

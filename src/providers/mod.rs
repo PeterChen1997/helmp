@@ -5,6 +5,7 @@ mod apps;
 mod builtin;
 mod calculator;
 pub mod clipboard;
+pub mod plugins;
 mod screenshot;
 mod scripts;
 mod system;
@@ -24,6 +25,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(screenshot::Screenshot),
         Arc::new(clipboard::Clipboard::new()),
         Arc::new(scripts::Scripts::new()),
+        Arc::new(plugins::Plugins::new()),
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
         Arc::new(websearch::WebSearch::new()),

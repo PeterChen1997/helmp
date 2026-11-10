@@ -2,7 +2,7 @@
 
 English · [简体中文](privacy.zh-CN.md)
 
-Short version: Helmp has no account, no telemetry, no crash reporting and no update check. Everything it stores stays in one folder on your Mac. The only network requests it makes go to the model endpoints you configure for Translate.
+Short version: Helmp has no account, no telemetry, no crash reporting and no update check. Everything it stores stays in one folder on your Mac. The only network requests it makes go to the model endpoints you configure for Translate, and to the hosts of plugins you turned on when you run them.
 
 This page describes what the code does today. If you find a mismatch, please open an issue.
 
@@ -39,6 +39,8 @@ API keys for your models are stored in the macOS login Keychain as generic passw
 
 They are written when you leave the API Key field, press Return, or test the connection, and never appear in `config.json`. Remove them with Keychain Access (search for `dev.helmp.launcher`) or by deleting the model in Settings.
 
+Secret settings of [plugins](plugins.md) (the flomo webhook URL, for example) are stored the same way under service `dev.helmp.plugins`, account `<plugin id>/<setting id>`. They are written when you leave the field or press Return, never shown again in Settings, never written to `config.json`, and masked as `••••` in messages.
+
 Keychain items are tied to the signature of the app that saved them. A key saved by a self-built, ad-hoc signed Helmp may not be readable by the signed release; Helmp says so in that case, and saving the key again in Settings › Models replaces the old item.
 
 ## What Helmp reads but doesn't store
@@ -60,6 +62,7 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 
 - **Translate** sends the text you translate, plus a short instruction, to the endpoint you configured: Anthropic, an OpenAI-compatible URL, or Ollama (`http://localhost:11434` by default). Translation starts automatically when you pause typing, so a request goes out for each pause, not only when you press Return; an identical request is answered from the in-memory history instead. "Test connection" in Settings sends a small request to the same endpoint. Each request has a 30-second timeout. Helmp doesn't route these requests through any server of its own; there isn't one.
 - **Settings › Models** checks whether each Ollama endpoint you added is running (`GET <endpoint>/api/tags`, 2-second timeout).
+- **Plugins** you've turned on send requests only when you run one of their commands, and only to the hosts listed in their permissions (shown in Settings › Plugins before you turn a plugin on). For example, the bundled flomo plugin sends your memo to your flomo webhook when you press Return. Helmp checks the host again before sending and doesn't follow redirects. Plugin scripts run as you and may do anything a script command can.
 - Nothing else. There is no analytics, telemetry, crash reporting or update check. "Check for Updates" in the menu currently just shows the installed version, and the "Automatically check for updates" switch in Settings has no effect yet.
 
 Things that may reach the network because *you* asked for them: web search results (<kbd>↵</kbd> opens the search URL in your default browser; Helmp itself sends nothing, and the subtitle shows the exact URL), opening a link from the clipboard history or from a QR code, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
@@ -81,5 +84,5 @@ Helmp checks permissions without triggering system prompts. Every feature that n
 
 1. Quit Helmp and delete `Helmp.app`.
 2. Delete `~/Library/Application Support/Helmp/`.
-3. In Keychain Access, delete items whose name is `dev.helmp.launcher`.
+3. In Keychain Access, delete items whose name is `dev.helmp.launcher` or `dev.helmp.plugins`.
 4. Optionally remove Helmp from System Settings › Privacy & Security (Accessibility, Screen Recording, Automation) and from Login Items.
