@@ -55,7 +55,6 @@ Helmp is a single Rust binary. The UI is drawn with [GPUI](https://www.gpui.rs) 
 | `src/onboarding/` | First-run permission window and the drag-to-authorize card shown on top of System Settings. |
 | `src/permissions.rs` | Read-only checks for Accessibility and Screen Recording. Never triggers a system prompt. |
 | `src/icons.rs` | Renders app / file icons to PNG in `<data_dir>/icon-cache/` on a background thread. |
-| `src/input_source.rs` | Switches to the ABC layout while the panel is visible and restores the previous input method on hide. |
 | `src/paths.rs` | Data folder: `~/Library/Application Support/Helmp/`, overridable with `HELMP_DATA_DIR`. |
 | `src/style.rs` | Light and dark palettes shared by the panel, settings and onboarding. |
 | `src/dock.rs` | Temporarily shows a Dock icon while a regular window (settings, onboarding) is open. |

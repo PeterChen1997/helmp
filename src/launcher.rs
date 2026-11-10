@@ -149,7 +149,6 @@ pub struct Launcher {
     hidden_at: Option<Instant>,
     /// 上次唤起后执行过结果，下次唤起清空。
     executed: bool,
-    input_source: crate::input_source::InputSourceSwitch,
     scroll: ScrollHandle,
     /// 渲染时记录：第 i 个结果在滚动容器里是第几个子元素（小节标题也占位）。
     row_children: Vec<usize>,
@@ -239,7 +238,6 @@ impl Launcher {
             visible: false,
             hidden_at: None,
             executed: false,
-            input_source: Default::default(),
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
             lang_generation: crate::i18n::generation(),
@@ -368,7 +366,6 @@ impl Launcher {
         }
         self.sync_language(window, cx);
         crate::panel::show(window, cx);
-        self.input_source.on_show();
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
         cx.notify();
@@ -380,7 +377,6 @@ impl Launcher {
         self.actions_open = false;
         self.hidden_at = Some(Instant::now());
         crate::panel::hide(window);
-        self.input_source.on_hide();
         cx.notify();
     }
 

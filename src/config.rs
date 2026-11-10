@@ -61,7 +61,6 @@ pub struct General {
     pub show_menubar_icon: bool,
     /// 隐藏超过这么多秒再唤起时清空输入；0 = 每次清空。
     pub reset_after_secs: u64,
-    pub switch_input_source: bool,
     pub panel_screen: PanelScreen,
     pub auto_check_updates: bool,
     /// 界面语言；旧配置没有这个字段时跟随系统。
@@ -75,7 +74,6 @@ impl Default for General {
             launch_at_login: false,
             show_menubar_icon: true,
             reset_after_secs: 90,
-            switch_input_source: true,
             panel_screen: PanelScreen::Mouse,
             auto_check_updates: true,
             language: Language::System,

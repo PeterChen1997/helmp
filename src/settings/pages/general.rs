@@ -162,27 +162,6 @@ impl SettingsView {
                     )
                     .into_any_element(),
                     widgets::row(
-                        widgets::label_with_help(
-                            tr("唤起时切换到英文输入法", "Switch to ABC input source when opened"),
-                            tr(
-                                "中文输入法下，拼音缩写会进入组字，按键到不了搜索框",
-                                "With a Chinese or other IME, keystrokes go to composition instead of the search field.",
-                            ),
-                            pal,
-                        ),
-                        widgets::switch(
-                            "switch-input-source",
-                            general.switch_input_source,
-                            tr("唤起时切换到英文输入法", "Switch to ABC input source when opened"),
-                            pal,
-                            cx.listener(|this, on: &bool, _, cx| {
-                                let on = *on;
-                                this.save(cx, |c| c.general.switch_input_source = on);
-                            }),
-                        ),
-                    )
-                    .into_any_element(),
-                    widgets::row(
                         widgets::label(tr("面板出现在", "Show panel on"), pal),
                         widgets::popup(
                             "panel-screen",

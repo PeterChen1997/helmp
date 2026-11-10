@@ -13,7 +13,6 @@ mod history;
 mod hotkey;
 mod i18n;
 mod icons;
-mod input_source;
 mod launcher;
 mod matcher;
 mod menubar;
