@@ -3,7 +3,9 @@
 //! - 每个插件：启用开关、版本 / 作者 / 来源、权限、出错原因；点开一行看详情并填偏好设置。
 //! - 用户插件第一次启用（或清单权限变了）先列出权限，用户点「允许并启用」才生效。
 //! - secret 偏好设置用掩码输入框，失焦或回车时写进钥匙串，界面上从不回显已存的值。
-//! - 顶部：打开插件文件夹、重新加载、新建插件（生成模板并在访达中显示）、开发者文档。
+//! - 顶部：打开插件文件夹、重新加载、新建插件（生成模板并在访达中显示）、开发者文档、插件中心（落地页）。
+//! - 「从插件中心安装」：用户点「浏览」（或通过 `helmp://install-plugin` 安装）时才联网取索引，
+//!   列出插件和安装 / 更新按钮；装好后定位到这个插件并显示权限确认卡片，从不自动启用。
 //!
 //! 插件列表每次渲染现取 `registry::current()`，目录轮询热重载后这里自然跟着变。
 
@@ -18,6 +20,7 @@ use crate::i18n::{tr, trf};
 use crate::provider::Action;
 use crate::providers::plugins::manifest::{PrefKind, Preference};
 use crate::providers::plugins::registry::{self, Entry, Source, State};
+use crate::providers::plugins::center::{self, Availability, Index, Listing};
 use crate::providers::plugins::{self, scaffold, secrets};
 use crate::style::{self, Palette};
 
@@ -46,7 +49,18 @@ pub struct PluginsPane {
     inputs: Vec<PrefInput>,
     /// 最近一次操作的结果（成功提示或错误）。
     status: Option<Result<String, String>>,
+    /// 插件中心索引：用户要看时才去取（不在后台自动联网）。
+    center: CenterState,
+    /// 正在安装的插件 id（同一时间只装一个）。
+    installing: Option<String>,
     _subscriptions: Vec<Subscription>,
+}
+
+enum CenterState {
+    Idle,
+    Loading,
+    Loaded(Arc<Index>),
+    Failed(String),
 }
 
 pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
@@ -57,6 +71,8 @@ pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
         inputs_for: None,
         inputs: Vec::new(),
         status: None,
+        center: CenterState::Idle,
+        installing: None,
         _subscriptions: Vec::new(),
     })
     .into()
@@ -252,6 +268,227 @@ impl PluginsPane {
         self.save(cx, move |config| registry::set_enabled(config, &entry, on));
     }
 
+    /// 在后台取插件中心索引。
+    fn load_center(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.center, CenterState::Loading) {
+            return;
+        }
+        self.center = CenterState::Loading;
+        cx.notify();
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result = cx
+                .background_spawn(async move {
+                    center::fetch_index(&center::registry_base(&config::get()))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.center = match result {
+                    Ok(index) => CenterState::Loaded(Arc::new(index)),
+                    Err(err) => CenterState::Failed(format!("{err:#}")),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 从插件中心安装或更新（列表里的按钮、`helmp://install-plugin`）。装好后定位到插件并弹出权限确认。
+    pub fn install_from_center(&mut self, id: String, cx: &mut Context<Self>) {
+        if center::is_bundled(&id) {
+            // 自带插件不用装：定位过去，告诉用户在这里启用。
+            self.selected = Some(id.clone());
+            self.consent = None;
+            self.status = Some(Ok(center::bundled_message(&id)));
+            cx.notify();
+            return;
+        }
+        if self.installing.is_some() {
+            return;
+        }
+        self.installing = Some(id.clone());
+        self.status = Some(Ok(trf!(
+            "正在从插件中心安装 {id}…",
+            "Installing {id} from the plugin center…"
+        )));
+        cx.notify();
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let task_id = id.clone();
+            let result = cx
+                .background_spawn(async move { center::install(&task_id) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.installing = None;
+                match result {
+                    Ok(done) => {
+                        let state = entry(&done.id).map(|entry| entry.state(&config::get()));
+                        this.selected = Some(done.id.clone());
+                        this.inputs_for = None;
+                        // 没生效（新装的、或更新后权限变了）就直接给出权限确认卡片，由用户决定。
+                        this.consent = (state != Some(State::Enabled)).then(|| done.id.clone());
+                        this.status = Some(Ok(match (&done.previous, done.up_to_date) {
+                            (_, true) => trf!("{id} 已是最新", "{id} is already up to date"),
+                            (Some(previous), false) => trf!(
+                                "已更新 {id}：{previous} → {}",
+                                "Updated {id}: {previous} → {}",
+                                done.version
+                            ),
+                            (None, false) => trf!(
+                                "已安装 {id} {}：确认权限后启用",
+                                "Installed {id} {}. Review its permissions to turn it on.",
+                                done.version
+                            ),
+                        }));
+                    }
+                    Err(err) => this.status = Some(Err(format!("{err:#}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 「从插件中心安装」分组。
+    fn center_group(&self, config: &Config, pal: &Palette, cx: &mut Context<Self>) -> Div {
+        // 一行：说明文字在左，按钮（可选）在右；按钮不拉伸。
+        let line = |text: String, error: bool, button: Option<&str>, cx: &mut Context<Self>| {
+            let text = if error {
+                widgets::error_text(text, pal)
+            } else {
+                widgets::help_text(text, pal)
+            };
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .px(px(14.))
+                .py(px(10.))
+                .child(div().flex_1().min_w_0().child(text))
+                .when_some(button, |el, label| {
+                    el.child(div().flex_none().child(widgets::push_button(
+                        "plugins-center-load",
+                        label.to_string(),
+                        false,
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.load_center(cx)),
+                    )))
+                })
+                .into_any_element()
+        };
+        let rows: Vec<AnyElement> = match &self.center {
+            CenterState::Idle => vec![line(
+                tr(
+                    "插件中心里的插件都经过维护者人工审核。安装时校验每个文件的 SHA-256，装好后默认停用。",
+                    "Every plugin in the plugin center is reviewed by a maintainer. Each file's SHA-256 is checked on install, and plugins start turned off.",
+                )
+                .into(),
+                false,
+                Some(tr("浏览插件中心", "Browse Plugin Center")),
+                cx,
+            )],
+            CenterState::Loading => vec![line(
+                tr("正在获取插件中心…", "Loading the plugin center…").into(),
+                false,
+                None,
+                cx,
+            )],
+            CenterState::Failed(err) => vec![line(
+                trf!("获取插件中心失败：{err}", "Couldn't load the plugin center: {err}"),
+                true,
+                Some(tr("重试", "Retry")),
+                cx,
+            )],
+            CenterState::Loaded(index) if index.plugins.is_empty() => vec![line(
+                tr("插件中心暂时没有插件", "The plugin center has no plugins yet").into(),
+                false,
+                None,
+                cx,
+            )],
+            CenterState::Loaded(index) => {
+                let index = Arc::clone(index);
+                let entries = registry::current();
+                index
+                    .plugins
+                    .iter()
+                    .map(|listing| {
+                        let availability = center::availability(listing, config, &entries);
+                        self.center_row(listing, availability, pal, cx)
+                    })
+                    .collect()
+            }
+        };
+        widgets::group(rows, pal)
+    }
+
+    fn center_row(
+        &self,
+        listing: &Listing,
+        availability: Availability,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let installing = self.installing.as_deref() == Some(listing.id.as_str());
+        let (label, enabled) = match &availability {
+            _ if installing => (tr("正在安装…", "Installing…").to_string(), false),
+            Availability::NotInstalled => (tr("安装", "Install").to_string(), true),
+            Availability::UpdateAvailable { .. } => {
+                (trf!("更新到 {}", "Update to {}", listing.version), true)
+            }
+            Availability::Installed => (tr("已安装", "Installed").to_string(), false),
+            Availability::Bundled => (tr("已自带", "Bundled").to_string(), false),
+            Availability::LocalConflict => {
+                (tr("本地已有同 id 插件", "Local copy exists").to_string(), false)
+            }
+        };
+        let id = listing.id.clone();
+        let button = widgets::push_button(
+            SharedString::from(format!("plugin-center-install-{}", listing.id)),
+            label,
+            !enabled || self.installing.is_some(),
+            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.install_from_center(id.clone(), cx)
+            }),
+        );
+        let mut meta = format!("v{} · {}", listing.version, listing.author);
+        if let Availability::UpdateAvailable { installed } = &availability {
+            meta.push_str(&trf!("（已装 {installed}）", " (installed: {installed})"));
+        }
+        let permissions = listing.permission_lines();
+        let permissions = if permissions.is_empty() {
+            tr("无额外权限", "No extra permissions").to_string()
+        } else {
+            permissions.join(tr("；", "; "))
+        };
+        let mut text = div()
+            .flex()
+            .flex_col()
+            .gap(px(1.))
+            .flex_1()
+            .min_w_0()
+            .child(widgets::label(listing.name.get().to_string(), pal).truncate())
+            .child(widgets::help_text(meta, pal).truncate());
+        if let Some(description) = &listing.description {
+            text = text.child(widgets::help_text(description.get().to_string(), pal));
+        }
+        text = text.child(widgets::help_text(
+            trf!("权限：{permissions}", "Permissions: {permissions}"),
+            pal,
+        ));
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .px(px(14.))
+            .py(px(8.))
+            .child(widgets::tinted_icon(
+                "puzzle",
+                crate::provider::Tint::Gray,
+                px(24.),
+            ))
+            .child(text)
+            .child(div().flex_none().child(button))
+            .into_any_element()
+    }
+
+
     fn toolbar(&self, pal: &Palette, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
@@ -314,6 +551,17 @@ impl PluginsPane {
                         Err(err) => this.status = Some(Err(format!("{err:#}"))),
                     }
                     cx.notify();
+                }),
+            ))
+            .child(widgets::push_button(
+                "plugins-center",
+                tr("插件中心", "Plugin Center"),
+                false,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    if let Err(err) = Action::open(center::CENTER_PAGE).run() {
+                        this.status = Some(Err(format!("{err:#}")));
+                        cx.notify();
+                    }
                 }),
             ))
             .child(widgets::push_button(
@@ -428,6 +676,19 @@ impl PluginsPane {
             State::Disabled => Some((state.label(), pal.muted)),
             State::NeedsConsent | State::Broken => Some((state.label(), pal.danger)),
         };
+        // 插件中心有更新的版本（索引已加载、且是从插件中心装的）。
+        let update = match &self.center {
+            CenterState::Loaded(index) => index
+                .get(&entry.id)
+                .filter(|listing| {
+                    matches!(
+                        center::availability(listing, config, std::slice::from_ref(entry)),
+                        Availability::UpdateAvailable { .. }
+                    )
+                })
+                .map(|_| tr("有更新", "Update available")),
+            _ => None,
+        };
         let id = entry.id.clone();
         let control: AnyElement = if state == State::Broken {
             // 名字后面已经标了「出错」，右侧不再重复；留空位与其他行的开关对齐。
@@ -478,6 +739,9 @@ impl PluginsPane {
                             .child(widgets::label(name, pal).truncate())
                             .when_some(tag, |el, (text, color)| {
                                 el.child(div().text_size(px(11.)).text_color(color).child(text))
+                            })
+                            .when_some(update, |el, text| {
+                                el.child(div().text_size(px(11.)).text_color(pal.accent).child(text))
                             }),
                     )
                     .child(widgets::help_text(meta, pal).truncate()),
@@ -839,6 +1103,8 @@ impl Render for PluginsPane {
                 ),
                 &pal,
             )))
+            .child(widgets::group_header(tr("从插件中心安装", "Install from Plugin Center"), &pal))
+            .child(self.center_group(&config, &pal, cx).mb(px(18.)))
             .child(widgets::group_header(tr("内置功能", "Built-in Features"), &pal))
             .child(self.builtin_group(&pal, cx))
     }

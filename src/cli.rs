@@ -8,7 +8,13 @@
 //!                               （如确认页的「确定」）。配合 HELMP_DRY_RUN=1 做端到端测试。
 //! helmp providers               列出已注册的 provider
 //! helmp plugins                 列出清单插件：状态 \t id \t 版本 \t 来源 \t 名称（出错的附原因）
-//! helmp plugins validate <目录>  校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出
+//! helmp plugins validate <目录> [--json]
+//!                               校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出；
+//!                               --json 输出 {ok, id, version, commands, permissions, permissions_text, errors}
+//! helmp plugins available       列出插件中心的插件：id \t 版本 \t 状态 \t 名称
+//! helmp plugins install <id>    从插件中心安装或更新（校验每个文件的 sha256，装好后默认停用，要在设置里确认权限）
+//! helmp plugins submit <目录> [--yes]
+//!                               以 PR 形式提交到插件中心；不带 --yes 只说明将要做什么并失败退出
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -70,11 +76,15 @@ fn plugins(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("validate") => {
-            let dir = args.get(1).context(tr(
-                "用法：helmp plugins validate <插件目录>",
-                "Usage: helmp plugins validate <plugin folder>",
+            let json = args.iter().any(|arg| arg == "--json");
+            let dir = args[1..].iter().find(|arg| *arg != "--json").context(tr(
+                "用法：helmp plugins validate <插件目录> [--json]",
+                "Usage: helmp plugins validate <plugin folder> [--json]",
             ))?;
             let entry = registry::load_dir(std::path::Path::new(dir), Source::User);
+            if json {
+                return validate_json(&entry);
+            }
             match &entry.loaded {
                 Ok(plugin) => {
                     println!(
@@ -106,11 +116,140 @@ fn plugins(args: &[String]) -> Result<()> {
                 }
             }
         }
+        Some("available") => plugins_available(),
+        Some("install") => {
+            let id = args.get(1).context(tr(
+                "用法：helmp plugins install <插件 id>",
+                "Usage: helmp plugins install <plugin id>",
+            ))?;
+            plugins_install(id)
+        }
+        Some("submit") => {
+            let yes = args.iter().any(|arg| arg == "--yes");
+            let dir = args[1..].iter().find(|arg| *arg != "--yes").context(tr(
+                "用法：helmp plugins submit <插件目录> [--yes]",
+                "Usage: helmp plugins submit <plugin folder> [--yes]",
+            ))?;
+            plugins_submit(std::path::Path::new(dir), yes)
+        }
         Some(other) => bail!(trf!(
-            "不认识的子命令 {other:?}（可用：helmp plugins、helmp plugins validate <目录>）",
-            "Unknown subcommand {other:?} (use: helmp plugins, helmp plugins validate <folder>)"
+            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、submit <目录>）",
+            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, submit <folder>)"
         )),
     }
+}
+
+/// `helmp plugins validate <目录> --json`：给注册表脚本和 agent 读的结果。失败时也打印 JSON，再以失败退出。
+fn validate_json(entry: &crate::providers::plugins::registry::Entry) -> Result<()> {
+    let value = match &entry.loaded {
+        Ok(plugin) => serde_json::json!({
+            "ok": true,
+            "id": plugin.id(),
+            "version": plugin.manifest.version,
+            "commands": plugin.manifest.commands.len(),
+            "permissions": plugin.permissions.keys(),
+            "permissions_text": plugin.permissions.describe(),
+            "errors": [],
+        }),
+        Err(errors) => serde_json::json!({
+            "ok": false,
+            "id": entry.id,
+            "version": null,
+            "commands": 0,
+            "permissions": [],
+            "permissions_text": [],
+            "errors": errors,
+        }),
+    };
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    if let Err(errors) = &entry.loaded {
+        bail!(trf!(
+            "插件校验失败：{} 个问题",
+            "Plugin validation failed: {} problem(s)",
+            errors.len()
+        ));
+    }
+    Ok(())
+}
+
+/// `helmp plugins available`：插件中心里的插件及其在本机的状态。
+fn plugins_available() -> Result<()> {
+    use crate::providers::plugins::{center, registry};
+    let config = crate::config::get();
+    let index = center::fetch_index(&center::registry_base(&config))?;
+    let entries = registry::load_all();
+    for listing in &index.plugins {
+        let state = match center::availability(listing, &config, &entries) {
+            center::Availability::Bundled => "bundled".to_string(),
+            center::Availability::NotInstalled => "not-installed".to_string(),
+            center::Availability::Installed => "installed".to_string(),
+            center::Availability::UpdateAvailable { installed } => format!("update-available({installed})"),
+            center::Availability::LocalConflict => "local-conflict".to_string(),
+        };
+        println!("{}\t{}\t{state}\t{}", listing.id, listing.version, listing.name.get());
+    }
+    Ok(())
+}
+
+fn plugins_install(id: &str) -> Result<()> {
+    use crate::providers::plugins::{center, registry};
+    let done = center::install(id)?;
+    if done.up_to_date {
+        println!(
+            "{}",
+            trf!("{id} {} 已是最新", "{id} {} is already up to date", done.version)
+        );
+        return Ok(());
+    }
+    match &done.previous {
+        Some(previous) => println!(
+            "{}",
+            trf!("已更新 {id}：{previous} → {}", "Updated {id}: {previous} → {}", done.version)
+        ),
+        None => println!("{}", trf!("已安装 {id} {}", "Installed {id} {}", done.version)),
+    }
+    println!("{}", done.dir.display());
+    let config = crate::config::get();
+    let state = registry::load_all()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.state(&config));
+    match state {
+        Some(registry::State::Enabled) => println!(
+            "{}",
+            tr("权限没有变化，保持启用。", "Permissions are unchanged; it stays turned on.")
+        ),
+        Some(registry::State::NeedsConsent) => println!(
+            "{}",
+            tr(
+                "权限有变化：在「设置 › 插件」里重新确认后才会生效。",
+                "Its permissions changed: review them in Settings › Plugins to turn it back on."
+            )
+        ),
+        _ => println!(
+            "{}",
+            tr(
+                "插件默认停用：在「设置 › 插件」里查看权限并启用。",
+                "It starts turned off: review its permissions and turn it on in Settings › Plugins."
+            )
+        ),
+    }
+    Ok(())
+}
+
+fn plugins_submit(dir: &std::path::Path, yes: bool) -> Result<()> {
+    use crate::providers::plugins::submit;
+    let plan = submit::plan(dir)?;
+    print!("{}", plan.describe());
+    if !yes {
+        bail!(tr(
+            "还没有提交：确认无误后加 --yes 再运行（替用户操作的 agent 必须先征得用户同意）",
+            "Nothing submitted yet: run again with --yes once you've confirmed (agents must ask the user first)"
+        ));
+    }
+    let url = submit::submit(&plan)?;
+    println!("{}", trf!("已提交，等待审核：{url}", "Submitted for review: {url}"));
+    Ok(())
 }
 
 fn start(engine: &Engine) {

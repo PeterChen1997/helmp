@@ -6,6 +6,20 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Plugin Center**: install reviewed plugins from [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins) in Settings › Plugins, with `helmp plugins install <id>`, or from the landing page (`helmp://install-plugin?id=…`). Every file's SHA-256 is checked, installs are atomic, and installed plugins stay off until you approve their permissions. Settings shows when an update is available. See [docs/plugin-center.md](docs/plugin-center.md).
+- `helmp plugins submit <folder>` opens a pull request to the Plugin Center with your `gh` account. It only explains what it will do unless you add `--yes`. `helmp plugins validate --json` prints the result as JSON.
+- Manifests can declare `license`.
+
+### 简体中文
+
+#### 新增
+
+- **插件中心**：在「设置 › 插件」里、用 `helmp plugins install <id>`，或者在落地页上（`helmp://install-plugin?id=…`）安装经过审核的插件（来自 [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins)）。每个文件都核对 SHA-256，安装是原子的，装好的插件在你确认权限前保持停用。有新版本时设置页会提示。见 [docs/plugin-center.zh-CN.md](docs/plugin-center.zh-CN.md)。
+- `helmp plugins submit <文件夹>` 用你的 `gh` 账号向插件中心开 PR；不加 `--yes` 只说明将要做什么。`helmp plugins validate --json` 以 JSON 输出结果。
+- 清单可以声明 `license`。
+
 ## [0.2.0] - 2026-11-10
 
 ### Added

@@ -21,6 +21,7 @@
     "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
     "author": { "type": "string", "minLength": 1 },
     "homepage": { "type": "string" },
+    "license": { "description": "SPDX license identifier, e.g. MIT. Required to publish in the Plugin Center.", "type": "string" },
     "icon": { "$ref": "#/$defs/icon" },
     "tint": { "$ref": "#/$defs/tint" },
     "permissions": {

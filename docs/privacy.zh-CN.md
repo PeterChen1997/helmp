@@ -73,6 +73,8 @@
 - **开发工具 › 公网 IP** 只在你对这一行按回车时，向 `https://api.ipify.org`（或设置 `devtools.public_ip_url` 里的地址）查询你的公网 IP。
 - 除此之外没有任何网络请求：没有统计、遥测、崩溃上报，也不检查更新。菜单里的「检查更新…」目前只会显示当前版本，设置里的「自动检查更新」开关暂时也不起作用。
 
+插件中心（「设置 › 插件 › 浏览插件中心」、`helmp plugins available` / `install`、`install-plugin` 链接）只在你使用时才从 `cdn.jsdelivr.net` 下载插件索引和插件文件，Helmp 不会在后台检查。见 [plugin-center.zh-CN.md](plugin-center.zh-CN.md)。
+
 由*你主动触发*、可能访问网络的操作：网页搜索（回车后由默认浏览器打开搜索网址，Helmp 自己不发请求，副标题里就是完整网址）、从剪贴板历史或二维码里打开链接、跳转 Claude / ChatGPT 桌面 App 的深链，以及你运行的脚本命令。
 
 翻译里的「朗读译文」用的是 macOS 自带的 `say` 命令。`helmp://` 深链接在本机处理。

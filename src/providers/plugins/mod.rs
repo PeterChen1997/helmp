@@ -11,12 +11,14 @@
 //!
 //! 开发者文档：docs/plugins.md。
 
+pub mod center;
 pub mod exec;
 pub mod manifest;
 pub mod permissions;
 pub mod registry;
 pub mod scaffold;
 pub mod secrets;
+pub mod submit;
 pub mod template;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

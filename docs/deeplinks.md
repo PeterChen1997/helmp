@@ -25,6 +25,7 @@ The scheme is declared in the `Info.plist` that `script/bundle.sh` writes, so li
 | `helmp://hide` | Hide the panel |
 | `helmp://plugin/<plugin-id>/<command-id>` | Invoke a [plugin](plugins.md) command |
 | `helmp://plugin/<plugin-id>/<command-id>?q=<text>` | Same, as if you typed the command's keyword, a space and `<text>` |
+| `helmp://install-plugin?id=<plugin-id>` | Install a plugin from the [Plugin Center](plugin-center.md) and open Settings › Plugins on it |
 
 Extension ids for `scope/`:
 
@@ -43,7 +44,8 @@ Settings pages (case-insensitive): `general`, `extensions`, `plugins`, `models`,
 - If the extension is turned off in Settings › Extensions, or the id doesn't exist, the panel still opens and Helmp prints `helmp: 没有名为 <id> 的范围（扩展可能被停用）` to stderr.
 - A link Helmp doesn't understand (unknown path, unknown settings page) is ignored and reported on stderr as `helmp: 不认识的链接 <url>`. Run Helmp from a terminal (`target/release/Helmp.app/Contents/MacOS/helmp`) to see these messages.
 - `plugin/` links run a command right away only when it just opens a link (the Quick Search commands, for example) and nothing required is missing. Commands with a form, an HTTP request, a script or clipboard access are shown in the panel instead and wait for you to press Return, so a link on a web page can't submit anything on your behalf. If the plugin or command doesn't exist or is turned off, the panel opens and Helmp prints the reason to stderr (`helmp: 深链接 plugin/<plugin-id>/<command-id>：…`).
-- Deep links never send anything over the network themselves (a plugin command that opens a web page hands it to your browser).
+- `install-plugin` downloads the plugin from the Plugin Center, checks every file's SHA-256, and opens Settings › Plugins on it with its permissions listed. The plugin stays off until you click **Allow and Turn On**, so a link on a web page can install a plugin but never turn it on. The id must be a valid plugin id. Bundled plugins aren't installed again: Settings opens on the bundled one instead. Failures (no network, a file that doesn't match) are shown on the Plugins page.
+- Apart from `install-plugin`, deep links never send anything over the network themselves (a plugin command that opens a web page hands it to your browser).
 
 ### Examples
 
@@ -87,6 +89,7 @@ open "helmp://show?q=wx"
 | `helmp://hide` | 收起面板 |
 | `helmp://plugin/<插件 id>/<命令 id>` | 调用某个[插件](plugins.zh-CN.md)命令 |
 | `helmp://plugin/<插件 id>/<命令 id>?q=<文字>` | 同上，相当于输入命令的关键词、空格和 `<文字>` |
+| `helmp://install-plugin?id=<插件 id>` | 从[插件中心](plugin-center.zh-CN.md)安装插件，并打开「设置 › 插件」定位到它 |
 
 `scope/` 可用的扩展 id：
 
@@ -105,7 +108,8 @@ open "helmp://show?q=wx"
 - 扩展在「设置 › 扩展」里被停用、或者 id 不存在时，面板照常打开，Helmp 在 stderr 打印 `helmp: 没有名为 <id> 的范围（扩展可能被停用）`。
 - 不认识的链接（路径不对、设置页面名不对）会被忽略，并在 stderr 打印 `helmp: 不认识的链接 <url>`。想看这些信息，从终端启动 Helmp（`target/release/Helmp.app/Contents/MacOS/helmp`）。
 - `plugin/` 链接只有在命令只是打开一个链接（比如「快捷搜索」里的命令）、且必填内容都有时才直接执行；带表单、发 HTTP 请求、跑脚本或读写剪贴板的命令只在面板里显示出来，等你自己回车。这样网页里的链接没法替你提交任何内容。插件或命令不存在、被停用时，面板照常打开，Helmp 在 stderr 打印原因（`helmp: 深链接 plugin/<插件 id>/<命令 id>：…`）。
-- 深链接本身不会发出任何网络请求（插件命令打开网页时，是交给浏览器去打开）。
+- `install-plugin` 从插件中心下载插件、核对每个文件的 SHA-256，然后打开「设置 › 插件」定位到它，并列出它的权限。插件在你点「允许并启用」之前一直是停用的，所以网页里的链接能帮你安装插件，但没法替你启用。id 必须是合法的插件 id。自带插件不会重复安装，设置页会直接定位到自带的那个。失败原因（没联网、文件对不上）显示在插件页上。
+- 除了 `install-plugin`，深链接本身不会发出任何网络请求（插件命令打开网页时，是交给浏览器去打开）。
 
 ### 示例
 

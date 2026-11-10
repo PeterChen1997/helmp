@@ -50,6 +50,25 @@ pub fn open_page(cx: &mut App, page: Page) {
     });
 }
 
+/// `helmp://install-plugin?id=…`：打开设置 › 插件，从插件中心安装并定位到这个插件（显示权限确认卡片）。
+pub fn install_plugin(cx: &mut App, id: &str) {
+    open_page(cx, Page::Plugins);
+    let Some(handle) = cx.try_global::<SettingsWindow>().map(|global| global.0) else {
+        return;
+    };
+    let id = id.to_string();
+    let _ = handle.update(cx, |_, window, cx| {
+        let pane = window
+            .root::<base::Root>()
+            .flatten()
+            .and_then(|root| root.read(cx).view().clone().downcast::<SettingsView>().ok())
+            .and_then(|view| view.read(cx).plugins.clone().downcast::<plugins_pane::PluginsPane>().ok());
+        if let Some(pane) = pane {
+            pane.update(cx, |pane, cx| pane.install_from_center(id, cx));
+        }
+    });
+}
+
 /// 打开（或前置）设置窗口。菜单栏「设置…」与面板里的 ⌘, 调用它。
 pub fn open(cx: &mut App) {
     let offscreen = self_test_offscreen();

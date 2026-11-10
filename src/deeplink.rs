@@ -8,6 +8,9 @@
 //! helmp://plugin/<插件 id>/<命令 id>[?q=文字]
 //!                                调用插件命令：只打开链接的命令直接执行；
 //!                                表单、http、脚本类命令只在面板里显示出来，等用户回车
+//! helmp://install-plugin?id=<插件 id>
+//!                                从插件中心安装（落地页的「在 Helmp 中安装」按钮）：下载并校验后打开
+//!                                设置 › 插件，定位到这个插件并显示权限确认卡片；从不自动启用
 //! ```
 //!
 //! 验收专用：设置了环境变量 `HELMP_SNAPSHOT_DIR` 时，`helmp://debug/snapshot?q=名字` 把 Helmp
@@ -33,6 +36,7 @@ pub enum Link {
         command: String,
         query: Option<String>,
     },
+    InstallPlugin { id: String },
     Snapshot { name: String },
 }
 
@@ -40,12 +44,15 @@ pub enum Link {
 pub fn parse(url: &str) -> Option<Link> {
     let rest = url.strip_prefix("helmp://")?;
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let q = query
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| *key == "q")
-        .map(|(_, value)| percent_decode(value))
-        .filter(|value| !value.is_empty());
+    let param = |name: &str| {
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| percent_decode(value))
+            .filter(|value| !value.is_empty())
+    };
+    let q = param("q");
     if let Some(rest) = path.trim_matches('/').strip_prefix("plugin/") {
         let (plugin, command) = rest.split_once('/')?;
         let valid = |part: &str| !part.is_empty() && !part.contains('/');
@@ -68,6 +75,10 @@ pub fn parse(url: &str) -> Option<Link> {
             .find(|page| format!("{page:?}").eq_ignore_ascii_case(slug))
             .map(|page| Link::Settings { page: Some(page) }),
         ("hide", None) => Some(Link::Hide),
+        // id 必须是合法的插件 id：网页里的链接不能借这里塞进别的东西。
+        ("install-plugin", None) => param("id")
+            .filter(|id| crate::providers::plugins::manifest::valid_id(id))
+            .map(|id| Link::InstallPlugin { id }),
         ("debug", Some("snapshot")) if snapshot_dir().is_some() => Some(Link::Snapshot {
             name: q.unwrap_or_else(|| "snapshot".into()),
         }),
@@ -170,6 +181,8 @@ fn open(link: Link, cx: &mut App) {
                 }
             }
         }),
+        // 安装要联网，放到设置页里在后台做；结果（或失败原因）显示在插件页上。
+        Link::InstallPlugin { id } => cx.defer(move |cx| crate::settings::install_plugin(cx, &id)),
         Link::Snapshot { name } => snapshot(&name),
     }
 }
@@ -268,6 +281,32 @@ mod tests {
                 query: None
             })
         );
+    }
+
+    #[test]
+    fn install_plugin_links_need_a_valid_plugin_id() {
+        // 落地页的「在 Helmp 中安装」按钮；id 不合法（空、带路径、带空格）时不认，避免网页借链接塞入别的内容。
+        assert_eq!(
+            parse("helmp://install-plugin?id=dev.helmp.flomo"),
+            Some(Link::InstallPlugin {
+                id: "dev.helmp.flomo".into()
+            })
+        );
+        assert_eq!(
+            parse("helmp://install-plugin/?id=com.example.memo&from=site"),
+            Some(Link::InstallPlugin {
+                id: "com.example.memo".into()
+            })
+        );
+        for url in [
+            "helmp://install-plugin",
+            "helmp://install-plugin?id=",
+            "helmp://install-plugin?id=..%2F..%2Fx",
+            "helmp://install-plugin?id=Evil%20Id",
+            "helmp://install-plugin/extra?id=dev.helmp.flomo",
+        ] {
+            assert_eq!(parse(url), None, "{url}");
+        }
     }
 
     #[test]
