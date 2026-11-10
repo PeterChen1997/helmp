@@ -158,7 +158,7 @@ fn unit_item(
     let with_unit = format!("{number} {}", to.symbol);
     let source = format!("{} {}", format_number(request.amount), request.from.symbol);
     let subtitle = match note {
-        Some(note) => format!("{source} = · {note}"),
+        Some(note) => format!("{source} · {note}"),
         None => format!("{source} ="),
     };
     let id = match note {
@@ -233,7 +233,7 @@ fn currency_items(request: &units::Request) -> Vec<Item> {
         items.push(Item {
             id: format!("calculator:fx:{}", to.key),
             title: with_code.clone(),
-            subtitle: format!("{source} = · {stamp}"),
+            subtitle: format!("{source} · {stamp}"),
             badge: tr("汇率", "Currency").into(),
             score: SCORE.saturating_sub(rank),
             icon: FX_ICON,

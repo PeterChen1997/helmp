@@ -243,6 +243,8 @@ pub enum Icon {
     File(PathBuf),
     /// 内置符号：Lucide 图标名（kebab-case，如 `scan-text`），白色画在彩色底块上。
     Symbol { name: &'static str, tint: Tint },
+    /// 一个字符（emoji、符号），按图标大小直接画成文字。
+    Glyph(String),
 }
 
 /// 状态色调，对应设计稿：等你（橙）、运行中（蓝）、已完成（绿）、空闲 / 中性（灰）。

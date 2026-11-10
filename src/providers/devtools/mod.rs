@@ -327,16 +327,18 @@ impl Out {
     fn into_item(self, score: u32) -> Item {
         let tool = tool(self.tool);
         let icon = icon(tool.map_or("wrench", |t| t.icon));
-        let single_line: String = self
-            .value
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .chars()
-            .take(TITLE_CHARS)
-            .collect();
-        let truncated = single_line.chars().count() < self.value.chars().count();
-        let title = if truncated {
+        // 多行结果（格式化后的 JSON 等）压成一行做标题：只取第一行会只剩一个「{」，看不出内容。
+        let multi_line = self.value.contains('\n');
+        let flat = if multi_line {
+            self.value.split_whitespace().collect::<Vec<_>>().join(" ")
+        } else {
+            self.value.clone()
+        };
+        let cut = flat.chars().count() > TITLE_CHARS;
+        let single_line: String = flat.chars().take(TITLE_CHARS).collect();
+        // 标题没把结果原样完整显示出来（截断或压成了一行）时，详情区给出完整结果。
+        let truncated = cut || multi_line;
+        let title = if cut {
             format!("{single_line}…")
         } else {
             single_line

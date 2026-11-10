@@ -415,27 +415,28 @@ fn public_ip_is_fetched_only_on_return_from_the_configured_url() {
 fn emoji_search_in_chinese_pinyin_and_english_then_paste() {
     // 中文、拼音、英文都能搜到同一个 emoji；回车粘贴，⌘C 只复制。
     let h = Helmp::new();
-    let cat = h.find("emoji 猫", |r| r.title.starts_with('🐱'));
-    assert_eq!(cat.id, "emoji:1f431");
+    // 字符画在图标位，标题只有名字：按码点 id 认。
+    let cat = h.find("emoji 猫", |r| r.id == "emoji:1f431");
+    assert_eq!(cat.title, "cat face");
     assert_eq!(
         h.find("emoji cat face", |r| r.id == "emoji:1f431").title,
-        "🐱  cat face"
+        "cat face"
     );
     assert!(
         h.query(":xiao")
             .iter()
             .take(10)
-            .any(|r| r.title.starts_with('😄')),
+            .any(|r| r.id == "emoji:1f604"),
         "拼音"
     );
     assert!(
         h.query("emoji smile")
             .iter()
             .take(8)
-            .any(|r| r.title.starts_with('😄'))
+            .any(|r| r.id == "emoji:1f604")
     );
     assert_eq!(
-        h.find("符号 约等于", |r| r.title.starts_with('≈')).badge,
+        h.find("符号 约等于", |r| r.id == "emoji:2248").badge,
         "Symbols"
     );
     assert_eq!(

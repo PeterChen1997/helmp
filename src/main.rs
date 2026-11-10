@@ -119,6 +119,8 @@ fn run_gui(engine: Engine) {
 /// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
 /// - `HELMP_SELF_TEST_HOTKEY`：可选，执行某个扩展的全局快捷键命令（如 `translate`）。
 /// - `HELMP_SELF_TEST_KEYS`：可选，模拟按键序列，每步后报告焦点、表单与结果（见下）。
+/// - `HELMP_SELF_TEST_SETTINGS`：可选，在屏幕外打开设置窗口的某一页（页面名中英文都行），
+///   之后的按键、`click:` / `scroll:` 和 `snap:` 都作用于设置窗口。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
     use std::time::{Duration, Instant};
 
@@ -207,6 +209,24 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
             }
         }
 
+        // HELMP_SELF_TEST_SETTINGS=<页面名>：在屏幕外打开设置窗口的这一页（不激活、不抢焦点），
+        // 之后的按键、点击、滚动和截图都作用于设置窗口。
+        let mut target = window;
+        if let Ok(name) = std::env::var("HELMP_SELF_TEST_SETTINGS") {
+            match settings::Page::from_name(&name) {
+                Some(page) => {
+                    cx.update(|cx| settings::open_page(cx, page));
+                    cx.background_executor().timer(settle).await;
+                    match cx.update(|cx| settings::window_handle(cx)) {
+                        Some(handle) => target = handle,
+                        None => println!("self-test 设置窗口没有打开"),
+                    }
+                }
+                None => println!("self-test 没有这个设置页：{name}"),
+            }
+        }
+        let on_settings = target != window;
+
         // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入，
         // `wait:<秒>` 干等，`snap:<名字>` 截图（需 `--features readme-shots`，见 docs/images/README.md）。
         // 每步之后打印范围、焦点、表单和结果；最后一步多等一会儿，留给输入即译和模型调用。
@@ -218,17 +238,79 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     cx.background_executor().timer(Duration::from_secs(secs)).await;
                     continue;
                 }
+                // `click:<x>,<y>` 在窗口坐标处单击；`scroll:<x>,<y>,<dy>` 在那里滚动（dy 为负 = 往下翻）。
+                let numbers = |rest: &str| -> Vec<f32> {
+                    rest.split(',').filter_map(|n| n.trim().parse().ok()).collect()
+                };
+                let pointer = if let Some(rest) = token.strip_prefix("click:") {
+                    match numbers(rest)[..] {
+                        [x, y] => {
+                            let position = point(px(x), px(y));
+                            let down = MouseDownEvent {
+                                button: MouseButton::Left,
+                                position,
+                                click_count: 1,
+                                ..Default::default()
+                            };
+                            let up = MouseUpEvent {
+                                button: MouseButton::Left,
+                                position,
+                                click_count: 1,
+                                ..Default::default()
+                            };
+                            // 先把鼠标挪过去：悬停状态按上一帧的鼠标位置算，有的控件只认悬停中的点击。
+                            let hover = MouseMoveEvent {
+                                position,
+                                pressed_button: None,
+                                modifiers: Modifiers::default(),
+                            };
+                            Some(vec![
+                                PlatformInput::MouseMove(hover),
+                                PlatformInput::MouseDown(down),
+                                PlatformInput::MouseUp(up),
+                            ])
+                        }
+                        _ => None,
+                    }
+                } else if let Some(rest) = token.strip_prefix("scroll:") {
+                    match numbers(rest)[..] {
+                        [x, y, dy] => Some(vec![PlatformInput::Scroll(ScrollEvent {
+                            position: point(px(x), px(y)),
+                            delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+                            ..Default::default()
+                        })]),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(events) = pointer {
+                    for event in events {
+                        // 屏幕外的窗口系统不驱动重绘：每个事件后手动画一帧，按下 / 抬起之间的
+                        // 状态（开关等控件靠它判断一次完整的点击）才会更新。
+                        target
+                            .update(cx, |_, window, cx| {
+                                window.dispatch_event(event, cx);
+                                window.draw(cx).clear(cx);
+                            })
+                            .expect("self-test window gone");
+                        cx.background_executor().timer(Duration::from_millis(80)).await;
+                    }
+                    cx.background_executor().timer(Duration::from_millis(500)).await;
+                    continue;
+                }
                 // `snap:<名字>`：把面板此刻的画面存成 `$HELMP_SNAPSHOT_DIR/<名字>.png`（README 配图）。
                 if let Some(name) = token.strip_prefix("snap:") {
                     let dir = std::env::var_os("HELMP_SNAPSHOT_DIR").unwrap_or_else(|| ".".into());
                     let path = std::path::Path::new(&dir).join(format!("{name}.png"));
                     // 面板在屏幕外时系统不驱动重绘：手动画几帧，让图标（先生成 PNG、再异步解码）加载出来再截。
                     for _ in 0..2 {
-                        window
+                        target
                             .update(cx, |_, window, cx| {
-                                // 把鼠标「挪」到右侧详情区的空白处，免得启动时光标所在的那一行带着悬停高亮。
+                                // 把鼠标「挪」出窗口，免得启动时光标所在的那一行带着悬停高亮
+                                // （没有详情栏的列表铺满整个面板，挪到面板里哪儿都可能压着一行）。
                                 let rest = MouseMoveEvent {
-                                    position: point(px(620.), px(330.)),
+                                    position: point(px(-10.), px(-10.)),
                                     pressed_button: None,
                                     modifiers: Modifiers::default(),
                                 };
@@ -238,7 +320,7 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                             .expect("launcher window gone");
                         cx.background_executor().timer(settle).await;
                     }
-                    window
+                    target
                         .update(cx, move |_, window, cx| match panel::snapshot(window, cx, &path) {
                             Ok(()) => println!("self-test snap {}", path.display()),
                             Err(err) => println!("self-test snap {} 失败：{err:#}", path.display()),
@@ -254,12 +336,21 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                             key_char: Some(ch.to_string()),
                             ..Default::default()
                         };
-                        window
+                        target
                             .update(cx, move |_, window, cx| {
                                 window.dispatch_keystroke(stroke, cx);
                             })
                             .expect("launcher window gone");
                         cx.background_executor().timer(Duration::from_millis(30)).await;
+                    }
+                } else if on_settings {
+                    match gpui_kit::Keystroke::parse(Box::leak(token.clone().into_boxed_str())) {
+                        Ok(stroke) => target
+                            .update(cx, move |_, window, cx| {
+                                window.dispatch_keystroke(stroke, cx);
+                            })
+                            .expect("settings window gone"),
+                        Err(err) => println!("self-test 不认识的按键 {token:?}：{err}"),
                     }
                 } else {
                     // 功能键直接交给面板的按键处理（模拟分发不经过面板的捕获监听）。

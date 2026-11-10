@@ -92,7 +92,8 @@ fn stored(icon: &Icon) -> (Option<PathBuf>, bool, Option<(String, Tint)>) {
         Icon::File(path) => (Some(path.clone()), true, None),
         Icon::Image(path) => (Some(path.clone()), false, None),
         Icon::Symbol { name, tint } => (None, false, Some((name.to_string(), *tint))),
-        Icon::None => (None, false, None),
+        // 字符图标不落盘：首页格子会按原结果现查（见 engine::tile_icon）。
+        Icon::None | Icon::Glyph(_) => (None, false, None),
     }
 }
 

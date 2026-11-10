@@ -401,9 +401,15 @@ impl PluginsPane {
                     plugins::icon_for(plugin, None, None),
                 )
             }
+            // 加载失败：副标题直接写出错原因（第一条），不用点开才知道哪里坏了。
             None => (
                 entry.id.clone(),
-                entry.source.label().to_string(),
+                match &entry.loaded {
+                    Err(errors) if !errors.is_empty() => {
+                        format!("{} · {}", entry.source.label(), errors.join(tr("；", "; ")))
+                    }
+                    _ => entry.source.label().to_string(),
+                },
                 crate::provider::Icon::Symbol {
                     name: "triangle-alert",
                     tint: crate::provider::Tint::Red,
@@ -424,7 +430,8 @@ impl PluginsPane {
         };
         let id = entry.id.clone();
         let control: AnyElement = if state == State::Broken {
-            widgets::error_text(tr("出错", "Error"), pal).into_any_element()
+            // 名字后面已经标了「出错」，右侧不再重复；留空位与其他行的开关对齐。
+            div().w(px(46.)).into_any_element()
         } else {
             let entry_for_switch = entry.clone();
             widgets::switch(
@@ -433,6 +440,9 @@ impl PluginsPane {
                 &trf!("启用{name}", "Enable {name}"),
                 pal,
                 cx.listener(move |this, on: &bool, _, cx| {
+                    // 开关在可点击的整行里：不拦住的话，这次点击还会冒泡到行上「收起详情」，
+                    // 刚弹出的权限确认卡片立刻被清掉，用户插件就怎么也开不了。
+                    cx.stop_propagation();
                     this.set_enabled(&entry_for_switch, *on, cx)
                 }),
             )

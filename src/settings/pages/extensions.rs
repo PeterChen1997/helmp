@@ -1,5 +1,6 @@
 //! 扩展（设计稿 SettingsExtensions）：插件表格 + 脚本目录。
 
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -97,7 +98,8 @@ impl SettingsView {
                     .child(name),
             );
             if let Some(note) = meta.note {
-                title = title.child(widgets::help_text(note, pal).truncate());
+                // 说明可以折行：英文的「需要辅助功能权限」之类一截断就看不出要做什么。
+                title = title.child(widgets::help_text(note, pal));
             }
             let alias = div()
                 .flex()
@@ -110,7 +112,8 @@ impl SettingsView {
                 .border_color(pal.separator)
                 .font_family("Menlo")
                 .text_size(px(12.))
-                .child(Input::new(&row.alias).appearance(false));
+                // 默认尺寸的输入框自带 10 pt 左右内边距、14 pt 字，64 pt 宽的列里「kill」都放不下。
+                .child(Input::new(&row.alias).appearance(false).xsmall());
             let hotkey_cell = match &row.hotkey {
                 Some(recorder) => recorder.clone().into_any_element(),
                 // 这个扩展没有全局快捷键命令：不给录制框，录了也不会生效。
@@ -506,7 +509,8 @@ impl SettingsView {
                 .border_color(pal.separator)
                 .font_family("Menlo")
                 .text_size(px(12.))
-                .child(Input::new(input).appearance(false))
+                // 同别名框：默认尺寸的输入框会把字号改回 14 pt，三个目录名就塞满了。
+                .child(Input::new(input).appearance(false).xsmall())
         };
         div()
             .flex()
