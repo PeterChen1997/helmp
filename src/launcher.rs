@@ -1494,6 +1494,10 @@ fn render_detail(
                 .child(heading),
         );
     }
+    let has_result = detail
+        .blocks
+        .iter()
+        .any(|block| matches!(block, Block::Result { .. }));
     for block in &detail.blocks {
         pane = pane.child(match block {
             Block::Text(text) => div()
@@ -1508,7 +1512,7 @@ fn render_detail(
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .min_h(px(line * 2.))
+                    .min_h(px(line * 3.))
                     .text_size(px(size))
                     .line_height(px(line))
                     .text_color(pal.fg);
@@ -1556,15 +1560,17 @@ fn render_detail(
                         .line_height(px(21.))
                         .child(text.clone()),
                 ),
+            // 有可选中的结果文字时图只当参照，缩成矮条，把高度让给文字。
             Block::Image(path) => div()
                 .flex()
+                .flex_none()
                 .justify_center()
                 .rounded(px(12.))
                 .bg(pal.control)
                 .overflow_hidden()
                 .child(
                     img(path.clone())
-                        .max_h(px(220.))
+                        .max_h(px(if has_result { 96. } else { 220. }))
                         .max_w_full()
                         .object_fit(ObjectFit::Contain),
                 ),

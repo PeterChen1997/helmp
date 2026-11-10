@@ -568,21 +568,20 @@ fn ocr_detail(
             .into(),
         ));
     }
+    // 识别语言和尺寸压成文字下面的一行小字：面板高度有限，单独占一块键值表会把识别结果挤得只剩两行。
+    let mut caption = language_names(languages);
+    if shown.width > 0 && shown.height > 0 {
+        caption.push_str(&format!(
+            " · {} {} × {}",
+            shown.size_label, shown.width, shown.height
+        ));
+    }
+    blocks.push(Block::Caption(caption));
     if !found.codes.is_empty() {
         blocks.push(Block::Quote {
             label: tr("二维码", "QR Code").into(),
             text: found.codes.join("\n"),
         });
-    }
-    let mut metadata = vec![(
-        tr("识别语言", "Languages").to_string(),
-        language_names(languages),
-    )];
-    if shown.width > 0 && shown.height > 0 {
-        metadata.push((
-            shown.size_label.to_string(),
-            format!("{} × {}", shown.width, shown.height),
-        ));
     }
     let open_link = |url: &str, shortcut: Option<&str>| {
         NamedAction::new(tr("打开链接", "Open Link"), shortcut, Action::open(url))
@@ -643,7 +642,7 @@ fn ocr_detail(
         title,
         tag: copied.then(|| (tr("已复制", "Copied").to_string(), Tone::Done)),
         blocks,
-        metadata,
+        metadata: Vec::new(),
     }
 }
 
@@ -866,15 +865,18 @@ mod tests {
         };
         assert_eq!(detail.title, "识别到 2 行 · 中英混合");
         assert_eq!(detail.tag, None);
-        let [Block::Image(image), Block::Result { text, large: false }] = detail.blocks.as_slice()
+        let [
+            Block::Image(image),
+            Block::Result { text, large: false },
+            Block::Caption(caption),
+        ] = detail.blocks.as_slice()
         else {
             panic!("{:?}", detail.blocks);
         };
         ocr::tests::assert_fixture_text(text);
         assert!(image.starts_with(&dir.0) && image.exists());
-        assert_eq!(detail.metadata[0], ("识别语言".into(), "简体中文、英文".into()));
-        assert_eq!(detail.metadata[1].0, "图片尺寸");
-        assert!(detail.metadata[1].1.contains(" × "));
+        assert!(caption.starts_with("简体中文、英文 · 图片尺寸 "), "{caption}");
+        assert!(caption.contains(" × "), "{caption}");
         // 次级操作「复制识别结果」读的就是这次的文字。
         assert_eq!(last_text().unwrap(), *text);
     }
@@ -884,6 +886,14 @@ mod tests {
         // 路径打错要报错，不能显示「没有识别到文字」误导用户。
         let dir = TempDir::new("missing");
         assert!(ocr_file(Path::new("/nonexistent/helmp-ocr.png"), &dir.0, &[]).is_err());
+    }
+
+    /// 识别结果下面那行「语言 · 尺寸」小字。
+    fn caption_of(detail: &Detail) -> Option<&str> {
+        detail.blocks.iter().find_map(|block| match block {
+            Block::Caption(text) => Some(text.as_str()),
+            _ => None,
+        })
     }
 
     fn shown() -> Shown {
@@ -932,11 +942,8 @@ mod tests {
             Outcome::EnterScopeWith("translate", "你好 Huan 2026\nThe quick brown fox".into())
         );
         assert_eq!(
-            detail.metadata,
-            [
-                ("识别语言".to_string(), "简体中文、英文".to_string()),
-                ("区域尺寸".to_string(), "640 × 220".to_string())
-            ]
+            caption_of(&detail),
+            Some("简体中文、英文 · 区域尺寸 640 × 220")
         );
     }
 
@@ -947,10 +954,10 @@ mod tests {
         let empty = ocr_detail(&found("", &[]), &shown(), false, &["ja-JP".to_string()]);
         assert_eq!(empty.title, "没有识别到文字");
         assert_eq!(empty.tag, None);
-        assert!(matches!(&empty.blocks[..], [Block::Image(_), Block::Text(advice)] if advice.contains("没有可识别的文字")));
+        assert!(matches!(&empty.blocks[..], [Block::Image(_), Block::Text(advice), Block::Caption(_)] if advice.contains("没有可识别的文字")));
         assert_eq!(action_titles(&empty), ["再试一次"]);
         assert!(empty.actions[0].action.is_rerun());
-        assert_eq!(empty.metadata[0].1, "日文");
+        assert_eq!(caption_of(&empty), Some("日文 · 区域尺寸 640 × 220"));
     }
 
     #[test]
@@ -1082,14 +1089,8 @@ mod tests {
             assert_eq!(detail.title, "2 lines · English");
             assert_eq!(detail.tag, Some(("Copied".into(), Tone::Done)));
             assert_eq!(
-                detail.metadata,
-                [
-                    (
-                        "Languages".to_string(),
-                        "Simplified Chinese, English".to_string()
-                    ),
-                    ("Selection Size".to_string(), "640 × 220".to_string())
-                ]
+                caption_of(&detail),
+                Some("Simplified Chinese, English · Selection Size 640 × 220")
             );
             assert_eq!(
                 ocr_detail(&found("你好", &[]), &shown, false, &[]).title,
