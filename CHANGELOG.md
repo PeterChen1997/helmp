@@ -6,11 +6,27 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
 ### Added
 
 - **Plugin Center**: install reviewed plugins from [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins) in Settings › Plugins, with `helmp plugins install <id>`, or from the landing page (`helmp://install-plugin?id=…`). Every file's SHA-256 is checked, installs are atomic, and installed plugins stay off until you approve their permissions. Settings shows when an update is available. See [docs/plugin-center.md](docs/plugin-center.md).
 - `helmp plugins submit <folder>` opens a pull request to the Plugin Center with your `gh` account. It only explains what it will do unless you add `--yes`. `helmp plugins validate --json` prints the result as JSON.
 - Manifests can declare `license`.
+- **Coding agents can build and operate Helmp** (`helmp mcp`, an MCP server): Claude Code, Codex or Cursor can scaffold, validate, install and dry-run plugins from a plain request, ask you before submitting them to the Plugin Center, and search or run Helmp commands. Anything with side effects asks you in Helmp first (Return allows, Esc denies, 60 s timeout); clipboard history and session transcripts stay private by default. Connect an agent in Settings › Agents or with `helmp mcp install claude|codex|cursor` (configs are backed up first). See [docs/mcp.md](docs/mcp.md).
+- **MCP servers in the launcher** (Settings › MCP, `helmp mcp-client`): add servers from a curated list, by pasting JSON, or by importing (read-only) from Claude Code, Codex and Cursor; their tools become launcher commands with forms generated from the input schema, destructive tools ask first, secrets stay in the Keychain. Plugins can bundle MCP servers with `mcpServers`. See [docs/mcp-client.md](docs/mcp-client.md).
+
+### Changed
+
+- The panel is smaller and better proportioned: 760 × 480 instead of 880 × 540, with a 330 pt list column.
+- Opening Helmp yourself shows a welcome page with the shortcut to open it (also when you open it again while it runs; not when it starts at login).
+- Results: a single click selects and shows details, a double click runs; a double click on a clipboard item copies it instead of pasting.
+
+### Fixed
+
+- Typing in the panel with ABC and other keyboard layouts: the panel's first responder was GPUI's container view, which gets no text input context, so keys arrived but no text was inserted.
+- ⌘Space (or any shortcut) held by another launcher such as HapiGo can now be saved: Helmp names the app that probably holds it and takes the shortcut over automatically once that app lets go.
+- Vision OCR requests run one at a time, which avoids sporadic recognition errors under load.
 
 ### 简体中文
 
@@ -19,6 +35,20 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - **插件中心**：在「设置 › 插件」里、用 `helmp plugins install <id>`，或者在落地页上（`helmp://install-plugin?id=…`）安装经过审核的插件（来自 [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins)）。每个文件都核对 SHA-256，安装是原子的，装好的插件在你确认权限前保持停用。有新版本时设置页会提示。见 [docs/plugin-center.zh-CN.md](docs/plugin-center.zh-CN.md)。
 - `helmp plugins submit <文件夹>` 用你的 `gh` 账号向插件中心开 PR；不加 `--yes` 只说明将要做什么。`helmp plugins validate --json` 以 JSON 输出结果。
 - 清单可以声明 `license`。
+- **Coding agent 能开发和操作 Helmp**（`helmp mcp`，MCP 服务）：Claude Code、Codex、Cursor 可以按一句需求新建、校验、安装、演练插件，提交到插件中心前先问你，也能搜索和执行 Helmp 的命令。有副作用的操作先在 Helmp 里问你（回车允许、Esc 拒绝、60 秒超时）；剪贴板历史和会话记录默认不给。在「设置 › Agent」或用 `helmp mcp install claude|codex|cursor` 连接（改配置前先备份）。见 [docs/mcp.zh-CN.md](docs/mcp.zh-CN.md)。
+- **启动器里用 MCP 服务器**（「设置 › MCP」、`helmp mcp-client`）：从精选列表、粘贴 JSON，或只读导入 Claude Code / Codex / Cursor 里的配置添加；它们的工具变成启动器命令，按参数自动生成表单，破坏性工具先确认，密钥只存钥匙串。插件可以用 `mcpServers` 自带 MCP 服务器。见 [docs/mcp-client.zh-CN.md](docs/mcp-client.zh-CN.md)。
+
+#### 变更
+
+- 面板缩小、比例更协调：880 × 540 改为 760 × 480，列表栏 330。
+- 手动打开 Helmp 时显示欢迎页，写明唤起快捷键（运行中再次打开也会显示；登录时自动启动不弹）。
+- 结果列表：单击选中看详情，双击执行；剪贴板条目双击是复制，不是粘贴。
+
+#### 修复
+
+- 用 ABC 等键盘布局时面板里打不了字：第一响应者是 GPUI 外层的容器视图，没有文字输入上下文，按键收到了却插不进字。
+- 被 HapiGo 等其他启动器占着的 ⌘Space（或任何快捷键）现在可以保存：提示里点名可能占用的应用，对方让出后自动接管。
+- Vision 识别串行执行，避免负载高时偶发识别失败。
 
 ## [0.2.0] - 2026-11-10
 
@@ -128,6 +158,7 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PeterChen1997/helmp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/PeterChen1997/helmp/releases/tag/v0.1.0
