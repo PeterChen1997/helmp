@@ -163,7 +163,7 @@ fn ordered(schema: &Value) -> Option<Vec<(String, Value, bool)>> {
         })
         .collect();
     // 稳定排序：必填在前，其余保持原顺序。
-    fields.sort_by(|a, b| b.2.cmp(&a.2));
+    fields.sort_by_key(|field| std::cmp::Reverse(field.2));
     Some(fields)
 }
 

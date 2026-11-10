@@ -72,12 +72,13 @@ Helmp（读作 help me）是一个 Spotlight 式的 macOS 启动器：按 <kbd>�
 
 - **插件。** 一个文件夹加一份声明式的 `plugin.json`：命令可以打开网址或 URL scheme、发 HTTP 请求、运行脚本、复制或粘贴；支持表单、偏好设置（密钥只存在钥匙串里），还有由脚本输出 Alfred Script Filter JSON 的动态列表。不用写代码。自带 flomo、快捷搜索（`gh`、`npm`、`crates`、`mdn`、`gt`、`zhihu`、`bili`、`xhs`）和 Obsidian 快速记录。你自己的插件在启用前会先列出它能做什么。见[插件](#插件)。
 - **兼容 Raycast 的脚本命令。** 带 `@raycast.*` 头注释的脚本放进脚本目录就会变成一条命令。语言不限，最多三个参数（自动生成表单），支持 `silent` / `compact` / `fullOutput` 三种输出方式，标了 `needsConfirmation` 的脚本运行前会先显示确认页，每次运行最多 30 秒。
+- **MCP 服务器。** 连上 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，它们的工具就变成命令，参数表单按工具的输入 schema 自动生成。可以从 Claude Code、Codex、Cursor 一键导入，从精选（文件系统、抓网页、Git、Playwright、Context7…）里添加，或者粘贴 JSON。见 [MCP 服务器](#mcp-服务器)。
 - **`helmp://` 深链接。** 从脚本、快捷指令或别的启动器里唤起面板并带上查询、直接进入某个扩展、运行插件命令、打开某一页设置。见 [docs/deeplinks.md](docs/deeplinks.md)。
 
 一些让日常使用更顺手的细节：
 
 - 90 秒内再次唤起会保留上次的输入并全选；超过 90 秒，或者刚执行过一个结果，就从空白开始。
-- 设置窗口（通用、扩展、插件、模型、Agent、剪贴板、片段、截图、外观、关于）和首次启动的权限引导。
+- 设置窗口（通用、扩展、插件、MCP、模型、Agent、剪贴板、片段、截图、外观、关于）和首次启动的权限引导。
 - 无头命令行（`helmp query wx`、`helmp plugins`），方便写脚本和排查问题。
 
 ## 安装
@@ -229,6 +230,10 @@ date "+%Y-%m-%d %H:%M:%S %Z"
 
 自己写插件：教程与清单字段参考见 [docs/plugins.zh-CN.md](docs/plugins.zh-CN.md)，[docs/plugin-schema.json](docs/plugin-schema.json) 是给编辑器补全用的 JSON Schema。[`resources/plugins/`](resources/plugins) 里的自带插件也可以当例子看。
 
+## MCP 服务器
+
+「设置 › MCP」管理 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，它们提供的每个工具都变成启动器命令（输入工具名，填表单，回车）。添加方式：从 Claude Code、Codex、Cursor 只读导入；从内置的「精选」里添加（先给你看要运行的完整命令）；粘贴常见的 `{"mcpServers": {...}}` JSON；或者手动填写。服务器第一次用到才启动，空闲 10 分钟后停止，崩溃后退避重启，日志在数据目录的 `mcp/logs/` 里。令牌和 Key 存进钥匙串。标了破坏性的工具运行前会先确认。插件也可以自带服务器。终端里用 `helmp mcp-client list|add|remove|tools|import`。详见 [docs/mcp-client.zh-CN.md](docs/mcp-client.zh-CN.md)。
+
 ## 命令行
 
 ```bash
@@ -237,6 +242,7 @@ cargo run -- run <id> [query]    # 执行某个结果
 cargo run -- providers           # 列出已注册的 provider
 cargo run -- plugins             # 列出清单插件及其状态
 cargo run -- plugins validate <目录>   # 检查正在写的插件
+cargo run -- mcp-client list     # MCP 服务器：状态、工具数、命令（还有 add / remove / tools / import）
 HELMP_DRY_RUN=1 cargo run -- run <id> agent   # 只打印 Agent 跳转命令，不执行
 HELMP_TRACE=1 cargo run          # 把界面事件打到 stderr
 ```
@@ -247,7 +253,7 @@ HELMP_TRACE=1 cargo run          # 把界面事件打到 stderr
 cargo test --release
 ```
 
-这条命令会跑单元测试和端到端测试（`tests/e2e_*.rs`）。端到端测试用真实的 `helmp` 可执行文件，把每个功能的「查询 → 执行」走一遍：应用搜索、计算器、单位与汇率、时间、开发工具、Emoji、颜色、文件、系统设置面板、系统开关、书签、词典、窗口管理、进程与端口、片段、剪贴板、翻译、OCR、脚本命令、插件和 Agent 会话。每个用例都有自己的临时数据目录和 `HOME`，并以 `HELMP_DRY_RUN=1` 运行，复制、粘贴、打开网址、移动窗口、结束进程都只回报不执行（只有一个用例真的结束了它自己起的 `sleep` 进程）。测试不会读写你的剪贴板和钥匙串，不碰 `~/.claude`、`~/.codex`，也不会访问真实网络：HTTP 请求都发往本机的假服务。少数依赖本机环境的用例（比如要求 Spotlight 已经给仓库建好索引）标了 `#[ignore]`，用 `-- --ignored` 运行。怎么新增用例见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+这条命令会跑单元测试和端到端测试（`tests/e2e_*.rs`）。端到端测试用真实的 `helmp` 可执行文件，把每个功能的「查询 → 执行」走一遍：应用搜索、计算器、单位与汇率、时间、开发工具、Emoji、颜色、文件、系统设置面板、系统开关、书签、词典、窗口管理、进程与端口、片段、剪贴板、翻译、OCR、脚本命令、插件、MCP 服务器（对着 `examples/mock_mcp_server.rs` 编译出的假服务器）和 Agent 会话。每个用例都有自己的临时数据目录和 `HOME`，并以 `HELMP_DRY_RUN=1` 运行，复制、粘贴、打开网址、移动窗口、结束进程都只回报不执行（只有一个用例真的结束了它自己起的 `sleep` 进程）。测试不会读写你的剪贴板和钥匙串，不碰 `~/.claude`、`~/.codex`，也不会访问真实网络：HTTP 请求都发往本机的假服务。少数依赖本机环境的用例（比如要求 Spotlight 已经给仓库建好索引）标了 `#[ignore]`，用 `-- --ignored` 运行。怎么新增用例见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## Roadmap
 

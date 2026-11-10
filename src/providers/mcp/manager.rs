@@ -502,7 +502,6 @@ impl Manager {
                 Log::new(path).line("stopped");
             }
         }
-        self.with_info(key, |info| info.status = Status::Stopped);
     }
 
     /// 设置页「重启」：清零退避，重新启动并读工具。

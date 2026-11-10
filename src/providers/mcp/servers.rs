@@ -164,6 +164,39 @@ pub fn split_args(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// 设置页的「每行一个」文本 → 键值表：环境变量用 `KEY=VALUE`，请求头用 `Name: value`。
+/// 空行和 `#` 开头的行忽略；格式不对的行报出行号。
+pub fn parse_pairs(text: &str, separator: char) -> Result<BTreeMap<String, String>, String> {
+    let mut out = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(separator) else {
+            return Err(trf!(
+                "第 {} 行要写成 名字{separator}值",
+                "Line {} should be name{separator}value",
+                index + 1
+            ));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(trf!("第 {} 行缺名字", "Line {} has no name", index + 1));
+        }
+        out.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(out)
+}
+
+/// `parse_pairs` 的反向（编辑时回填）。
+pub fn format_pairs(map: &BTreeMap<String, String>, separator: &str) -> String {
+    map.iter()
+        .map(|(key, value)| format!("{key}{separator}{value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 名字看起来像密钥的环境变量 / 请求头：值自动存进钥匙串，不写进 config.json。
 pub fn looks_secret(name: &str) -> bool {
     const WORDS: [&str; 16] = [
@@ -268,6 +301,79 @@ pub fn store_secrets(mut server: ServerConfig, force_secret: &[String]) -> Resul
     }
     server.secrets.sort();
     Ok(server)
+}
+
+/// 新增（`previous` 为 None）或编辑一个用户服务器：校验 → 改名时把密钥搬到新名字下 →
+/// 删掉用户清除的密钥 → 像密钥的值挪进钥匙串 → 写 config.json → 停掉旧进程、作废工具缓存。
+/// 返回保存后的名字。
+pub fn upsert(previous: Option<&str>, server: ServerConfig, cleared: &[String]) -> Result<String> {
+    let config = crate::config::get();
+    validate(&config, &server, previous)?;
+    let mut server = server;
+    server.secrets.retain(|key| !cleared.contains(key));
+    if let Some(old) = previous {
+        for key in cleared {
+            secret_set(old, key, "")?;
+        }
+        if old != server.name {
+            for key in &server.secrets {
+                if let Some(value) = secret_get(old, key)? {
+                    secret_set(&server.name, key, &value)?;
+                    secret_set(old, key, "")?;
+                }
+            }
+        }
+    }
+    let server = store_secrets(server, &[])?;
+    let name = server.name.clone();
+    let previous = previous.map(str::to_string);
+    crate::config::update(|config| {
+        let slot = previous
+            .as_deref()
+            .and_then(|old| config.mcp.servers.iter().position(|s| s.name == old));
+        match slot {
+            Some(index) => config.mcp.servers[index] = server,
+            None => config.mcp.servers.push(server),
+        }
+    })?;
+    if let Some(old) = &previous {
+        super::manager::global().forget(old);
+    }
+    super::manager::global().forget(&name);
+    Ok(name)
+}
+
+/// 删除一个用户服务器：停进程、删密钥、删配置。
+pub fn remove(name: &str) -> Result<()> {
+    let config = crate::config::get();
+    let server = config
+        .mcp
+        .servers
+        .iter()
+        .find(|server| server.name == name)
+        .cloned()
+        .with_context(|| trf!("没有服务器 {name}", "No server {name}"))?;
+    super::manager::global().forget(name);
+    forget_secrets(&server)?;
+    crate::config::update(|config| config.mcp.servers.retain(|s| s.name != name))
+}
+
+/// 启用 / 停用、常驻开关（不动密钥）。
+pub fn set_flags(name: &str, enabled: Option<bool>, resident: Option<bool>) -> Result<()> {
+    crate::config::update(|config| {
+        if let Some(server) = config.mcp.servers.iter_mut().find(|s| s.name == name) {
+            if let Some(on) = enabled {
+                server.enabled = on;
+            }
+            if let Some(on) = resident {
+                server.resident = on;
+            }
+        }
+    })?;
+    if enabled == Some(false) {
+        super::manager::global().stop(name);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- 校验
@@ -614,6 +720,21 @@ mod tests {
         assert_eq!(config.servers[0].transport.summary(), "npx -y x");
         let again: McpConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
         assert_eq!(again, config);
+    }
+
+    #[test]
+    fn pairs_round_trip_and_bad_lines_are_reported() {
+        let env = parse_pairs("A=1\n\n# note\nB = x=y \n", '=').unwrap();
+        assert_eq!(env["A"], "1");
+        assert_eq!(env["B"], "x=y", "值里可以再有 =");
+        assert_eq!(parse_pairs(&format_pairs(&env, "="), '=').unwrap(), env);
+        let headers = parse_pairs("Authorization: Bearer a:b", ':').unwrap();
+        assert_eq!(headers["Authorization"], "Bearer a:b");
+        let err = crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            parse_pairs("A=1\noops", '=').unwrap_err()
+        });
+        assert_eq!(err, "Line 2 should be name=value");
+        assert!(parse_pairs("=x", '=').is_err());
     }
 
     #[test]

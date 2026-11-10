@@ -64,11 +64,7 @@ fn list() -> Result<()> {
 
 /// 加进配置：密钥先挪进钥匙串，再写 config.json。
 pub fn save_new(server: ServerConfig) -> Result<String> {
-    servers::validate(&crate::config::get(), &server, None)?;
-    let server = servers::store_secrets(server, &[])?;
-    let name = server.name.clone();
-    crate::config::update(|config| config.mcp.servers.push(server))?;
-    Ok(name)
+    servers::upsert(None, server, &[])
 }
 
 fn add(args: &[String]) -> Result<()> {
@@ -170,17 +166,7 @@ fn save_found(found: Vec<Found>) -> Result<()> {
 }
 
 fn remove(name: &str) -> Result<()> {
-    let config = crate::config::get();
-    let server = config
-        .mcp
-        .servers
-        .iter()
-        .find(|server| server.name == name)
-        .cloned()
-        .with_context(|| trf!("没有服务器 {name}", "No server {name}"))?;
-    manager::global().forget(name);
-    servers::forget_secrets(&server)?;
-    crate::config::update(|config| config.mcp.servers.retain(|s| s.name != name))?;
+    servers::remove(name)?;
     println!("{}", trf!("已删除 {name}", "Removed {name}"));
     Ok(())
 }

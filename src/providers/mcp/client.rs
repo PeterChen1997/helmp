@@ -74,10 +74,6 @@ impl Log {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     pub fn line(&self, text: &str) {
         let _guard = self.lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(parent) = self.path.parent() {

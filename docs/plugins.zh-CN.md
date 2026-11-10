@@ -122,7 +122,8 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `icon`、`tint` | | Lucide 图标名或插件目录里的 `.png`；底色：`blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | 只能声明 `["clipboard.read"]`（用 `{{clipboard}}` 时必须有）；其他权限都从清单推导 |
 | `preferences` | | 见下 |
-| `commands` | 是 | 至少一个 |
+| `commands` | 是* | 至少一个（*只带 `mcpServers` 的插件可以没有） |
+| `mcpServers` | | 插件带的 MCP 服务器；插件启用时它们的工具变成命令。见 [MCP 服务器](mcp-client.zh-CN.md#插件可以带服务器) |
 
 ### 偏好设置
 
@@ -198,6 +199,8 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | 写入剪贴板 | `copy` / `paste` 动作，`script` 的 `output` 为 `copy` / `paste` |
 | 向前台应用发送 ⌘V | `paste` |
 | 运行插件目录里的脚本 | `script` 动作和 `list` 命令。脚本以你的用户身份运行、不受沙盒限制：只启用你信任的插件 |
+| 运行本地程序：`npx` | `mcpServers` 里的每个 `command`（同样以你的身份运行、不受沙盒限制） |
+| 访问网络：`主机` | 也包括 `mcpServers` 里的每个 `url` |
 
 自带插件默认启用。你的插件默认停用，启用时 Helmp 记下你确认过的权限；权限变了会再问一次。
 
