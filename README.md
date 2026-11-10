@@ -19,7 +19,6 @@ Helmp (read it as "help me") is a Spotlight-style launcher for macOS. Press <kbd
 
 > **Status: early.** Helmp is under active development. A signed and notarized build is on [GitHub Releases](https://github.com/PeterChen1997/helmp/releases/latest), or you can build it from source.
 
-<!-- Screenshots: the files below are placeholders. See docs/images/README.md for the list. -->
 <p align="center">
   <img src="docs/images/screenshot-home.png" width="720" alt="Home: waiting agent sessions, recent items and quick commands">
 </p>
