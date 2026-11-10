@@ -81,14 +81,19 @@ pub fn dark() -> Palette {
 
 /// 当前应使用的配色：设置里强制浅 / 深色优先，否则跟随窗口外观。
 pub fn palette(window: &Window) -> Palette {
-    match crate::config::get().appearance {
+    let mut pal = match crate::config::get().appearance {
         Appearance::Light => light(),
         Appearance::Dark => dark(),
         Appearance::System => match window.appearance() {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => dark(),
             _ => light(),
         },
+    };
+    // 液态玻璃自己就保证了文字可读；面板再铺七成多的底色会把折射和高光盖住，调淡一些。
+    if crate::panel::liquid_glass_available() {
+        pal.panel = if pal.dark { c(0x26262999) } else { c(0xf6f6f880) };
     }
+    pal
 }
 
 /// 图标底块颜色。

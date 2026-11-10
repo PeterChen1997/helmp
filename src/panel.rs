@@ -40,26 +40,48 @@ pub fn install_glass(window: &Window) {
         return;
     };
 
-    let effect = NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), content.frame());
-    effect.setMaterial(NSVisualEffectMaterial::Popover);
-    effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-    effect.setState(NSVisualEffectState::Active);
-    effect.setMaskImage(Some(&rounded_mask(CORNER_RADIUS)));
     let fill =
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable;
-    effect.setAutoresizingMask(fill);
-
-    // GPUI 的视图挪到毛玻璃视图里面，仍然铺满窗口、仍然是第一响应者。
-    ns_window.setContentView(Some(&effect));
-    content.setFrame(effect.bounds());
-    content.setAutoresizingMask(fill);
-    effect.addSubview(&content);
+    if liquid_glass_available() {
+        // macOS 26 起用系统的液态玻璃（NSGlassEffectView）：折射、高光随背景变化，圆角由它自己裁。
+        let glass = objc2_app_kit::NSGlassEffectView::initWithFrame(
+            objc2_app_kit::NSGlassEffectView::alloc(mtm),
+            content.frame(),
+        );
+        glass.setStyle(objc2_app_kit::NSGlassEffectViewStyle::Regular);
+        glass.setCornerRadius(CORNER_RADIUS);
+        glass.setAutoresizingMask(fill);
+        ns_window.setContentView(Some(&glass));
+        content.setFrame(glass.bounds());
+        content.setAutoresizingMask(fill);
+        glass.setContentView(Some(&content));
+        crate::trace::log("面板使用液态玻璃（NSGlassEffectView）");
+    } else {
+        let effect =
+            NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), content.frame());
+        effect.setMaterial(NSVisualEffectMaterial::Popover);
+        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        effect.setState(NSVisualEffectState::Active);
+        effect.setMaskImage(Some(&rounded_mask(CORNER_RADIUS)));
+        effect.setAutoresizingMask(fill);
+        // GPUI 的视图挪到毛玻璃视图里面，仍然铺满窗口。
+        ns_window.setContentView(Some(&effect));
+        content.setFrame(effect.bounds());
+        content.setAutoresizingMask(fill);
+        effect.addSubview(&content);
+    }
     ensure_text_input(&ns_window);
 
     ns_window.setOpaque(false);
     ns_window.setBackgroundColor(Some(&NSColor::clearColor()));
     ns_window.setHasShadow(true);
     ns_window.invalidateShadow();
+}
+
+/// 系统有没有液态玻璃（macOS 26+ 的 NSGlassEffectView）。环境变量 HELMP_NO_LIQUID_GLASS 可强制退回旧毛玻璃。
+pub fn liquid_glass_available() -> bool {
+    std::env::var_os("HELMP_NO_LIQUID_GLASS").is_none()
+        && objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some()
 }
 
 /// 可拉伸的圆角遮罩：四角按 radius 保留，中间拉伸。

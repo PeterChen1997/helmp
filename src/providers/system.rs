@@ -1,5 +1,5 @@
 //! 系统命令：锁屏、睡眠、清空废纸篓、显示桌面、隐藏其他应用、切换深色模式、重启、关机、注销、
-//! 打开「系统设置」、退出所有应用。
+//! 退出所有应用（「系统设置」由应用搜索提供，这里不再重复一条）。
 //!
 //! - 匹配看中英关键词，中文名自带拼音 / 首字母（`suoping`、`sp` → 锁屏），与界面语言无关。
 //! - 危险命令（清空废纸篓、重启、关机、注销、退出所有应用）回车后先在面板里显示确认页
@@ -87,7 +87,7 @@ const fn symbol(name: &'static str, tint: Tint) -> Icon {
     Icon::Symbol { name, tint }
 }
 
-static COMMANDS: [Command; 11] = [
+static COMMANDS: [Command; 10] = [
     Command {
         key: "lock",
         title: ("锁屏", "Lock Screen"),
@@ -221,20 +221,6 @@ static COMMANDS: [Command; 11] = [
             ),
         }),
         op: Op::AppleScript(r#"tell application "System Events" to log out"#),
-    },
-    Command {
-        key: "system-settings",
-        title: ("系统设置", "System Settings"),
-        subtitle: ("打开 macOS「系统设置」", "Open macOS System Settings"),
-        keywords: &[
-            "系统设置",
-            "系统偏好设置",
-            "system settings",
-            "system preferences",
-        ],
-        icon: symbol("settings", Tint::Gray),
-        confirm: None,
-        op: Op::Run("/usr/bin/open", &["-b", "com.apple.systempreferences"]),
     },
     Command {
         key: "quit-all",
@@ -643,7 +629,6 @@ mod tests {
             "show-desktop",
             "hide-others",
             "dark-mode",
-            "system-settings",
         ] {
             let command = command(key);
             let item = find(&system, command.keywords[0], key).unwrap();
@@ -663,10 +648,6 @@ mod tests {
         assert_eq!(
             command("empty-trash").op,
             Op::AppleScript(r#"tell application "Finder" to empty trash"#)
-        );
-        assert_eq!(
-            command("system-settings").op,
-            Op::Run("/usr/bin/open", &["-b", "com.apple.systempreferences"])
         );
         assert_eq!(command("quit-all").op, Op::QuitAllApps);
         assert_eq!(command("sleep").op.render(), "/usr/bin/pmset sleepnow");
@@ -692,7 +673,6 @@ mod tests {
             ("xszm", "show-desktop"),
             ("注销", "logout"),
             ("log out", "logout"),
-            ("系统设置", "system-settings"),
             ("tcsyyy", "quit-all"),
         ] {
             assert!(

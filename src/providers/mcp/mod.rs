@@ -545,12 +545,12 @@ fn manage_items(query: &str) -> Vec<Item> {
         "install mcp server",
         "mcp add",
     ];
-    const MANAGE: [&str; 5] = [
+    // 不放「mcp settings」：只打 settings 时它会和「系统设置」同分，把整组命令顶到系统设置前面。
+    const MANAGE: [&str; 4] = [
         "MCP 服务器",
         "mcp servers",
         "管理 MCP",
         "manage mcp servers",
-        "mcp settings",
     ];
     let score = |keywords: &[&str]| {
         keywords

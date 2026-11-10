@@ -136,3 +136,22 @@ fn plugin_commands_do_not_fuzzy_match_unrelated_queries() {
     assert!(rows.first().is_some_and(|r| r.title.len() == 36), "第一条应是生成的 UUID：{rows:#?}");
     assert!(!rows.iter().any(|r| r.title.contains("Obsidian")), "{rows:#?}");
 }
+
+#[test]
+fn system_settings_come_before_helmp_settings() {
+    // 打「设置 / settings」的人多半要 macOS 的系统设置；Helmp 自己的设置单独叫「Helmp 设置」，
+    // 排在后面，而且「系统设置」只出现一次（不能应用和系统命令各一条）。
+    let h = Helmp::new();
+    for query in ["settings", "setting", "设置"] {
+        let rows = h.query(query);
+        let system = rows.iter().position(|r| r.id.ends_with("/System Settings.app"));
+        let helmp = rows.iter().position(|r| r.id == "builtin:settings");
+        assert!(system.is_some() && helmp.is_some(), "{query}: {rows:#?}");
+        assert!(system < helmp, "{query}: {rows:#?}");
+        assert_eq!(rows.first().map(|r| r.id.ends_with("/System Settings.app")), Some(true), "{query}: {rows:#?}");
+        let system_rows = rows.iter().filter(|r| r.title == "系统设置" || r.title == "System Settings").count();
+        assert_eq!(system_rows, 1, "{query}: {rows:#?}");
+    }
+    let rows = h.query("helmp settings");
+    assert_eq!(rows.first().map(|r| r.id.as_str()), Some("builtin:settings"), "{rows:#?}");
+}
