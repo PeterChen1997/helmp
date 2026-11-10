@@ -97,6 +97,12 @@ pub fn show(window: &mut Window, cx: &mut App) {
         view.setNeedsDisplay(true);
     }
     position(&ns_window);
+    if std::env::var_os("HELMP_SELF_TEST").is_some() {
+        // 图形自检不能抢用户的键盘：摆在屏幕外，也不成为 key window（按键由自检直接注入）。
+        ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
+        ns_window.orderFrontRegardless();
+        return;
+    }
     ns_window.makeKeyAndOrderFront(None);
     crate::trace::log(format!(
         "panel.show 非激活方式后：is_key={}",

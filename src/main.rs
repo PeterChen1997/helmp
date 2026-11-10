@@ -116,6 +116,7 @@ fn run_gui(engine: Engine) {
 ///
 /// - `HELMP_SELF_TEST`：用 `|` 分隔的查询词，`1` 表示只测显隐。
 /// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
+/// - `HELMP_SELF_TEST_KEYS`：可选，模拟按键序列，每步后报告焦点、表单与结果（见下）。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
     use std::time::{Duration, Instant};
 
@@ -182,6 +183,54 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 .expect("launcher window gone");
             cx.background_executor().timer(settle).await;
             report(format!("exec {query:?}"), cx);
+        }
+
+        // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入。
+        // 每步之后打印范围、焦点、表单和结果；最后一步多等一会儿，留给输入即译和模型调用。
+        if let Ok(keys) = std::env::var("HELMP_SELF_TEST_KEYS") {
+            let tokens: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
+            for (ix, token) in tokens.iter().enumerate() {
+                if let Some(text) = token.strip_prefix('~') {
+                    // 文字走窗口的正常输入路径，落到当前有焦点的输入框。
+                    for ch in text.chars() {
+                        let stroke = gpui_kit::Keystroke {
+                            key: ch.to_string(),
+                            key_char: Some(ch.to_string()),
+                            ..Default::default()
+                        };
+                        window
+                            .update(cx, move |_, window, cx| {
+                                window.dispatch_keystroke(stroke, cx);
+                            })
+                            .expect("launcher window gone");
+                        cx.background_executor().timer(Duration::from_millis(30)).await;
+                    }
+                } else {
+                    // 功能键直接交给面板的按键处理（模拟分发不经过面板的捕获监听）。
+                    let stroke = match gpui_kit::Keystroke::parse(Box::leak(token.clone().into_boxed_str())) {
+                        Ok(stroke) => stroke,
+                        Err(err) => {
+                            println!("self-test 不认识的按键 {token:?}：{err}");
+                            continue;
+                        }
+                    };
+                    let launcher = launcher.clone();
+                    window
+                        .update(cx, move |_, window, cx| {
+                            launcher.update(cx, |launcher, cx| launcher.simulate_key(stroke, window, cx));
+                        })
+                        .expect("launcher window gone");
+                }
+                let wait = if ix + 1 == tokens.len() { settle * 2 } else { Duration::from_millis(600) };
+                cx.background_executor().timer(wait).await;
+                let launcher = launcher.clone();
+                let token = token.clone();
+                window
+                    .update(cx, move |_, window, cx| {
+                        println!("self-test key {token}: {}", launcher.read(cx).debug_state(window, cx));
+                    })
+                    .expect("launcher window gone");
+            }
         }
 
         let started = Instant::now();

@@ -22,6 +22,11 @@ pub fn get_in(service: &str, account: &str) -> Result<Option<String>> {
             "The API key in the Keychain isn't valid UTF-8 text",
         ))?)),
         Err(err) if is_not_found(&err) => Ok(None),
+        // 条目存在但不让读：多半是旧签名的 Helmp 存的（钥匙串按签名授权），换签名后新程序没有权限。
+        Err(err) if is_denied(&err) => Err(err).context(tr(
+            "钥匙串不允许这个版本的 Helmp 读取已存的 Key（Helmp 更新后常见）。到设置 › 模型重新粘贴一次 Key 即可。",
+            "The Keychain won't let this version of Helmp read the saved key (common after an update). Paste the key again in Settings › Models.",
+        )),
         Err(err) => Err(err).with_context(|| {
             trf!(
                 "读取钥匙串（{service} / {account}）失败",
@@ -31,8 +36,14 @@ pub fn get_in(service: &str, account: &str) -> Result<Option<String>> {
     }
 }
 
-/// 写入（已存在则覆盖）。
+/// errSecAuthFailed / errSecInteractionNotAllowed / userCanceled：条目在，但当前程序拿不到。
+fn is_denied(err: &Error) -> bool {
+    matches!(err.code(), -25293 | -25308 | -128)
+}
+
+/// 写入：先删后建。直接覆盖会沿用旧条目的访问授权，旧签名存的 Key 换签名后仍然读不出来。
 pub fn set_in(service: &str, account: &str, key: &str) -> Result<()> {
+    delete_in(service, account)?;
     passwords::set_generic_password(service, account, key.as_bytes()).with_context(|| {
         trf!(
             "写入钥匙串（{service} / {account}）失败",

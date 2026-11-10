@@ -10,7 +10,9 @@
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{
+    Input, InputEvent, InputState, Position, Textarea, TextareaState,
+};
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -142,6 +144,8 @@ pub struct Launcher {
     revision: u64,
     result: Option<ResultView>,
     form: Option<FormState>,
+    /// 刚进入范围：下一次建出输入即译的表单（翻译）时，把焦点放进表单的文本框。
+    focus_form: bool,
     actions_open: bool,
     action_selected: usize,
     running: bool,
@@ -232,6 +236,7 @@ impl Launcher {
             revision: 0,
             result: None,
             form: None,
+            focus_form: false,
             actions_open: false,
             action_selected: 0,
             running: false,
@@ -293,6 +298,50 @@ impl Launcher {
     /// 菜单栏等需要直接查询时用（同一个引擎，结果与面板一致）。
     pub fn engine(&self) -> Engine {
         self.engine.clone()
+    }
+
+    /// 图形自检用：范围、焦点位置、表单内容和结果摘要，一行打印。
+    pub fn debug_state(&self, window: &Window, cx: &App) -> String {
+        let focus = if self.input_is_focused(window, cx) {
+            "search"
+        } else if self.form.as_ref().is_some_and(|form| form.focused(window, cx)) {
+            "form"
+        } else {
+            "none"
+        };
+        let form = self
+            .form
+            .as_ref()
+            .map(|form| {
+                let mut values: Vec<_> = form.values(cx).form.into_iter().collect();
+                values.sort();
+                format!("{values:?}")
+            })
+            .unwrap_or_default();
+        let result = self
+            .result
+            .as_ref()
+            .map(|result| {
+                let blocks: Vec<String> = result
+                    .detail
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        Block::Text(text) | Block::Caption(text) | Block::Code(text) => {
+                            Some(text.clone())
+                        }
+                        Block::Result { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                format!("{} | {}", result.detail.title, blocks.join(" | "))
+            })
+            .unwrap_or_default();
+        format!(
+            "scope={:?} query={:?} focus={focus} form={form} result={result:?}",
+            self.scope_id(),
+            self.query
+        )
     }
 
     pub fn items(&self) -> &[Item] {
@@ -467,6 +516,7 @@ impl Launcher {
         self.input
             .update(cx, |input, cx| input.set_value(rest, window, cx));
         self.input.read(cx).focus_handle(cx).focus(window, cx);
+        self.focus_form = true;
         self.refresh(cx);
     }
 
@@ -479,9 +529,12 @@ impl Launcher {
         self.recall = None;
         self.cancel_auto_run();
         self.query.clear();
+        self.focus_form = false;
         self.sync_placeholder(window, cx);
         self.input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        // 焦点可能在刚丢掉的表单里，回到搜索框。
+        self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
     }
 
@@ -609,12 +662,17 @@ impl Launcher {
 
     /// 选中项带表单时，为它建立输入框状态；换了选中项就重建。
     fn sync_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // 表单重建（如 ↑ 调出历史、换了结果）前焦点在表单里：新表单接着拿焦点，否则焦点会落空。
+        let had_focus = self
+            .form
+            .as_ref()
+            .is_some_and(|form| form.focused(window, cx));
         let Some(item) = self.items.get(self.selected) else {
-            self.form = None;
+            self.drop_form(had_focus, window, cx);
             return;
         };
         let Some(form) = item.form.clone() else {
-            self.form = None;
+            self.drop_form(had_focus, window, cx);
             return;
         };
         if self
@@ -683,6 +741,8 @@ impl Launcher {
                         window,
                         |this, _, event: &InputEvent, window, cx| {
                             if let InputEvent::Change = event {
+                                // 在表单里改了字就不再处于「翻历史」状态，↑↓ 回到移动光标。
+                                this.recall = None;
                                 this.schedule_auto_run(window, cx);
                                 cx.notify();
                             }
@@ -700,8 +760,46 @@ impl Launcher {
             states,
             _subscriptions: subscriptions,
         });
+        // 输入即译的表单（翻译）：进入范围后文字直接打在表单的文本框里，不用再点一下。
+        if (std::mem::take(&mut self.focus_form) && auto_run) || had_focus {
+            self.focus_form_field(window, cx);
+        }
         if auto_run {
             self.schedule_auto_run(window, cx);
+        }
+    }
+
+    fn drop_form(&mut self, had_focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.form = None;
+        if had_focus {
+            self.input.read(cx).focus_handle(cx).focus(window, cx);
+        }
+    }
+
+    /// 把焦点放进表单的第一个文本框；没有文本框时留在搜索框。
+    fn focus_form_field(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.form else {
+            return;
+        };
+        for state in &form.states {
+            match state {
+                // 光标放到文末（顺带聚焦）：↑ 调出的历史接着往后打，而不是插到开头。
+                FieldState::Area(area) => {
+                    area.update(cx, |area, cx| {
+                        let end = end_position(&area.value());
+                        area.set_cursor_position(end, window, cx);
+                    });
+                    return;
+                }
+                FieldState::Line(input) => {
+                    input.update(cx, |input, cx| {
+                        let end = end_position(&input.value());
+                        input.set_cursor_position(end, window, cx);
+                    });
+                    return;
+                }
+                FieldState::Select(_) => {}
+            }
         }
     }
 
@@ -981,6 +1079,16 @@ impl Launcher {
 
     // ---------- 按键 ----------
 
+    /// 图形自检用：把一个功能键（Tab、Esc、方向键、⌘K 等）直接交给面板的按键处理。
+    pub fn simulate_key(&mut self, keystroke: Keystroke, window: &mut Window, cx: &mut Context<Self>) {
+        let event = KeyDownEvent {
+            keystroke,
+            is_held: false,
+            prefer_character_input: false,
+        };
+        self.on_key_down(&event, window, cx);
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         // 在捕获阶段拦截：单行 Input 会吞掉 ↑↓，这里先于它处理。
         let keystroke = &event.keystroke;
@@ -1070,8 +1178,10 @@ impl Launcher {
         }
 
         // 范围内输入框为空时 ↑ 调出历史输入（翻译过的原文），↓ 往回翻。
+        // 焦点在空的翻译文本框里时也能翻（进入翻译后焦点默认就在那里）。
+        let form_empty = !self.form.as_ref().is_some_and(|form| form.has_text(cx));
         if !mods.modified()
-            && !form_focused
+            && (!form_focused || form_empty || self.recall.is_some())
             && self.selected == 0
             && matches!(key, "up" | "down")
             && self.step_recall(key == "up", window, cx)
@@ -1128,6 +1238,16 @@ impl Launcher {
         }
         cx.stop_propagation();
     }
+}
+
+/// 文本末尾的（行, 列）位置，列按 UTF-16 计（与输入框的 Position 一致）。
+fn end_position(text: &str) -> Position {
+    let line = text.matches('\n').count();
+    let last = text.rsplit('\n').next().unwrap_or_default();
+    Position::new(
+        u32::try_from(line).unwrap_or(u32::MAX),
+        u32::try_from(last.encode_utf16().count()).unwrap_or(u32::MAX),
+    )
 }
 
 /// `⌘⇧C`、`⌘↵`、`⌥↵` 这类显示用快捷键是否与按下的键一致。
@@ -2065,9 +2185,20 @@ mod tests {
     // 不用 `super::*`：那会把 gpui 的 `test` 宏一起导进来，盖掉标准 `#[test]`。
     use std::time::Duration;
 
-    use super::{placeholder_for, provider_of, should_reset};
+    use super::{end_position, placeholder_for, provider_of, should_reset};
 
     const LIMIT: Duration = Duration::from_secs(90);
+
+    #[test]
+    fn cursor_end_counts_lines_and_utf16_columns() {
+        // ↑ 调出历史后光标要落在文末：列按 UTF-16 算错一位，中文或 emoji 后接着打的字就会插进中间。
+        let end = end_position("第一行\nhi 👋");
+        assert_eq!((end.line, end.character), (1, 5));
+        let end = end_position("");
+        assert_eq!((end.line, end.character), (0, 0));
+        let end = end_position("末尾换行\n");
+        assert_eq!((end.line, end.character), (1, 0));
+    }
 
     #[test]
     fn keeps_query_when_reopened_quickly() {
