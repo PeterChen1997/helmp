@@ -116,6 +116,7 @@ fn run_gui(engine: Engine) {
 ///
 /// - `HELMP_SELF_TEST`：用 `|` 分隔的查询词，`1` 表示只测显隐。
 /// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
+/// - `HELMP_SELF_TEST_HOTKEY`：可选，执行某个扩展的全局快捷键命令（如 `translate`）。
 /// - `HELMP_SELF_TEST_KEYS`：可选，模拟按键序列，每步后报告焦点、表单与结果（见下）。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
     use std::time::{Duration, Instant};
@@ -183,6 +184,26 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 .expect("launcher window gone");
             cx.background_executor().timer(settle).await;
             report(format!("exec {query:?}"), cx);
+        }
+
+        // HELMP_SELF_TEST_HOTKEY=<扩展 id>：像按下那个扩展的全局快捷键一样执行它的命令。
+        if let Ok(provider) = std::env::var("HELMP_SELF_TEST_HOTKEY") {
+            match hotkey::extension_command(&provider) {
+                Some(command) => {
+                    cx.update(|cx| hotkey::execute(command, cx));
+                    cx.background_executor().timer(settle).await;
+                    let launcher = launcher.clone();
+                    window
+                        .update(cx, move |_, window, cx| {
+                            println!(
+                                "self-test hotkey {provider}: {}",
+                                launcher.read(cx).debug_state(window, cx)
+                            );
+                        })
+                        .expect("launcher window gone");
+                }
+                None => println!("self-test hotkey {provider}: 没有这个扩展的快捷键"),
+            }
         }
 
         // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入。
