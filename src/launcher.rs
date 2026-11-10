@@ -210,7 +210,20 @@ impl Launcher {
                     window.is_window_active()
                 ));
                 if this.visible && !window.is_window_active() {
-                    this.hide(window, cx);
+                    // 不立刻收起：从「已在运行」卡片、设置等别的窗口唤起面板时，焦点会在窗口之间
+                    // 短暂跳一下（失去又马上回来），立刻收起会让面板闪一下就没了。150 ms 后仍不在前台才收。
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(150))
+                            .await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            if this.visible && !window.is_window_active() {
+                                crate::trace::log("面板失去焦点，收起");
+                                this.hide(window, cx);
+                            }
+                        });
+                    })
+                    .detach();
                 }
             }),
         ];

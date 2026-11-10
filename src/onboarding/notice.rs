@@ -67,6 +67,14 @@ impl Notice {
             cx.background_executor().timer(AUTO_CLOSE).await;
             let _ = cx.update(|window, _| window.remove_window());
         });
+        // 排查 / 自检：HELMP_SELF_TEST_NOTICE_OPEN 时 1 秒后自动点「打开 Helmp」。
+        if std::env::var_os("HELMP_SELF_TEST_NOTICE_OPEN").is_some() {
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let _ = this.update_in(cx, |this, window, cx| this.open_panel(window, cx));
+            })
+            .detach();
+        }
         Self {
             missing,
             _close: close,
