@@ -1,6 +1,6 @@
 //! 启动器面板：统一的 Spotlight 式结构（设计稿「统一的面板结构」）。
 //!
-//! 760 × 480：顶部 60 搜索栏，底部 40 状态栏，中间三种视图之一——
+//! 720 × 520：顶部 60 搜索栏，底部 40 状态栏，中间三种视图之一——
 //! 列表 / 列表 + 详情 / 表单 + 详情。插件只给数据（`provider.rs`），这里负责全部渲染与按键。
 //!
 //! 按键：↑↓ 选择，↵ 主操作，⌘K 操作菜单，次级操作自带快捷键，⇥ 进入选中项的扩展 / 切换范围内的筛选，
@@ -25,8 +25,8 @@ use crate::provider::{
 };
 use crate::style::{self, Palette};
 
-pub const PANEL_SIZE: Size<Pixels> = size(px(760.), px(480.));
-const SIDE_WIDTH: Pixels = px(330.);
+pub const PANEL_SIZE: Size<Pixels> = size(px(720.), px(520.));
+const SIDE_WIDTH: Pixels = px(310.);
 
 /// 面板可见时定期重查，让 agent 状态、剪贴板等后台变化与新生成的图标反映到界面。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);

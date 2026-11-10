@@ -344,9 +344,15 @@ fn load_app(path: &Path, home: Option<&Path>) -> App {
 
     let title = chinese.clone().unwrap_or_else(|| stem.clone());
     let mut seen = HashSet::new();
+    let aliases = ALIASES
+        .iter()
+        .find(|(app, _)| *app == stem)
+        .map(|(_, names)| names.iter().map(|name| name.to_string()).collect::<Vec<_>>())
+        .unwrap_or_default();
     let names: Vec<String> = std::iter::once(stem)
         .chain(info.names)
         .chain(chinese)
+        .chain(aliases)
         .filter(|name| !name.trim().is_empty() && seen.insert(name.to_lowercase()))
         .collect();
     let english = names
@@ -376,6 +382,12 @@ fn load_app(path: &Path, home: Option<&Path>) -> App {
             .collect(),
     }
 }
+
+/// 系统 App 改过名后，用户仍习惯用旧名字搜（按 .app 文件名对应）。
+const ALIASES: &[(&str, &[&str])] = &[(
+    "System Settings",
+    &["系统偏好设置", "偏好设置", "System Preferences"],
+)];
 
 fn abbreviate_home(path: &str, home: Option<&Path>) -> String {
     let Some(home) = home.and_then(Path::to_str) else {
