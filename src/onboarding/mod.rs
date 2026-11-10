@@ -9,6 +9,7 @@
 //! 把 Helmp 图标拖进权限列表即可完成添加。
 
 mod guide;
+mod notice;
 mod native;
 mod placement;
 
@@ -165,7 +166,12 @@ pub fn maybe_show(cx: &mut App) {
     {
         return;
     }
-    show(cx);
+    if first_run {
+        show(cx);
+    } else {
+        // 引导做完了：只用一张小卡片确认「已在运行」，不再进授权页。
+        notice::show(cx);
+    }
     // 自检用：HELMP_ONBOARDING_GUIDE=accessibility|screen 直接走一次「前往授权」（配合 HELMP_TRACE 看轮询）。
     if let Some(permission) = std::env::var("HELMP_ONBOARDING_GUIDE")
         .ok()
@@ -224,6 +230,15 @@ fn toggle_glyphs() -> Option<String> {
     crate::hotkey::assigned_spec(&config, crate::hotkey::Command::Toggle)
         .and_then(|spec| crate::hotkey::parse(&spec).ok())
         .map(|hotkey| crate::hotkey::glyphs(&hotkey))
+}
+
+/// 运行中再次打开 Helmp：引导还没做完就回到引导窗口，否则显示「已在运行」卡片。
+pub fn reopen(cx: &mut App) {
+    if crate::config::get().onboarding_done {
+        notice::show(cx);
+    } else {
+        show(cx);
+    }
 }
 
 /// 显示（或前置）引导窗口。

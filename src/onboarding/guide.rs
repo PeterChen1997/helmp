@@ -174,10 +174,25 @@ impl GuidePanel {
     }
 
     /// 浮窗还开着时用户点了另一项的「前往授权」：换内容，重新等系统设置跳到新面板。
-    fn restart(&mut self, permission: Permission, _window: &mut Window, cx: &mut Context<Self>) {
+    ///
+    /// 上一项刚授权成功时，浮窗把拖拽卡片藏起来、准备 1.5 秒后关闭；这时点第二项会复用这个浮窗。
+    /// 必须把卡片重新显示、把「见过系统设置 / 等待次数 / 位置」都清零，否则第二项拖不动卡片。
+    fn restart(&mut self, permission: Permission, window: &mut Window, cx: &mut Context<Self>) {
         self.permission = permission;
         self.granted = permission.status() == Status::Granted;
         self._close = None;
+        self.saw_settings = false;
+        self.waits = 0;
+        self.last_frame = None;
+        if let Some(tile) = &self.drag_tile {
+            tile.setHidden(self.granted);
+        }
+        self.ensure_drag_tile(window);
+        crate::trace::log(format!(
+            "guide restart {permission:?} granted={} drag_tile={}",
+            self.granted,
+            self.drag_tile.is_some()
+        ));
         cx.notify();
     }
 
@@ -278,12 +293,12 @@ impl GuidePanel {
         match (self.phase(), self.permission) {
             (Phase::Granted, _) => trf!("已授权「{name}」", "{name} access granted"),
             (_, Permission::ScreenRecording) => trf!(
-                "把 Helmp 拖进「{name}」列表并打开开关；之后需重新打开 Helmp 才生效",
-                "Drag Helmp into the {name} list and turn it on, then reopen Helmp to apply"
+                "把 Helmp 拖进「{name}」列表并打开开关（拖不进去就点列表下方的 + 手动添加）；之后需重新打开 Helmp 才生效",
+                "Drag Helmp into the {name} list and turn it on (if it won't drop, use + below the list); then reopen Helmp to apply"
             ),
             _ => trf!(
-                "把 Helmp 拖进「{name}」列表，然后打开它的开关",
-                "Drag Helmp into the {name} list, then turn it on"
+                "把 Helmp 拖进「{name}」列表，然后打开它的开关（拖不进去就点列表下方的 + 手动添加）",
+                "Drag Helmp into the {name} list, then turn it on (if it won't drop, use + below the list)"
             ),
         }
     }
