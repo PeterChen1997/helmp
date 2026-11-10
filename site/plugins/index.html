@@ -6,13 +6,13 @@
   <title>Plugin Center · Helmp</title>
   <meta name="description" content="Reviewed plugins for Helmp, the native macOS launcher. Every file is checked against its SHA-256 on install, and plugins stay off until you approve their permissions.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0d16" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#dfe8fd" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1131" media="(prefers-color-scheme: dark)">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Helmp Plugin Center">
   <meta property="og:description" content="Reviewed plugins for Helmp, the native macOS launcher.">
   <meta property="og:url" content="https://blog.peterchen97.cn/helmp/plugins/">
-  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/icon-512.png">
+  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/og.png">
   <link rel="icon" type="image/png" href="../assets/icon-64.png">
   <link rel="apple-touch-icon" href="../assets/icon-512.png">
   <link rel="stylesheet" href="../assets/style.css">
@@ -37,53 +37,55 @@
   </script>
 </head>
 <body data-title-en="Plugin Center · Helmp" data-title-zh="插件中心 · Helmp">
-  <div class="backdrop" aria-hidden="true">
-    <div class="blob blob-a"></div>
-    <div class="blob blob-b"></div>
-    <div class="blob blob-c"></div>
-  </div>
+  <a class="skip" href="#main"><span lang="en">Skip to content</span><span lang="zh-CN">跳到正文</span></a>
+  <div class="backdrop" aria-hidden="true"></div>
 
-  <header class="topbar">
-    <div class="topbar-inner">
+  <header class="menubar">
+    <div class="menubar-inner">
       <a class="brand" href="../">
-        <img src="../assets/icon-64.png" width="28" height="28" alt="">
+        <img src="../assets/icon-64.png" width="22" height="22" alt="">
         <span>Helmp</span>
       </a>
-      <nav class="nav" aria-label="Sections">
+      <nav class="menu" aria-label="Sections">
         <a href="../"><span lang="en">Home</span><span lang="zh-CN">首页</span></a>
         <a href="./" aria-current="page"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></a>
         <a href="#submit"><span lang="en">Submit</span><span lang="zh-CN">提交插件</span></a>
       </nav>
-      <div class="lang-switch" role="group" aria-label="Language / 语言">
-        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
-        <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+      <div class="menubar-extras">
+        <div class="lang-switch" role="group" aria-label="Language / 语言">
+          <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+          <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+        </div>
       </div>
     </div>
   </header>
 
-  <main>
-    <section class="hero pc-hero">
-      <h1><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h1>
-      <p class="lede">
-        <span lang="en">Every plugin here is reviewed by hand before it is listed. When you install one, Helmp checks each file against its SHA-256. New plugins stay off until you turn them on, and Helmp lists their permissions for you to approve first.</span>
-        <span lang="zh-CN">这里的每个插件都由维护者人工审核后才上架。在 Helmp 里安装时，会逐个校验文件的 SHA-256；装好后默认关闭，启用前先列出权限让你确认。</span>
-      </p>
-      <ul class="pc-trust">
-        <li class="glass"><span lang="en">Reviewed by hand</span><span lang="zh-CN">人工审核</span></li>
-        <li class="glass"><span lang="en">SHA-256 checked</span><span lang="zh-CN">SHA-256 校验</span></li>
-        <li class="glass"><span lang="en">Off until you approve</span><span lang="zh-CN">确认后才启用</span></li>
-      </ul>
+  <main id="main">
+    <section class="hero pc-hero" aria-labelledby="pc-title">
+      <div class="hero-copy wrap">
+        <h1 id="pc-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h1>
+        <p class="hero-lede">
+          <span lang="en">Every plugin here is reviewed by hand before it is listed. When you install one, Helmp checks each file against its SHA-256. New plugins stay off until you turn them on, and Helmp lists their permissions for you to approve first.</span>
+          <span lang="zh-CN">这里的每个插件都由维护者人工审核后才上架。在 Helmp 里安装时，会逐个校验文件的 SHA-256；装好后默认关闭，启用前先列出权限让你确认。</span>
+        </p>
+        <ul class="pc-trust">
+          <li class="glass"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg><span lang="en">Reviewed by hand</span><span lang="zh-CN">人工审核</span></li>
+          <li class="glass"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg><span lang="en">SHA-256 checked</span><span lang="zh-CN">SHA-256 校验</span></li>
+          <li class="glass"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg><span lang="en">Off until you approve</span><span lang="zh-CN">确认后才启用</span></li>
+        </ul>
+      </div>
     </section>
 
-    <section id="catalog" class="section pc-section">
+    <section id="catalog" class="section pc-section" aria-label="Plugins">
+      <div class="wrap">
       <h2><span lang="en">All plugins</span><span lang="zh-CN">全部插件</span> <span class="pc-count">3</span></h2>
       <div class="pc-grid">
-        <article class="card pc-card" id="plugin-dev.helmp.flomo">
+        <article class="glass pc-card" id="plugin-dev.helmp.flomo">
           <div class="pc-card-head">
             <img class="pc-icon" src="icons/dev.helmp.flomo.png" width="56" height="56" alt="" loading="lazy">
             <div class="pc-card-title">
               <h3>flomo</h3>
-              <p class="pc-meta">v1.0.0 <span aria-hidden="true">·</span> <span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span> <span aria-hidden="true">·</span> MIT</p>
+              <p class="pc-meta">v1.0.0<span class="pc-meta-sep" aria-hidden="true">/</span><span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span><span class="pc-meta-sep" aria-hidden="true">/</span>MIT</p>
             </div>
           </div>
           <p class="pc-badge"><span lang="en">Bundled with Helmp</span><span lang="zh-CN">Helmp 已自带</span></p>
@@ -99,12 +101,12 @@
             <a class="btn btn-glass pc-btn" href="https://github.com/PeterChen1997/helmp-plugins/tree/main/plugins/dev.helmp.flomo"><span lang="en">View source</span><span lang="zh-CN">查看源码</span></a>
           </div>
         </article>
-        <article class="card pc-card" id="plugin-dev.helmp.obsidian">
+        <article class="glass pc-card" id="plugin-dev.helmp.obsidian">
           <div class="pc-card-head">
             <img class="pc-icon" src="icons/dev.helmp.obsidian.png" width="56" height="56" alt="" loading="lazy">
             <div class="pc-card-title">
               <h3>Obsidian</h3>
-              <p class="pc-meta">v1.0.0 <span aria-hidden="true">·</span> <span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span> <span aria-hidden="true">·</span> MIT</p>
+              <p class="pc-meta">v1.0.0<span class="pc-meta-sep" aria-hidden="true">/</span><span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span><span class="pc-meta-sep" aria-hidden="true">/</span>MIT</p>
             </div>
           </div>
           <p class="pc-badge"><span lang="en">Bundled with Helmp</span><span lang="zh-CN">Helmp 已自带</span></p>
@@ -120,12 +122,12 @@
             <a class="btn btn-glass pc-btn" href="https://github.com/PeterChen1997/helmp-plugins/tree/main/plugins/dev.helmp.obsidian"><span lang="en">View source</span><span lang="zh-CN">查看源码</span></a>
           </div>
         </article>
-        <article class="card pc-card" id="plugin-dev.helmp.quicklinks">
+        <article class="glass pc-card" id="plugin-dev.helmp.quicklinks">
           <div class="pc-card-head">
             <img class="pc-icon" src="icons/dev.helmp.quicklinks.png" width="56" height="56" alt="" loading="lazy">
             <div class="pc-card-title">
               <h3><span lang="en">Quick Search</span><span lang="zh-CN">快捷搜索</span></h3>
-              <p class="pc-meta">v1.0.0 <span aria-hidden="true">·</span> <span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span> <span aria-hidden="true">·</span> MIT</p>
+              <p class="pc-meta">v1.0.0<span class="pc-meta-sep" aria-hidden="true">/</span><span lang="en">by Helmp</span><span lang="zh-CN">作者 Helmp</span><span class="pc-meta-sep" aria-hidden="true">/</span>MIT</p>
             </div>
           </div>
           <p class="pc-badge"><span lang="en">Bundled with Helmp</span><span lang="zh-CN">Helmp 已自带</span></p>
@@ -142,16 +144,18 @@
           </div>
         </article>
       </div>
+      </div>
     </section>
 
     <section id="submit" class="section">
+      <div class="wrap">
       <h2><span lang="en">Submit your plugin</span><span lang="zh-CN">提交你的插件</span></h2>
-      <p class="section-lede">
+      <p class="lede">
         <span lang="en">The easiest way is to let a coding agent do it with you. Everything goes through a pull request that the maintainer reviews by hand.</span>
         <span lang="zh-CN">最省事的办法是让 coding agent 陪你一起做。所有插件都通过 PR 提交，由维护者人工审核。</span>
       </p>
       <div class="pc-submit">
-        <div class="glass install">
+        <div class="glass install-card">
           <h3 class="pc-submit-title"><span lang="en">With Claude Code or Codex</span><span lang="zh-CN">用 Claude Code 或 Codex</span></h3>
           <ol class="steps">
             <li>
@@ -172,9 +176,9 @@
             </li>
           </ol>
         </div>
-        <div class="glass install">
+        <div class="glass install-card">
           <h3 class="pc-submit-title"><span lang="en">By hand</span><span lang="zh-CN">手动提交</span></h3>
-          <p class="pc-submit-text">
+          <p>
             <span lang="en">Run this in a terminal. It prints what it is about to do; add <code>--yes</code> to actually do it.</span>
             <span lang="zh-CN">在终端里运行下面的命令。它会先打印将要做什么，加上 <code>--yes</code> 才真正执行。</span>
           </p>
@@ -191,23 +195,27 @@
           </ul>
         </div>
       </div>
+      </div>
     </section>
   </main>
 
   <footer class="footer">
-    <div class="footer-inner">
+    <div class="wrap footer-inner">
       <div class="footer-brand">
-        <img src="../assets/icon-64.png" width="22" height="22" alt="">
-        <span>Helmp</span>
+        <img src="../assets/icon-64.png" width="28" height="28" alt="">
+        <div>
+          <strong>Helmp</strong>
+          <span lang="en">A native macOS launcher.</span><span lang="zh-CN">原生 macOS 启动器。</span>
+        </div>
       </div>
-      <p class="pc-source-line"><span lang="en">Plugin data from the registry at commit</span><span lang="zh-CN">插件数据来自注册表提交</span> <a href="https://github.com/PeterChen1997/helmp-plugins/commit/7d02729b950dbb7de8718f43603d0c3f11686975"><code>7d02729</code></a></p>
-      <p>
-        <a href="https://github.com/PeterChen1997/helmp">GitHub</a>
-        <span aria-hidden="true">·</span>
-        <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a>
-        <span aria-hidden="true">·</span>
-        <span>© 2026 Peter Chen</span>
-      </p>
+      <ul class="footer-links">
+        <li><a href="../"><span lang="en">Home</span><span lang="zh-CN">首页</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp">GitHub</a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp-plugins"><span lang="en">Plugin registry</span><span lang="zh-CN">插件注册表</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a></li>
+      </ul>
+      <p class="copyright">© 2026 Peter Chen</p>
+      <p class="footer-source"><span lang="en">Plugin data from the registry at commit</span><span lang="zh-CN">插件数据来自注册表提交</span> <a href="https://github.com/PeterChen1997/helmp-plugins/commit/7d02729b950dbb7de8718f43603d0c3f11686975"><code>7d02729</code></a></p>
     </div>
   </footer>
 
