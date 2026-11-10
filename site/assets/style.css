@@ -27,7 +27,8 @@
   --chip: rgba(255, 255, 255, 0.7);
   --code-bg: #121633;
   --code-ink: #e7eaf7;
-  --panel-tint: rgba(255, 255, 255, 0.10);
+  /* macOS 26 上面板内容层自带的底色只有约五成：这层补上液态玻璃自身的提亮，保证文字对比度 */
+  --panel-tint: rgba(255, 255, 255, 0.38);
 
   --lift: 0 1px 1px rgba(15, 19, 40, 0.04), 0 18px 48px -18px rgba(30, 42, 120, 0.28);
   --panel-shadow: 0 0 0 0.5px rgba(15, 19, 40, 0.22), 0 50px 100px -30px rgba(24, 30, 96, 0.55),
@@ -61,7 +62,7 @@
     --hairline: rgba(255, 255, 255, 0.13);
     --chip: rgba(255, 255, 255, 0.1);
     --code-bg: #060a20;
-    --panel-tint: rgba(10, 12, 30, 0.12);
+    --panel-tint: rgba(18, 18, 24, 0.36);
 
     --lift: 0 1px 1px rgba(0, 0, 0, 0.2), 0 18px 48px -18px rgba(0, 0, 0, 0.6);
     --panel-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.16), 0 50px 100px -30px rgba(0, 0, 0, 0.75),
@@ -558,12 +559,12 @@ html[data-lang="zh"] .hero h1 {
 }
 
 .panel {
-  --w: min(100cqw, 920px);
+  --w: min(100cqw, 860px);
   position: relative;
   width: var(--w);
   margin-inline: auto;
-  aspect-ratio: 1520 / 962;
-  border-radius: calc(var(--w) * 24 / 760);
+  aspect-ratio: 1440 / 1042;
+  border-radius: calc(var(--w) * 24 / 720);
   overflow: hidden;
   background: var(--panel-tint);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
@@ -709,13 +710,15 @@ html[data-lang="zh"] .section h2 {
 .crop {
   position: relative;
   margin: 0;
-  aspect-ratio: 660 / 800;
-  max-width: 420px;
+  aspect-ratio: 620 / 700;
+  max-width: 400px;
   width: 100%;
   justify-self: end;
   overflow: hidden;
   border-radius: 22px;
   background: var(--panel-tint);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
   box-shadow: var(--panel-shadow);
   border: 0;
 }
@@ -728,8 +731,8 @@ html[data-lang="zh"] .section h2 {
 .crop img {
   position: absolute;
   left: 0;
-  top: -17.5%;
-  width: calc(1520 / 660 * 100%);
+  top: calc(-140 / 700 * 100%);
+  width: calc(1440 / 620 * 100%);
   max-width: none;
   height: auto;
 }
@@ -1450,7 +1453,11 @@ html[data-lang="zh"] .section h2 {
 
   .crop {
     max-width: 100%;
-    aspect-ratio: 660 / 640;
+    aspect-ratio: 620 / 560;
+  }
+
+  .crop img {
+    top: calc(-140 / 560 * 100%);
   }
 
   .faq {
