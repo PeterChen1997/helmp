@@ -264,8 +264,31 @@ fn send_command_key(keycode: u16) -> Result<()> {
     send_key(keycode, FLAG_COMMAND)
 }
 
+/// 面板收起后要等焦点真的回到原来的 App 再发键，否则 ⌘V 会落回 Helmp 自己
+/// （面板唤起时会激活 Helmp，收起时才把前台还回去，这是异步的）。最多等 0.6 秒。
+fn wait_until_helmp_not_frontmost() {
+    let me = std::process::id();
+    for _ in 0..30 {
+        let front = autoreleasepool(|_| {
+            NSWorkspace::sharedWorkspace()
+                .frontmostApplication()
+                .map(|app| app.processIdentifier())
+        });
+        if front.and_then(|pid| u32::try_from(pid).ok()) != Some(me) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// 发送一个键（按下、抬起），修饰键固定为 `flags`（不继承用户此刻按着的修饰键）。
 fn send_key(keycode: u16, flags: u64) -> Result<()> {
+    wait_until_helmp_not_frontmost();
+    post_key_now(keycode, flags)
+}
+
+/// 立即从 HID 层投递一个键（按下、抬起），不等焦点。图形自检测输入法时用（此时前台就是 Helmp）。
+pub fn post_key_now(keycode: u16, flags: u64) -> Result<()> {
     const COMBINED_SESSION_STATE: i32 = 0;
     const HID_EVENT_TAP: u32 = 0;
 

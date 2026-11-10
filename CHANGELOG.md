@@ -10,11 +10,19 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 - Plugin commands that take input (flomo, Quick Search's `gh` / `npm`…, list commands) and MCP tools with arguments no longer take what you type in the main search, so a search can't trigger them by accident: typing `flomo hello` or `gh rust` only lists the command. Press Tab (or Return) on it to enter the command's own scope: a tag with the plugin's name appears in the search bar, the flomo form gets the cursor, `gh` takes the search terms; Esc, or Backspace when empty, goes back. `helmp://plugin/…?q=` opens the panel inside that scope. `helmp query` / `helmp run` take `--scope <id>`, and agents get a `scope` from `helmp_search` to pass to `helmp_search` / `helmp_run`.
 
+### Fixed
+
+- Chinese and other input methods compose again in the panel, and ABC keeps working. The panel was a non-activating panel; macOS doesn't start an input-method session for those, so Doubao, Apple Pinyin and others typed raw letters. The panel now activates Helmp when it opens (like Alfred and Raycast) and hands focus back to the previous app when it closes; paste-style actions wait for that before sending ⌘V. Verified with real key events for Apple Pinyin, Doubao and ABC, in the search box and the flomo form; `script/ime-check.sh` repeats the check.
+
 ### 简体中文
 
 #### 变更
 
 - 接受输入的插件命令（flomo、快捷搜索的 `gh` / `npm`…、列表命令）和带参数的 MCP 工具，不再接收全局搜索里打的字，日常搜索不会误触发：输入 `flomo 你好`、`gh rust` 只列出这个命令。在它上面按 Tab（或回车）进入命令自己的范围：搜索栏出现插件名标签，flomo 光标直接进表单，`gh` 接收搜索词；Esc、或输入为空时按 ⌫ 返回。`helmp://plugin/…?q=` 打开面板直接进入这个范围。`helmp query` / `helmp run` 支持 `--scope <id>`，agent 从 `helmp_search` 拿到 `scope`，再交给 `helmp_search` / `helmp_run`。
+
+#### 修复
+
+- 面板里中文等输入法恢复组字，ABC 也照常可用。原因是面板是「非激活面板」，macOS 不为它建立输入法会话，豆包、系统拼音等只会原样上屏字母。现在唤起时激活 Helmp（与 Alfred、Raycast 一致），收起时把焦点还给原来的 App，粘贴类动作发 ⌘V 前会等焦点回去。已用真实按键验证系统拼音、豆包、ABC，覆盖搜索框和 flomo 表单；`script/ime-check.sh` 可重复这项检查。
 
 ## [0.3.0] - 2026-11-10
 

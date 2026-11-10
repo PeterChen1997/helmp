@@ -92,7 +92,10 @@ fn run_gui(engine: Engine) {
                 .into();
             let launcher = launcher.expect("launcher view not built");
             window
-                .update(cx, |_, window, _| panel::install_glass(window))
+                .update(cx, |_, window, _| {
+                    panel::install_glass(window);
+                    panel::make_activating(window);
+                })
                 .expect("launcher window gone");
             cx.set_global(LauncherHandle {
                 window,
@@ -359,7 +362,17 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         .expect("launcher window gone");
                     continue;
                 }
-                if let Some(text) = token.strip_prefix('~') {
+                if let Some(keys) = token.strip_prefix("native:") {
+                    // 构造真实的 NSEvent 按键交给面板窗口：和物理键盘一样经过第一响应者、
+                    // 输入上下文和当前输入法（豆包组字等），用来验证中英文输入法都能打字。
+                    // 「_」代表空格，「^」代表回车。需配合 HELMP_SELF_TEST_KEY_WINDOW。
+                    for ch in keys.chars() {
+                        window
+                            .update(cx, move |_, window, _| send_native_key(window, ch))
+                            .expect("launcher window gone");
+                        cx.background_executor().timer(Duration::from_millis(60)).await;
+                    }
+                } else if let Some(text) = token.strip_prefix('~') {
                     // 文字走窗口的正常输入路径，落到当前有焦点的输入框。
                     for ch in text.chars() {
                         let stroke = gpui_kit::Keystroke {
@@ -435,6 +448,41 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         cx.update(|cx| cx.quit());
     })
     .detach();
+}
+
+/// 自检：从 HID 层发一个真实按键（keyDown + keyUp），和物理键盘一样经过系统输入法（豆包组字等）。
+/// 需要 Helmp 有辅助功能权限。安全起见：面板不是 key window 时一律不发，免得键落进用户正在用的 App。
+fn send_native_key(window: &mut Window, ch: char) {
+    let Some(ns_window) = crate::panel::ns_window(window) else {
+        return;
+    };
+    if !ns_window.isKeyWindow() {
+        println!("self-test native: 面板不是 key window，不发送按键 {ch:?}");
+        return;
+    }
+    post_hid_key(ch);
+}
+
+fn key_code(ch: char) -> Option<u16> {
+    Some(match ch {
+        '_' => 49, '^' => 36, '1' => 18, '2' => 19,
+        'a' => 0, 's' => 1, 'd' => 2, 'f' => 3, 'h' => 4, 'g' => 5, 'z' => 6, 'x' => 7,
+        'c' => 8, 'v' => 9, 'b' => 11, 'q' => 12, 'w' => 13, 'e' => 14, 'r' => 15,
+        'y' => 16, 't' => 17, 'o' => 31, 'u' => 32, 'i' => 34, 'p' => 35, 'l' => 37,
+        'j' => 38, 'k' => 40, 'n' => 45, 'm' => 46,
+        _ => return None,
+    })
+}
+
+/// 从 HID 层投递一个按键（keyDown + keyUp）。调用方负责确认 key window 是自己的。
+fn post_hid_key(ch: char) {
+    let Some(code) = key_code(ch) else {
+        println!("self-test native: 不支持的键 {ch:?}");
+        return;
+    };
+    if let Err(err) = crate::providers::clipboard::macos::post_key_now(code, 0) {
+        println!("self-test native: 发键失败：{err:#}");
+    }
 }
 
 fn set_query(window: AnyWindowHandle, launcher: Entity<Launcher>, query: &str, cx: &mut AsyncApp) {

@@ -195,7 +195,11 @@ impl Launcher {
                 move |this, _, event: &InputEvent, window, cx| {
                     if let InputEvent::Change = event {
                         let value = input.read(cx).value().to_string();
-                        crate::trace::log(format!("input change {value:?}"));
+                        // 诊断：输入法组字中的未确认文字（marked text）范围。
+                        let marked = input.update(cx, |input, cx| {
+                            gpui_kit::EntityInputHandler::marked_text_range(input, window, cx)
+                        });
+                        crate::trace::log(format!("input change {value:?} marked={marked:?}"));
                         this.on_query_changed(value, window, cx);
                     }
                 }

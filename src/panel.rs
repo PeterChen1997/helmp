@@ -1,8 +1,8 @@
 //! 面板窗口的平台适配层。
 //!
-//! - 显示 / 隐藏：面板是 GPUI 的 `WindowKind::PopUp`，即带 NonactivatingPanel 的 NSPanel：
-//!   能成为 key window 接收键盘，但不会把整个 App 激活。所以只对这一个窗口
-//!   makeKeyAndOrderFront / orderOut，唤起和收起都不打扰前台 App（见 _research/launcher/04 §1）。
+//! - 显示 / 隐藏：面板是 GPUI 的 `WindowKind::PopUp`（NSPanel），但创建后去掉了 NonactivatingPanel
+//!   （见 [`make_activating`]）：唤起时激活 Helmp，中文等输入法才能组字；收起时把前台还给唤起前的 App
+//!   （[`restore_previous_app`]），粘贴类动作发 ⌘V 前会等焦点回去。回归检查：script/ime-check.sh。
 //! - 毛玻璃：GPUI 的 Blurred 背景做不出圆角，这里在 GPUI 的视图下面垫一层
 //!   `NSVisualEffectView`（材质 popover，跟随系统明暗），用圆角遮罩图裁成设计稿的 24 px 圆角，
 //!   窗口本身透明、阴影跟随遮罩形状。GPUI 只画半透明的内容层。
@@ -120,13 +120,20 @@ pub fn show(window: &mut Window, cx: &mut App) {
     }
     position(&ns_window);
     ensure_text_input(&ns_window);
-    if std::env::var_os("HELMP_SELF_TEST").is_some() {
+    // HELMP_SELF_TEST_KEY_WINDOW：自检里需要面板真的成为 key window（测真实按键与输入法）时才设，
+    // 会短暂抢焦点；平时自检仍放在屏幕外、不抢键盘。
+    if std::env::var_os("HELMP_SELF_TEST").is_some()
+        && std::env::var_os("HELMP_SELF_TEST_KEY_WINDOW").is_none()
+    {
         // 图形自检不能抢用户的键盘：摆在屏幕外，也不成为 key window（按键由自检直接注入）。
         ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
         ns_window.orderFrontRegardless();
         crate::trace::log(format!("panel.show 自检：{}", input_context_state(&ns_window)));
         return;
     }
+    remember_previous_app();
+    // 先激活 Helmp 再让面板成为 key：输入法只给激活的 App 建立组字会话（见 make_activating）。
+    cx.activate(true);
     ns_window.makeKeyAndOrderFront(None);
     crate::trace::log(format!(
         "panel.show 非激活方式后：is_key={} {}",
@@ -197,11 +204,76 @@ fn input_context_state(ns_window: &NSWindow) -> String {
     )
 }
 
+/// 把面板改成「会激活 App」的面板（去掉 NonactivatingPanel）。
+///
+/// macOS 只给激活的 App 建立输入法组字会话：非激活面板虽然能成为 key window、收得到按键，
+/// 豆包、系统拼音等输入法却只会把字母原样上屏，打不出中文（实测：同一面板里的原生
+/// NSTextField 也一样，去掉这个样式后组字恢复正常）。Alfred、Raycast 这类启动器也是唤起时
+/// 激活自己、收起时把焦点还给原来的 App——见 [`remember_previous_app`] / [`restore_previous_app`]。
+/// 在面板创建后调用一次；授权浮窗、「已在运行」卡片不需要打字，仍保持非激活。
+pub fn make_activating(window: &Window) {
+    let Some(ns_window) = ns_window(window) else {
+        eprintln!("helmp: 无法取得 NSWindow，面板保持非激活（中文输入法可能无法组字）");
+        return;
+    };
+    let mut mask = ns_window.styleMask();
+    mask.remove(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel);
+    ns_window.setStyleMask(mask);
+}
+
+/// 唤起前的前台 App（不是 Helmp 自己时）的 pid：收起时把焦点还给它。
+static PREVIOUS_APP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+fn remember_previous_app() {
+    let me = std::process::id();
+    let pid = objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .map(|app| app.processIdentifier())
+        .filter(|pid| u32::try_from(*pid).ok() != Some(me))
+        .unwrap_or(0);
+    PREVIOUS_APP.store(pid, Ordering::Relaxed);
+}
+
+/// 收起面板后把焦点还给唤起前的 App：还有别的 Helmp 窗口（设置、欢迎页）开着时只激活那个 App，
+/// 否则隐藏 Helmp（系统会把前台还给上一个 App，和 Alfred 的做法一样）。
+fn restore_previous_app(panel: &NSWindow) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    if !app.isActive() {
+        return;
+    }
+    let pid = PREVIOUS_APP.swap(0, Ordering::Relaxed);
+    if pid == 0 {
+        // 从 Helmp 自己的窗口（如设置）里唤起的：留在 Helmp。
+        return;
+    }
+    let other_windows = app.windows().iter().any(|window| {
+        !std::ptr::eq(&*window, panel)
+            && window.isVisible()
+            && !window.styleMask().contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel)
+    });
+    if other_windows {
+        if let Some(previous) =
+            objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        {
+            #[allow(deprecated)]
+            previous.activateWithOptions(objc2_app_kit::NSApplicationActivationOptions::empty());
+        }
+    } else {
+        app.hide(None);
+    }
+}
+
 static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub fn hide(window: &mut Window) {
     match ns_window(window) {
-        Some(ns_window) => ns_window.orderOut(None),
+        Some(ns_window) => {
+            ns_window.orderOut(None);
+            restore_previous_app(&ns_window);
+        }
         // 拿不到原生窗口说明平台层变了，大声报出来而不是假装隐藏成功。
         None => eprintln!("helmp: 无法取得 NSWindow，面板未隐藏"),
     }
