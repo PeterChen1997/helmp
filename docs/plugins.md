@@ -192,7 +192,7 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Permission | Comes from |
 |---|---|
 | Network access: `host` | Hosts of `http` URLs, or `allowedHosts` of the preference a URL comes from |
-| Open links: `https:`, `obsidian:`… | Schemes of `open` URLs |
+| Open web pages in your browser / Open `obsidian://` links (launches the matching app) | Schemes of `open` URLs |
 | Open any link or file | An `open` URL that is entirely a template, or a list without `action` (opens `item.arg`) |
 | Read the clipboard | `"permissions": ["clipboard.read"]` |
 | Write to the clipboard | `copy` / `paste` actions, `script` output `copy` / `paste` |

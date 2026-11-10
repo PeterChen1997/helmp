@@ -127,3 +127,12 @@ fn many_plugins_do_not_push_the_obvious_app_down() {
     let first = rows.first().expect("有结果");
     assert!(first.id.ends_with("/Calculator.app"), "{rows:#?}");
 }
+
+#[test]
+fn plugin_commands_do_not_fuzzy_match_unrelated_queries() {
+    // 插件命令名较长，字母按顺序出现就算命中的话，uuid 会冒出「Obsidian 快速记录」这种无关结果。
+    let h = Helmp::new();
+    let rows = h.query("uuid");
+    assert!(rows.first().is_some_and(|r| r.title.len() == 36), "第一条应是生成的 UUID：{rows:#?}");
+    assert!(!rows.iter().any(|r| r.title.contains("Obsidian")), "{rows:#?}");
+}

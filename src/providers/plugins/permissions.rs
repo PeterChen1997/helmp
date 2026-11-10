@@ -132,12 +132,23 @@ impl Permissions {
                 ),
             });
         }
-        if !self.schemes.is_empty() {
-            let schemes: Vec<String> = self.schemes.iter().map(|s| format!("{s}:")).collect();
+        // 网页链接说「在浏览器里打开网页」，其他 scheme 写成 `obsidian://` 并点明会启动对应 App；
+        // 直接列「https:」用户看不懂这是什么权限。
+        let web = self.schemes.iter().any(|s| s == "http" || s == "https");
+        if web {
+            lines.push(tr("在浏览器中打开网页", "Open web pages in your browser").into());
+        }
+        let apps: Vec<String> = self
+            .schemes
+            .iter()
+            .filter(|s| *s != "http" && *s != "https")
+            .map(|s| format!("{s}://"))
+            .collect();
+        if !apps.is_empty() {
             lines.push(trf!(
-                "打开链接：{}",
-                "Open links: {}",
-                schemes.join(tr("、", ", "))
+                "打开 {} 链接（会启动对应的 App）",
+                "Open {} links (launches the matching app)",
+                apps.join(tr("、", ", "))
             ));
         }
         if self.open_any {
@@ -242,4 +253,20 @@ mod tests {
         );
         assert_eq!(p.keys(), ["open:https"]);
     }
+
+    #[test]
+    fn open_permissions_read_as_plain_language() {
+        // 权限卡片给普通用户看：写「https:」没人懂；网页说「在浏览器中打开网页」，
+        // 其他 scheme 说明会启动对应的 App。
+        let mut perms = Permissions::default();
+        perms.schemes.insert("https".into());
+        perms.schemes.insert("obsidian".into());
+        let lines = crate::i18n::with_lang(crate::i18n::Lang::En, || perms.describe());
+        assert!(lines.contains(&"Open web pages in your browser".to_string()), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l == "Open obsidian:// links (launches the matching app)"),
+            "{lines:?}"
+        );
+    }
+
 }

@@ -192,7 +192,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | 权限 | 来源 |
 |---|---|
 | 访问网络：`主机名` | `http` 地址的主机名，或地址所来自的偏好设置的 `allowedHosts` |
-| 打开链接：`https:`、`obsidian:`…… | `open` 地址的 scheme |
+| 在浏览器中打开网页 / 打开 `obsidian://` 链接（会启动对应的 App） | `open` 地址的 scheme |
 | 打开任意链接或文件 | 整段都是模板的 `open` 地址，或没写 `action` 的列表（打开 `item.arg`） |
 | 读取剪贴板 | `"permissions": ["clipboard.read"]` |
 | 写入剪贴板 | `copy` / `paste` 动作，`script` 的 `output` 为 `copy` / `paste` |

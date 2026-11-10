@@ -137,12 +137,18 @@ fn match_command(command: &Command, query: &str) -> Option<(u32, Option<String>)
             }
         }
     }
+    // 只认字面或拼音命中，不认「字母按顺序出现」的模糊匹配：插件命令名普遍较长，
+    // 模糊匹配会让 uuid 这类查询冒出「Obsidian 快速记录」之类毫不相关的结果。
     names(command)
         .into_iter()
         .filter_map(|name| matcher::score(query, name))
+        .filter(|score| *score >= MIN_NAME_SCORE)
         .max()
         .map(|score| (score, None))
 }
+
+/// 命令名匹配的最低分：拼音中段命中（550）及以上；字面/拼音模糊匹配（400 / 300）不算。
+const MIN_NAME_SCORE: u32 = 550;
 
 /// 内置符号名要 `&'static str`：清单里的名字去重后常驻（数量有限，最多几百个）。
 fn intern(name: &str) -> &'static str {
