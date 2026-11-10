@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
 ### Added
 
 - Automatic updates. With "Automatically check for updates" on (Settings › General), Helmp checks once a day for a new version, first at Qiniu (`blog.peterchen97.cn`, reachable from mainland China) and then GitHub Releases. "Check for Updates…" in the menu bar, the panel command "Check for Helmp Updates" and the button in Settings open Settings › About and check right away; the result or the reason it failed is shown there. When a version is found the menu item reads "Update to x.y.z…", and About shows the release notes and a "Download and Install" button. Nothing is downloaded before you click it. Helmp then checks the download's size and SHA-256, its code signature, that it comes from the same Developer ID team and that Gatekeeper accepts it, quits, swaps itself and reopens. When it can't replace itself (not in Applications, or no write permission) it downloads the dmg for you instead. `helmp update check` / `helmp update install [--yes]` do the same from the command line. See [docs/updates.md](docs/updates.md).
@@ -194,7 +196,8 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/PeterChen1997/helmp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PeterChen1997/helmp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/PeterChen1997/helmp/releases/tag/v0.1.0
