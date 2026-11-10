@@ -3,9 +3,11 @@
   "use strict";
 
   var KEY = "helmp-lang";
+  // 子页面在 <body data-title-en="…" data-title-zh="…"> 上写自己的标题；没写就用首页标题。
+  var body = document.body;
   var TITLES = {
-    en: "Helmp · macOS launcher with an agent switcher",
-    zh: "Helmp · 会切换 Agent 会话的 macOS 启动器"
+    en: (body && body.getAttribute("data-title-en")) || "Helmp · macOS launcher with an agent switcher",
+    zh: (body && body.getAttribute("data-title-zh")) || "Helmp · 会切换 Agent 会话的 macOS 启动器"
   };
   var root = document.documentElement;
 

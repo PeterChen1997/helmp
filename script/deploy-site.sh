@@ -40,11 +40,20 @@ if [[ ! -f "$src/index.html" ]]; then
   exit 1
 fi
 
+# 先从插件注册表生成插件中心（site/plugins/ 和首页预览区块）；--dry-run 也生成，失败就中止。
+echo "==> 生成插件中心..."
+if ! python3 -I "$root/script/build-plugin-center.py"; then
+  echo "中止：插件中心生成失败" >&2
+  exit 1
+fi
+
 # 要上传的文件（相对 site/ 的路径），跳过隐藏文件（.DS_Store 等）。
+# 在 site/ 里用相对路径查找：仓库本身可能位于带点的目录下（如 .claude/worktrees/），
+# 用绝对路径匹配 '*/.*' 会把所有文件都排除掉。
 files=()
 while IFS= read -r -d '' file; do
-  files+=("${file#"$src"/}")
-done < <(find "$src" -type f ! -name '.*' ! -path '*/.*' -print0 | sort -z)
+  files+=("${file#./}")
+done < <(cd "$src" && find . -type f ! -name '.*' ! -path '*/.*' -print0 | sort -z)
 
 if [[ ${#files[@]} -eq 0 ]]; then
   echo "中止：site/ 里没有文件" >&2
@@ -52,7 +61,8 @@ if [[ ${#files[@]} -eq 0 ]]; then
 fi
 
 # 页面会部署在子路径下：以 / 开头的站内引用会指到博客根目录，必须用相对路径。
-if grep -nE '(href|src)="/[^/]' "$src"/*.html; then
+# 检查 site/ 下所有 .html（含 plugins/ 等子目录）。
+if grep -rnE --include='*.html' '(href|src)="/[^/]' "$src"; then
   echo "中止：上面这些引用用了根路径 /，部署到 /helmp/ 下会指到别的站，请改成相对路径" >&2
   exit 1
 fi
@@ -73,6 +83,10 @@ trap 'rm -f "$refresh_list"' EXIT
   echo "$SITE_URL"
   for rel in "${files[@]}"; do
     echo "${SITE_URL}${rel}"
+    # 子目录的 index.html 也会以目录地址被访问（如 helmp/plugins/），一并刷新
+    if [[ "$rel" == */index.html ]]; then
+      echo "${SITE_URL}${rel%index.html}"
+    fi
   done
 } > "$refresh_list"
 

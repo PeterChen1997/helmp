@@ -78,6 +78,8 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 - **Dev Tools › Public IP** asks `https://api.ipify.org` (or the address in `devtools.public_ip_url`) for your public IP, only when you press Return on that row.
 - Nothing else. There is no analytics, telemetry, crash reporting or update check. "Check for Updates" in the menu currently just shows the installed version, and the "Automatically check for updates" switch in Settings has no effect yet.
 
+The Plugin Center (Settings › Plugins › Browse Plugin Center, `helmp plugins available` / `install`, or an `install-plugin` link) downloads the plugin index and plugin files from `cdn.jsdelivr.net` only when you use it. Helmp never checks it in the background. See [plugin-center.md](plugin-center.md).
+
 Things that may reach the network because *you* asked for them: web search results (<kbd>↵</kbd> opens the search URL in your default browser; Helmp itself sends nothing, and the subtitle shows the exact URL), opening a link from the clipboard history or from a QR code, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
 
 "Read aloud" in Translate uses the macOS `say` command. `helmp://` deep links are handled locally.

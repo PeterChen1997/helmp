@@ -119,6 +119,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `version` | 是 | `x.y.z` |
 | `author` | 是 | |
 | `homepage` | | 设置页里显示成「打开主页」按钮 |
+| `license` | | 开源协议的 SPDX 标识，如 `MIT`。发布到[插件中心](plugin-center.zh-CN.md)时必填 |
 | `icon`、`tint` | | Lucide 图标名或插件目录里的 `.png`；底色：`blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | 只能声明 `["clipboard.read"]`（用 `{{clipboard}}` 时必须有）；其他权限都从清单推导 |
 | `preferences` | | 见下 |
@@ -245,6 +246,8 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 ```bash
 # 校验：字段、模板变量、主机名、脚本路径。一次列出全部问题，有问题时退出码为 1。
 helmp plugins validate path/to/plugin
+# 同上，输出 JSON（ok、id、version、commands、permissions、permissions_text、errors），给脚本和 agent 读。
+helmp plugins validate path/to/plugin --json
 
 # 列出插件及状态（enabled / disabled / needs-consent / error）。
 helmp plugins
@@ -263,6 +266,20 @@ HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo "flomo 你好" --form c
 - 允许并真正发出发往 `127.0.0.1` / `localhost` 的请求，所以锁定在 `flomoapp.com` 的插件也能指向本机的假服务。
 
 Helmp 自己的端到端测试（[`tests/e2e_plugins.rs`](../tests/e2e_plugins.rs)）就是这样跑的。
+
+## 发布到插件中心
+
+[插件中心](plugin-center.zh-CN.md)里是经过审核、谁都能一键安装的插件。发布你的插件：
+
+1. 在 `plugin.json` 里写上 `"license"`（SPDX 标识，比如 `"MIT"`），再加一个 `README.md`，说明插件做什么、有哪些命令、怎么配置。256×256 的 `icon.png` 可选。
+2. 文件夹保持干净：只放 UTF-8 文本文件和 PNG 图片，不要符号链接和隐藏文件；最多 64 个文件，单个文件不超过 512 KiB，总共不超过 2 MiB。id 用你自己的域名（不要用 `dev.helmp.*`）。
+3. 运行 `helmp plugins validate <文件夹>`。
+4. 运行 `helmp plugins submit <文件夹>`。它按注册表 CI 的同一套规则检查，打印权限、文件清单和将要做的事，然后停下，不做任何改动。确认后运行 `helmp plugins submit <文件夹> --yes`。这一步需要已登录的 [GitHub CLI](https://cli.github.com/)（`gh auth login`）。它会用你的账号 fork [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins)，推送名为 `plugin/<id>-<版本>` 的分支（文件放在 `plugins/<id>/`），然后开一个 PR。PR 描述里列出权限、每个文件的 SHA-256 和审核清单。最后打印 PR 地址。
+5. 维护者审核 PR。合并后注册表会重新生成 `index.json`，插件就出现在插件中心里。
+
+发布更新：提升 `version` 后再提交一次。装过这个插件的用户会看到「有更新」；权限有变化时，他们要重新确认。
+
+Claude Code、Codex 这类 coding agent 可以通过 Helmp 的 MCP 服务（`helmp mcp`）替你写插件、校验并提交，但运行提交这一步之前，必须先把计划给你看，等你同意。
 
 ## 深链接
 

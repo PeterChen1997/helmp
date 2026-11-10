@@ -75,6 +75,9 @@ pub struct Manifest {
     pub author: String,
     #[serde(default)]
     pub homepage: Option<String>,
+    /// 插件的开源协议（SPDX 标识，如 MIT）。插件中心要求填写，Helmp 本身不强制。
+    #[serde(default)]
+    pub license: Option<String>,
     /// Lucide 图标名（`notebook-pen`），或插件目录里的 png（`icon.png`）。
     #[serde(default)]
     pub icon: Option<String>,

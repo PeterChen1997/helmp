@@ -41,6 +41,10 @@ pub struct Config {
     /// MCP 客户端：用户添加的 MCP 服务器（见 `providers::mcp`）。密钥只在钥匙串。
     #[serde(default)]
     pub mcp: crate::providers::mcp::servers::McpConfig,
+    /// 插件中心注册表地址（`index.json` 与 `plugins/<id>/<文件>` 所在的目录）；None = 默认的 jsDelivr 地址。
+    /// 环境变量 `HELMP_REGISTRY_URL` 优先（测试指向本地假服务）。见 `providers::plugins::center`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_registry_url: Option<String>,
     /// 首次启动的权限引导是否已完成或跳过。
     pub onboarding_done: bool,
     /// `helmp mcp`（给 coding agent 用的 MCP 服务）的隐私开关，见 docs/mcp.md。
@@ -65,6 +69,7 @@ impl Default for Config {
             script_dirs: Vec::new(),
             plugins: BTreeMap::new(),
             mcp: Default::default(),
+            plugins_registry_url: None,
             onboarding_done: false,
             mcp_server: McpServerConfig::default(),
         }
@@ -147,6 +152,19 @@ pub struct PluginSettings {
     pub consent: Vec<String>,
     /// 非密钥偏好设置的值（text / select / checkbox）。secret 类型永远不进这里。
     pub prefs: BTreeMap<String, String>,
+    /// 从插件中心安装时记下来源与版本（用来提示「有更新」）；手动放进插件文件夹的插件为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<RegistryInstall>,
+}
+
+/// 插件中心安装记录。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RegistryInstall {
+    /// 安装时用的注册表地址。
+    pub registry: String,
+    /// 安装的版本。
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

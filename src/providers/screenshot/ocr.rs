@@ -54,8 +54,13 @@ pub fn join_lines(lines: &[Line]) -> String {
 
 /// 识别图片字节中的文字和二维码。`languages` 为空时用 `DEFAULT_LANGUAGES`。
 /// 没有文字时 `text` 为空串；图片无法解码或 Vision 报错时返回 Err。
+/// Vision 同时跑多个识别请求时偶尔报 CRImageReaderError（并行测试里能稳定复现）。
+/// 识别本来就是用户一次触发一次，串行化没有代价。
+static VISION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn recognize(image: &[u8], languages: &[String]) -> Result<Recognition> {
     anyhow::ensure!(!image.is_empty(), tr("图片数据为空", "Image data is empty"));
+    let _serial = VISION.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     autoreleasepool(|_| {
         let data = NSData::with_bytes(image);
         let handler = VNImageRequestHandler::initWithData_options(

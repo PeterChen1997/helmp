@@ -119,6 +119,7 @@ Text fields (`name`, `title`…) take a plain string or `{"en": "…", "zh-Hans"
 | `version` | yes | `x.y.z` |
 | `author` | yes | |
 | `homepage` | | Shown as a button in Settings |
+| `license` | | SPDX license identifier such as `MIT`. Required to publish in the [Plugin Center](plugin-center.md) |
 | `icon`, `tint` | | Lucide icon name or `.png` in the folder; tint: `blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | Only `["clipboard.read"]` can be declared (needed for `{{clipboard}}`); everything else is derived |
 | `preferences` | | See below |
@@ -245,6 +246,8 @@ The script gets `{{query}}` and preferences (no form, no clipboard), must finish
 ```bash
 # Validate: schema, template variables, hosts, script paths. Lists every problem; exits 1 on failure.
 helmp plugins validate path/to/plugin
+# Same, as JSON (ok, id, version, commands, permissions, permissions_text, errors) for scripts and agents.
+helmp plugins validate path/to/plugin --json
 
 # List plugins and their state (enabled / disabled / needs-consent / error).
 helmp plugins
@@ -263,6 +266,20 @@ For automated tests, run `helmp` with an isolated data folder: `HELMP_DATA_DIR=<
 - Requests to `127.0.0.1` / `localhost` are allowed and actually sent, so a plugin locked to `flomoapp.com` can be pointed at a local mock server.
 
 Helmp's own end-to-end tests ([`tests/e2e_plugins.rs`](../tests/e2e_plugins.rs)) use exactly this setup.
+
+## Publish to the Plugin Center
+
+The [Plugin Center](plugin-center.md) lists reviewed plugins that anyone can install with one click. To publish yours:
+
+1. Add `"license"` (an SPDX id such as `"MIT"`) to `plugin.json`, and a `README.md` that explains what the plugin does, its commands and how to set it up. A 256×256 `icon.png` is optional.
+2. Keep the folder clean: UTF-8 text files and PNG images only, no symlinks or hidden files, at most 64 files, 512 KiB per file and 2 MiB in total. Pick an id under a domain you own (not `dev.helmp.*`).
+3. Run `helmp plugins validate <folder>`.
+4. Run `helmp plugins submit <folder>`. It checks the same rules as the registry's CI, prints the permissions, files and what it will do, then stops without changing anything. Run `helmp plugins submit <folder> --yes` to go ahead. It needs the [GitHub CLI](https://cli.github.com/) signed in (`gh auth login`). It forks [PeterChen1997/helmp-plugins](https://github.com/PeterChen1997/helmp-plugins) with your account, pushes a branch named `plugin/<id>-<version>` with your files in `plugins/<id>/`, and opens a pull request whose description lists the permissions, every file's SHA-256 and the reviewer checklist. It prints the pull request's URL.
+5. A maintainer reviews the pull request. Once it's merged, the registry rebuilds `index.json` and the plugin shows up in the Plugin Center.
+
+To publish an update, bump `version` and submit again. Users who installed it see **Update available**, and if the permissions changed they approve them again.
+
+Coding agents (Claude Code, Codex) can build, validate and submit a plugin for you through Helmp's MCP server (`helmp mcp`). They must show you the plan and get your OK before running the submit step.
 
 ## Deep links
 
