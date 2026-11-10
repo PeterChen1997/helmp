@@ -31,8 +31,14 @@ notarize() {
     printf '   [dry-run] xcrun notarytool submit %q --wait\n' "$file"
     return
   fi
-  out="$(xcrun notarytool submit "$file" "${NOTARY[@]}" --wait --output-format json 2>&1)" \
-    || fail "notarytool submit 失败：${out}"
+  # 上传偶尔遇到网络中断（NSURLErrorDomain -1005），重试 3 次。
+  local try
+  for try in 1 2 3; do
+    out="$(xcrun notarytool submit "$file" "${NOTARY[@]}" --wait --output-format json 2>&1)" && break
+    [[ $try == 3 ]] && fail "notarytool submit 失败：${out}"
+    echo "   上传失败，10 秒后重试（第 $try 次）"
+    sleep 10
+  done
   id="$(printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')"
   status="$(printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("status",""))')"
   if [[ "$status" != "Accepted" ]]; then
