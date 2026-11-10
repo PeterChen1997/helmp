@@ -283,9 +283,9 @@ def render_card(p, icons, is_url):
             f'<span lang="en">by {esc(p["author"])}</span><span lang="zh-CN">作者 {esc(p["author"])}</span>']
     if p["license"] is not None:
         meta.append(esc(p["license"]))
-    meta_html = ' <span aria-hidden="true">·</span> '.join(meta)
+    meta_html = '<span class="pc-meta-sep" aria-hidden="true">/</span>'.join(meta)
 
-    out = [f'        <article class="card pc-card" id="plugin-{esc(pid)}">']
+    out = [f'        <article class="glass pc-card" id="plugin-{esc(pid)}">']
     out.append('          <div class="pc-card-head">')
     out.append("            " + icon_html(p, icons, is_url, "", "pc-icon", 56))
     out.append('            <div class="pc-card-title">')
@@ -320,6 +320,10 @@ def render_card(p, icons, is_url):
     return "\n".join(out)
 
 
+CHECK = ('<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" '
+         'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>')
+
+
 def render_page(data, plugins, icons, is_url):
     count = len(plugins)
     cards = "\n".join(render_card(p, icons, is_url) for p in plugins)
@@ -330,7 +334,7 @@ def render_page(data, plugins, icons, is_url):
     if commit:
         short = commit[:7]
         source_line = (
-            f'      <p class="pc-source-line">'
+            f'      <p class="footer-source">'
             f'<span lang="en">Plugin data from the registry at commit</span>'
             f'<span lang="zh-CN">插件数据来自注册表提交</span> '
             f'<a href="{esc(REGISTRY_REPO)}/commit/{esc(commit)}"><code>{esc(short)}</code></a></p>\n'
@@ -346,13 +350,13 @@ def render_page(data, plugins, icons, is_url):
   <title>Plugin Center · Helmp</title>
   <meta name="description" content="Reviewed plugins for Helmp, the native macOS launcher. Every file is checked against its SHA-256 on install, and plugins stay off until you approve their permissions.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0d16" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#dfe8fd" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1131" media="(prefers-color-scheme: dark)">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Helmp Plugin Center">
   <meta property="og:description" content="Reviewed plugins for Helmp, the native macOS launcher.">
   <meta property="og:url" content="https://blog.peterchen97.cn/helmp/plugins/">
-  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/icon-512.png">
+  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/og.png">
   <link rel="icon" type="image/png" href="../assets/icon-64.png">
   <link rel="apple-touch-icon" href="../assets/icon-512.png">
   <link rel="stylesheet" href="../assets/style.css">
@@ -360,59 +364,63 @@ def render_page(data, plugins, icons, is_url):
 {HEAD_SCRIPT}
 </head>
 <body data-title-en="Plugin Center · Helmp" data-title-zh="插件中心 · Helmp">
-  <div class="backdrop" aria-hidden="true">
-    <div class="blob blob-a"></div>
-    <div class="blob blob-b"></div>
-    <div class="blob blob-c"></div>
-  </div>
+  <a class="skip" href="#main"><span lang="en">Skip to content</span><span lang="zh-CN">跳到正文</span></a>
+  <div class="backdrop" aria-hidden="true"></div>
 
-  <header class="topbar">
-    <div class="topbar-inner">
+  <header class="menubar">
+    <div class="menubar-inner">
       <a class="brand" href="../">
-        <img src="../assets/icon-64.png" width="28" height="28" alt="">
+        <img src="../assets/icon-64.png" width="22" height="22" alt="">
         <span>Helmp</span>
       </a>
-      <nav class="nav" aria-label="Sections">
+      <nav class="menu" aria-label="Sections">
         <a href="../"><span lang="en">Home</span><span lang="zh-CN">首页</span></a>
         <a href="./" aria-current="page"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></a>
         <a href="#submit"><span lang="en">Submit</span><span lang="zh-CN">提交插件</span></a>
       </nav>
-      <div class="lang-switch" role="group" aria-label="Language / 语言">
-        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
-        <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+      <div class="menubar-extras">
+        <div class="lang-switch" role="group" aria-label="Language / 语言">
+          <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+          <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+        </div>
       </div>
     </div>
   </header>
 
-  <main>
-    <section class="hero pc-hero">
-      <h1><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h1>
-      <p class="lede">
-        <span lang="en">Every plugin here is reviewed by hand before it is listed. When you install one, Helmp checks each file against its SHA-256. New plugins stay off until you turn them on, and Helmp lists their permissions for you to approve first.</span>
-        <span lang="zh-CN">这里的每个插件都由维护者人工审核后才上架。在 Helmp 里安装时，会逐个校验文件的 SHA-256；装好后默认关闭，启用前先列出权限让你确认。</span>
-      </p>
-      <ul class="pc-trust">
-        <li class="glass"><span lang="en">Reviewed by hand</span><span lang="zh-CN">人工审核</span></li>
-        <li class="glass"><span lang="en">SHA-256 checked</span><span lang="zh-CN">SHA-256 校验</span></li>
-        <li class="glass"><span lang="en">Off until you approve</span><span lang="zh-CN">确认后才启用</span></li>
-      </ul>
+  <main id="main">
+    <section class="hero pc-hero" aria-labelledby="pc-title">
+      <div class="hero-copy wrap">
+        <h1 id="pc-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h1>
+        <p class="hero-lede">
+          <span lang="en">Every plugin here is reviewed by hand before it is listed. When you install one, Helmp checks each file against its SHA-256. New plugins stay off until you turn them on, and Helmp lists their permissions for you to approve first.</span>
+          <span lang="zh-CN">这里的每个插件都由维护者人工审核后才上架。在 Helmp 里安装时，会逐个校验文件的 SHA-256；装好后默认关闭，启用前先列出权限让你确认。</span>
+        </p>
+        <ul class="pc-trust">
+          <li class="glass">{CHECK}<span lang="en">Reviewed by hand</span><span lang="zh-CN">人工审核</span></li>
+          <li class="glass">{CHECK}<span lang="en">SHA-256 checked</span><span lang="zh-CN">SHA-256 校验</span></li>
+          <li class="glass">{CHECK}<span lang="en">Off until you approve</span><span lang="zh-CN">确认后才启用</span></li>
+        </ul>
+      </div>
     </section>
 
-    <section id="catalog" class="section pc-section">
+    <section id="catalog" class="section pc-section" aria-label="Plugins">
+      <div class="wrap">
       <h2><span lang="en">All plugins</span><span lang="zh-CN">全部插件</span> <span class="pc-count">{count}</span></h2>
       <div class="pc-grid">
 {cards}
       </div>
+      </div>
     </section>
 
     <section id="submit" class="section">
+      <div class="wrap">
       <h2><span lang="en">Submit your plugin</span><span lang="zh-CN">提交你的插件</span></h2>
-      <p class="section-lede">
+      <p class="lede">
         <span lang="en">The easiest way is to let a coding agent do it with you. Everything goes through a pull request that the maintainer reviews by hand.</span>
         <span lang="zh-CN">最省事的办法是让 coding agent 陪你一起做。所有插件都通过 PR 提交，由维护者人工审核。</span>
       </p>
       <div class="pc-submit">
-        <div class="glass install">
+        <div class="glass install-card">
           <h3 class="pc-submit-title"><span lang="en">With Claude Code or Codex</span><span lang="zh-CN">用 Claude Code 或 Codex</span></h3>
           <ol class="steps">
             <li>
@@ -433,9 +441,9 @@ def render_page(data, plugins, icons, is_url):
             </li>
           </ol>
         </div>
-        <div class="glass install">
+        <div class="glass install-card">
           <h3 class="pc-submit-title"><span lang="en">By hand</span><span lang="zh-CN">手动提交</span></h3>
-          <p class="pc-submit-text">
+          <p>
             <span lang="en">Run this in a terminal. It prints what it is about to do; add <code>--yes</code> to actually do it.</span>
             <span lang="zh-CN">在终端里运行下面的命令。它会先打印将要做什么，加上 <code>--yes</code> 才真正执行。</span>
           </p>
@@ -452,23 +460,27 @@ def render_page(data, plugins, icons, is_url):
           </ul>
         </div>
       </div>
+      </div>
     </section>
   </main>
 
   <footer class="footer">
-    <div class="footer-inner">
+    <div class="wrap footer-inner">
       <div class="footer-brand">
-        <img src="../assets/icon-64.png" width="22" height="22" alt="">
-        <span>Helmp</span>
+        <img src="../assets/icon-64.png" width="28" height="28" alt="">
+        <div>
+          <strong>Helmp</strong>
+          <span lang="en">A native macOS launcher.</span><span lang="zh-CN">原生 macOS 启动器。</span>
+        </div>
       </div>
-{source_line}      <p>
-        <a href="https://github.com/PeterChen1997/helmp">GitHub</a>
-        <span aria-hidden="true">·</span>
-        <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a>
-        <span aria-hidden="true">·</span>
-        <span>© 2026 Peter Chen</span>
-      </p>
-    </div>
+      <ul class="footer-links">
+        <li><a href="../"><span lang="en">Home</span><span lang="zh-CN">首页</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp">GitHub</a></li>
+        <li><a href="{esc(REGISTRY_REPO)}"><span lang="en">Plugin registry</span><span lang="zh-CN">插件注册表</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a></li>
+      </ul>
+      <p class="copyright">© 2026 Peter Chen</p>
+{source_line}    </div>
   </footer>
 
   <script src="../assets/main.js"></script>
@@ -478,30 +490,30 @@ def render_page(data, plugins, icons, is_url):
 
 
 def render_home_block(plugins, icons, is_url):
-    """首页 #plugins 区块末尾的精简预览（不含标记行本身，缩进 6 格）。"""
-    out = ['      <div class="pc-preview">']
-    out.append('        <h3 class="pc-preview-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h3>')
-    out.append('        <p class="pc-preview-lede">')
-    out.append('          <span lang="en">Reviewed plugins you can install from Helmp in one click.</span>')
-    out.append('          <span lang="zh-CN">经过人工审核、在 Helmp 里一键安装的插件。</span>')
-    out.append("        </p>")
-    out.append('        <div class="pc-mini-grid">')
+    """首页 #plugins 区块里的插件中心预览（不含标记行本身，缩进 12 格）。"""
+    out = ['            <div class="pc-preview">']
+    out.append('              <h3 class="pc-preview-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h3>')
+    out.append('              <p class="pc-preview-lede">')
+    out.append('                <span lang="en">Reviewed plugins you can install from Helmp in one click.</span>')
+    out.append('                <span lang="zh-CN">经过人工审核、在 Helmp 里一键安装的插件。</span>')
+    out.append("              </p>")
+    out.append('              <ul class="pc-list glass">')
     for p in plugins:
-        out.append(f'          <a class="glass pc-mini" href="plugins/#plugin-{esc(p["id"])}">')
-        out.append("            " + icon_html(p, icons, is_url, "plugins/", "pc-mini-icon", 40))
-        out.append('            <span class="pc-mini-text">')
-        out.append(f'              <span class="pc-mini-name">{bi(p["name"]["en"], p["name"]["zh-Hans"])}</span>')
+        out.append("                <li>")
+        out.append(f'                  <a class="pc-row" href="plugins/#plugin-{esc(p["id"])}">')
+        out.append("                    " + icon_html(p, icons, is_url, "plugins/", "pc-row-icon", 44))
+        out.append('                    <span class="pc-row-text">')
+        out.append(f'                      <span class="pc-row-name">{bi(p["name"]["en"], p["name"]["zh-Hans"])}</span>')
         if p["description"] is not None:
             en = first_sentence(p["description"]["en"], False)
             zh = first_sentence(p["description"]["zh-Hans"], True)
-            out.append(f'              <span class="pc-mini-desc">{bi(en, zh)}</span>')
-        out.append("            </span>")
-        out.append("          </a>")
-    out.append("        </div>")
-    out.append('        <div class="cta">')
-    out.append('          <a class="btn btn-glass" href="plugins/"><span lang="en">Browse the Plugin Center</span><span lang="zh-CN">浏览插件中心</span></a>')
-    out.append("        </div>")
-    out.append("      </div>")
+            out.append(f'                      <span class="pc-row-desc">{bi(en, zh)}</span>')
+        out.append("                    </span>")
+        out.append("                  </a>")
+        out.append("                </li>")
+    out.append("              </ul>")
+    out.append('              <a class="btn btn-glass" href="plugins/"><span lang="en">Browse the Plugin Center</span><span lang="zh-CN">浏览插件中心</span></a>')
+    out.append("            </div>")
     return "\n".join(out)
 
 
