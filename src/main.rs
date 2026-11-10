@@ -28,6 +28,7 @@ mod providers;
 mod settings;
 mod style;
 mod trace;
+mod updates;
 
 use gpui_kit::assets::AllAssets;
 use gpui_kit::*;
@@ -110,6 +111,8 @@ fn run_gui(engine: Engine) {
                 return;
             }
             menubar::install(cx);
+            // 自动检查更新的定时、面板命令的检查请求、安装就绪后退出（见 src/updates）。
+            updates::start(cx);
             onboarding::maybe_show(cx);
             deeplink::install(links, cx);
             // coding agent 经 `helmp mcp` 请求执行有副作用的操作时，在面板里问用户（见 src/mcp/ipc.rs）。

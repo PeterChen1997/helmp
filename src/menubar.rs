@@ -4,11 +4,13 @@
 //!   模板图本身不能带颜色，所以圆点是按钮上的一个子视图（非模板图），图标仍保持系统的明暗与高亮处理。
 //! - 菜单：顶部 App 图标 +「N 个会话在等你」，「Agent 会话」列出等待中的会话，下面是常用入口、
 //!   设置、检查更新、退出。右侧快捷键取自 `hotkey::active`，即真实生效的组合。
+//! - 「检查更新…」打开设置 › 关于并开始检查（结果显示在那里）；已发现新版本时改为「更新到 x.y.z…」，
+//!   点了只打开关于页，由用户在那里确认下载安装。
 //! - 每 2 秒用 `engine.query("")` 刷新等待中的会话；菜单展开期间不重建，避免条目在鼠标下跳动。
 //! - 遵守 `config.general.show_menubar_icon`，通过 `config::subscribe` 实时生效。
 //!
 //! NSMenu 的回调在 AppKit 主线程触发：回调只把命令投进 channel，由 GPUI 前台任务轮询执行，
-//! 不在回调里碰 GPUI 实体。唯一例外是「检查更新…」的提示框，它不涉及 GPUI，直接在回调里弹。
+//! 不在回调里碰 GPUI 实体。
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -23,7 +25,7 @@ use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
 };
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSEventModifierFlags,
+    NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSEventModifierFlags,
     NSFont, NSImage, NSImageView, NSMenu, NSMenuDelegate, NSMenuItem, NSMenuItemBadge, NSStatusBar,
     NSStatusItem, NSTextField, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
@@ -88,6 +90,7 @@ pub fn install(cx: &mut App) {
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut last_refresh: Option<Instant> = None;
+        let mut update_generation = u64::MAX;
         loop {
             while let Ok(command) = rx.try_recv() {
                 cx.update(|cx| run(command, cx));
@@ -99,6 +102,16 @@ pub fn install(cx: &mut App) {
             }
             if hotkey::generation() != bar.hotkey_generation {
                 bar.dirty = true;
+            }
+            if crate::updates::generation() != update_generation {
+                update_generation = crate::updates::generation();
+                let available = crate::updates::snapshot()
+                    .available()
+                    .map(|manifest| manifest.version.to_string());
+                if available != bar.update_available {
+                    bar.update_available = available;
+                    bar.dirty = true;
+                }
             }
             if i18n::generation() != lang_generation {
                 // 切换了界面语言：菜单要重建，等待会话的状态文字也要立即按新语言重查。
@@ -147,8 +160,13 @@ fn run(command: MenuCommand, cx: &mut App) {
         MenuCommand::Run(command) => hotkey::execute(command, cx),
         MenuCommand::RunItem(item) => hotkey::run_action(*item, cx),
         MenuCommand::Settings => crate::settings::open(cx),
-        // 在回调里已经处理（见 MenuTarget::clicked）。
-        MenuCommand::CheckUpdates => {}
+        MenuCommand::CheckUpdates => {
+            // 已经知道有新版本就不再查一遍：直接去关于页确认安装。
+            if crate::updates::snapshot().available().is_none() {
+                crate::updates::check_in_background(true);
+            }
+            crate::settings::open_page(cx, crate::settings::Page::About);
+        }
         MenuCommand::Quit => {
             // MCP 服务器子进程随 Helmp 一起结束（不等它们自己发现 stdin 关了）。
             crate::providers::mcp::manager::global().stop_all();
@@ -261,7 +279,6 @@ define_class!(
                 .ok()
                 .and_then(|index| self.ivars().commands.borrow().get(index).cloned());
             match command {
-                Some(MenuCommand::CheckUpdates) => show_update_notice(self.mtm()),
                 Some(command) => {
                     if self.ivars().tx.send(command).is_err() {
                         eprintln!("helmp: 菜单命令无人接收（轮询任务已结束）");
@@ -301,23 +318,6 @@ impl MenuTarget {
     }
 }
 
-/// 暂无发布地址：只说明当前版本。
-fn show_update_notice(mtm: MainThreadMarker) {
-    let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str(&format!(
-        "Helmp {}",
-        env!("CARGO_PKG_VERSION")
-    )));
-    let version = env!("CARGO_PKG_VERSION");
-    alert.setInformativeText(&NSString::from_str(&trf!(
-        "当前版本 {version}。Helmp 还没有发布渠道，暂时无法自动检查更新。",
-        "You're running version {version}. Helmp doesn't have a release channel yet, so it can't check for updates automatically."
-    )));
-    // 菜单栏工具型 App 不激活的话，提示框会躲在别的窗口后面。
-    NSApplication::sharedApplication(mtm).activate();
-    alert.runModal();
-}
-
 struct MenuBar {
     mtm: MainThreadMarker,
     item: Retained<NSStatusItem>,
@@ -327,6 +327,8 @@ struct MenuBar {
     waiting: Vec<Item>,
     waiting_signature: Vec<(String, String, Option<String>)>,
     hotkey_generation: u64,
+    /// 已发现的新版本号：菜单项显示「更新到 x.y.z…」。
+    update_available: Option<String>,
     visible: bool,
     dirty: bool,
 }
@@ -375,6 +377,7 @@ impl MenuBar {
             waiting: Vec::new(),
             waiting_signature: Vec::new(),
             hotkey_generation: u64::MAX,
+            update_available: None,
             visible: true,
             dirty: true,
         }
@@ -528,12 +531,11 @@ impl MenuBar {
         let settings = self.add(&mut commands, tr("设置…", "Settings…"), MenuCommand::Settings, None);
         settings.setKeyEquivalent(&NSString::from_str(","));
         settings.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
-        self.add(
-            &mut commands,
-            tr("检查更新…", "Check for Updates…"),
-            MenuCommand::CheckUpdates,
-            None,
-        );
+        let update_title = match &self.update_available {
+            Some(version) => trf!("更新到 {version}…", "Update to {version}…"),
+            None => tr("检查更新…", "Check for Updates…").to_string(),
+        };
+        self.add(&mut commands, &update_title, MenuCommand::CheckUpdates, None);
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
         let quit = self.add(&mut commands, tr("退出 Helmp", "Quit Helmp"), MenuCommand::Quit, None);
         quit.setKeyEquivalent(&NSString::from_str("q"));

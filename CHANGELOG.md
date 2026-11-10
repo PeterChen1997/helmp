@@ -6,6 +6,10 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Automatic updates. With "Automatically check for updates" on (Settings › General), Helmp checks once a day for a new version, first at Qiniu (`blog.peterchen97.cn`, reachable from mainland China) and then GitHub Releases. "Check for Updates…" in the menu bar, the panel command "Check for Helmp Updates" and the button in Settings open Settings › About and check right away; the result or the reason it failed is shown there. When a version is found the menu item reads "Update to x.y.z…", and About shows the release notes and a "Download and Install" button. Nothing is downloaded before you click it. Helmp then checks the download's size and SHA-256, its code signature, that it comes from the same Developer ID team and that Gatekeeper accepts it, quits, swaps itself and reopens. When it can't replace itself (not in Applications, or no write permission) it downloads the dmg for you instead. `helmp update check` / `helmp update install [--yes]` do the same from the command line. See [docs/updates.md](docs/updates.md).
+
 ### Changed
 
 - Plugin commands that take input (flomo, Quick Search's `gh` / `npm`…, list commands) and MCP tools with arguments no longer take what you type in the main search, so a search can't trigger them by accident: typing `flomo hello` or `gh rust` only lists the command. Press Tab (or Return) on it to enter the command's own scope: a tag with the plugin's name appears in the search bar, the flomo form gets the cursor, `gh` takes the search terms; Esc, or Backspace when empty, goes back. `helmp://plugin/…?q=` opens the panel inside that scope. `helmp query` / `helmp run` take `--scope <id>`, and agents get a `scope` from `helmp_search` to pass to `helmp_search` / `helmp_run`.
@@ -20,6 +24,10 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - Long bookmark titles no longer match unrelated queries through loose letter-order matching.
 
 ### 简体中文
+
+#### 新增
+
+- 自动更新。打开「设置 › 通用 › 自动检查更新」后，Helmp 每天检查一次新版本，先查七牛（`blog.peterchen97.cn`，国内可直连），再查 GitHub Releases。菜单栏「检查更新…」、面板命令「检查 Helmp 更新」和设置里的按钮会打开「设置 › 关于」并立即检查，结果或失败原因显示在那里。发现新版本时菜单项变成「更新到 x.y.z…」，关于页显示更新说明和「下载并安装」按钮，点之前不下载任何东西。之后 Helmp 校验下载内容的大小和 SHA-256、代码签名、是否出自同一个 Developer ID 团队、Gatekeeper 是否放行，再退出、替换并重新打开。无法原地替换时（不在「应用程序」里、或没有写权限）改为替你下载 dmg。命令行用 `helmp update check` / `helmp update install [--yes]`。见 [docs/updates.zh-CN.md](docs/updates.zh-CN.md)。
 
 #### 变更
 

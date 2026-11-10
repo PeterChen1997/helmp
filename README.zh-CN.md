@@ -92,7 +92,7 @@ Helmp 需要 macOS 15 Sequoia 或更新版本。
 2. 打开 dmg，把 Helmp 拖进「应用程序」。
 3. 从「应用程序」里启动 Helmp，首次启动的引导会带你授权（见下文）。
 
-目前还没有自动更新：升级时下载新版本，替换掉旧的 App 即可。
+Helmp 每天检查一次更新（可在「设置 › 通用」里关掉），只有你在「设置 › 关于」里点「下载并安装」后，才会在校验签名后安装。见 [docs/updates.zh-CN.md](docs/updates.zh-CN.md)。
 
 如果之前用过自己构建的（ad-hoc 签名）Helmp，签名版可能读不到旧版本存在钥匙串里的 API Key。遇到这种情况 Helmp 会直接说明，在「设置 › 模型」里重新保存一次 Key 就好。系统按签名记录权限，所以也可能需要重新授权一次。
 
@@ -261,13 +261,13 @@ HELMP_TRACE=1 cargo run          # 把界面事件打到 stderr
 cargo test --release
 ```
 
-这条命令会跑单元测试和端到端测试（`tests/e2e_*.rs`）。端到端测试用真实的 `helmp` 可执行文件，把每个功能的「查询 → 执行」走一遍：应用搜索、计算器、单位与汇率、时间、开发工具、Emoji、颜色、文件、系统设置面板、系统开关、书签、词典、窗口管理、进程与端口、片段、剪贴板、翻译、OCR、脚本命令、插件、MCP 服务器（对着 `examples/mock_mcp_server.rs` 编译出的假服务器）和 Agent 会话。每个用例都有自己的临时数据目录和 `HOME`，并以 `HELMP_DRY_RUN=1` 运行，复制、粘贴、打开网址、移动窗口、结束进程都只回报不执行（只有一个用例真的结束了它自己起的 `sleep` 进程）。测试不会读写你的剪贴板和钥匙串，不碰 `~/.claude`、`~/.codex`，也不会访问真实网络：HTTP 请求都发往本机的假服务。少数依赖本机环境的用例（比如要求 Spotlight 已经给仓库建好索引）标了 `#[ignore]`，用 `-- --ignored` 运行。怎么新增用例见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+这条命令会跑单元测试和端到端测试（`tests/e2e_*.rs`）。端到端测试用真实的 `helmp` 可执行文件，把每个功能的「查询 → 执行」走一遍：应用搜索、计算器、单位与汇率、时间、开发工具、Emoji、颜色、文件、系统设置面板、系统开关、书签、词典、窗口管理、进程与端口、片段、剪贴板、翻译、OCR、脚本命令、插件、MCP 服务器（对着 `examples/mock_mcp_server.rs` 编译出的假服务器）、Agent 会话和自动更新。每个用例都有自己的临时数据目录和 `HOME`，并以 `HELMP_DRY_RUN=1` 运行，复制、粘贴、打开网址、移动窗口、结束进程都只回报不执行（只有一个用例真的结束了它自己起的 `sleep` 进程）。测试不会读写你的剪贴板和钥匙串，不碰 `~/.claude`、`~/.codex`，也不会访问真实网络：HTTP 请求都发往本机的假服务。少数依赖本机环境的用例（比如要求 Spotlight 已经给仓库建好索引）标了 `#[ignore]`，用 `-- --ignored` 运行。怎么新增用例见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## Roadmap
 
 下面是想做但还没做的事，顺序可能调整。
 
-- Homebrew cask 和自动更新。签名、公证的安装包已经在 GitHub Releases 上了，但菜单里的「检查更新」和设置里的更新开关目前还没有可检查的更新源。
+- Homebrew cask。签名、公证的安装包已经在 GitHub Releases 上，Helmp 也能自己更新。
 - 以 MCP server 的形式把应用搜索、剪贴板、截图、OCR 开放给 coding agent。
 - 支持 Claude Code、Codex 之外的更多 agent。
 - 脚本命令：Alfred Script Filter JSON 输出、自定义图标、带 `refreshTime` 的实时 `inline` 模式（这两个字段现在能解析，但还没用上）。

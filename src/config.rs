@@ -45,6 +45,9 @@ pub struct Config {
     /// 环境变量 `HELMP_REGISTRY_URL` 优先（测试指向本地假服务）。见 `providers::plugins::center`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_registry_url: Option<String>,
+    /// 自动更新：更新源地址（见 `updates::feed`、docs/updates.md）。
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     /// 首次启动的权限引导是否已完成或跳过。
     pub onboarding_done: bool,
     /// `helmp mcp`（给 coding agent 用的 MCP 服务）的隐私开关，见 docs/mcp.md。
@@ -70,6 +73,7 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             mcp: Default::default(),
             plugins_registry_url: None,
+            updates: UpdatesConfig::default(),
             onboarding_done: false,
             mcp_server: McpServerConfig::default(),
         }
@@ -103,6 +107,15 @@ impl Default for General {
             language: Language::System,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// 更新源（`latest.json` 的地址，逗号分隔可写多个，按顺序尝试）；None = 默认的七牛 + GitHub。
+    /// 环境变量 `HELMP_UPDATE_FEED` 优先（测试指向本地假服务）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

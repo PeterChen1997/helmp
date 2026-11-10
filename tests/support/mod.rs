@@ -128,6 +128,11 @@ impl Helmp {
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
+    /// `helmp <args>`，不论成败都返回完整输出（要同时看 stdout 与 stderr 时用）。
+    pub fn output(&self, args: &[&str]) -> std::process::Output {
+        self.command().args(args).output().expect("run helmp")
+    }
+
     /// 以同样的隔离环境起一个长时间运行的子进程（如 `helmp mcp`），stdin / stdout 走管道。
     pub fn spawn(&self, args: &[&str]) -> std::process::Child {
         self.command()

@@ -457,8 +457,8 @@
           </div>
           <div>
             <h3><span lang="en">Nothing phones home</span><span lang="zh-CN">不往外报数据</span></h3>
-            <p lang="en">No analytics, no telemetry, no crash reports, no update checks. Agent session files are only read, never written.</p>
-            <p lang="zh-CN">没有统计、遥测、崩溃上报，也不检查更新。Agent 的会话文件只读不写。</p>
+            <p lang="en">No analytics, no telemetry, no crash reports. The daily update check downloads a version file and sends nothing about you. Agent session files are only read, never written.</p>
+            <p lang="zh-CN">没有统计、遥测、崩溃上报。每天检查更新只是下载一个版本文件，不带任何关于你的信息。Agent 的会话文件只读不写。</p>
           </div>
         </div>
 
@@ -504,6 +504,11 @@
                 <td><span lang="en">Only when you press Return on that row</span><span lang="zh-CN">只在你对那一行按回车时</span></td>
               </tr>
               <tr>
+                <th scope="row"><span lang="en">Updates</span><span lang="zh-CN">检查更新</span></th>
+                <td><code>blog.peterchen97.cn</code><span lang="en">, falling back to </span><span lang="zh-CN">，取不到时改用 </span><code>github.com</code></td>
+                <td><span lang="en">Once a day (can be turned off), when you click Check for Updates, and when you install an update</span><span lang="zh-CN">每天一次（可关闭）、点「检查更新」时，以及你确认安装更新时</span></td>
+              </tr>
+              <tr>
                 <th scope="row"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></th>
                 <td><code>cdn.jsdelivr.net</code></td>
                 <td><span lang="en">When you browse or install plugins</span><span lang="zh-CN">你浏览或安装插件时</span></td>
@@ -522,8 +527,8 @@
     <section id="install" class="section" aria-labelledby="install-title">
       <div class="wrap">
         <h2 id="install-title"><span lang="en">Get Helmp</span><span lang="zh-CN">安装 Helmp</span></h2>
-        <p class="lede" lang="en">Helmp needs macOS 15 Sequoia or later. There are no automatic updates yet: to upgrade, download the new release and replace the app.</p>
-        <p class="lede" lang="zh-CN">需要 macOS 15 Sequoia 或更新版本。目前还没有自动更新：升级时下载新版本，替换掉旧的 App 即可。</p>
+        <p class="lede" lang="en">Helmp needs macOS 15 Sequoia or later. It checks for updates once a day and installs one only when you say so.</p>
+        <p class="lede" lang="zh-CN">需要 macOS 15 Sequoia 或更新版本。每天检查一次更新，你确认后才安装。</p>
         <div class="install">
           <div class="install-card glass">
             <h3><span lang="en">Download</span><span lang="zh-CN">下载安装包</span></h3>

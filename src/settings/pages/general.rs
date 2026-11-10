@@ -177,8 +177,15 @@ impl SettingsView {
             .child(widgets::group(
                 vec![
                     widgets::row(
-                        widgets::label(
+                        widgets::label_with_help(
                             tr("自动检查更新", "Automatically check for updates"),
+                            tr(
+                                "每天读取一次 blog.peterchen97.cn 上的版本清单，取不到时改读 github.com。\
+                                 只发送 Helmp 的版本号（User-Agent），不发送其他信息；下载安装总要你确认。",
+                                "Once a day Helmp reads the release list from blog.peterchen97.cn, falling back to \
+                                 github.com. It sends only its version number (User-Agent), nothing else, and \
+                                 never installs without asking.",
+                            ),
                             pal,
                         ),
                         widgets::switch(
@@ -195,17 +202,20 @@ impl SettingsView {
                     .into_any_element(),
                     widgets::row(
                         div()
+                            .flex_1()
                             .text_size(px(13.))
                             .text_color(pal.muted)
-                            .child(format!("Helmp {}", env!("CARGO_PKG_VERSION"))),
-                        // 还没有更新服务：按钮禁用，而不是点了假装「已是最新版本」。
+                            .child(crate::updates::snapshot().status_line()),
+                        // 结果、更新说明和安装按钮都在关于页。
                         widgets::push_button(
                             "check-update",
                             tr("立即检查", "Check Now"),
-                            true,
-                            |_, _, _| {},
-                        )
-                        .tooltip(tr("更新服务尚未接入", "Update service isn't available yet")),
+                            crate::updates::snapshot().busy != crate::updates::Busy::Idle,
+                            |_, _, cx| {
+                                crate::updates::check_in_background(true);
+                                crate::settings::open_page(cx, crate::settings::Page::About);
+                            },
+                        ),
                     )
                     .into_any_element(),
                 ],
