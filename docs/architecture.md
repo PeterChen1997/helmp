@@ -59,6 +59,7 @@ Helmp is a single Rust binary. The UI is drawn with [GPUI](https://www.gpui.rs) 
 | `src/style.rs` | Light and dark palettes shared by the panel, settings and onboarding. |
 | `src/dock.rs` | Temporarily shows a Dock icon while a regular window (settings, onboarding) is open. |
 | `src/cli.rs` | `helmp query`, `helmp run`, `helmp providers`. |
+| `src/mcp/` | `helmp mcp`: stdio MCP server for coding agents (plugin authoring tools, search / run), the `agent.sock` approval channel served by the GUI, and agent config writers. See [mcp.md](mcp.md). |
 | `src/trace.rs` | `HELMP_TRACE=1` logs UI events to stderr. |
 
 ### Built-in providers

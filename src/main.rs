@@ -16,6 +16,7 @@ mod i18n;
 mod icons;
 mod launcher;
 mod matcher;
+mod mcp;
 mod menubar;
 mod models;
 mod onboarding;
@@ -108,6 +109,8 @@ fn run_gui(engine: Engine) {
             menubar::install(cx);
             onboarding::maybe_show(cx);
             deeplink::install(links, cx);
+            // coding agent 经 `helmp mcp` 请求执行有副作用的操作时，在面板里问用户（见 src/mcp/ipc.rs）。
+            mcp::ipc::serve(cx);
 
             if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
                 self_test(cx, window, launcher, query.to_string_lossy().into_owned());
@@ -121,6 +124,7 @@ fn run_gui(engine: Engine) {
 /// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
 /// - `HELMP_SELF_TEST_HOTKEY`：可选，执行某个扩展的全局快捷键命令（如 `translate`）。
 /// - `HELMP_SELF_TEST_KEYS`：可选，模拟按键序列，每步后报告焦点、表单与结果（见下）。
+/// - `HELMP_SELF_TEST_AGENT_CONFIRM`：可选，`<查询>|<结果 id>`，弹出 agent 请求执行的确认页。
 /// - `HELMP_SELF_TEST_SETTINGS`：可选，在屏幕外打开设置窗口的某一页（页面名中英文都行），
 ///   之后的按键、`click:` / `scroll:` 和 `snap:` 都作用于设置窗口。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
@@ -209,6 +213,13 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 }
                 None => println!("self-test hotkey {provider}: 没有这个扩展的快捷键"),
             }
+        }
+
+        // HELMP_SELF_TEST_AGENT_CONFIRM=<查询>|<结果 id>：弹出 agent 的执行确认页（不经套接字），供截图检查。
+        if let Ok(spec) = std::env::var("HELMP_SELF_TEST_AGENT_CONFIRM") {
+            cx.update(|cx| mcp::ipc::present_for_self_test(&spec, cx));
+            cx.background_executor().timer(settle).await;
+            report("agent-confirm".into(), cx);
         }
 
         // HELMP_SELF_TEST_SETTINGS=<页面名>：在屏幕外打开设置窗口的这一页（不激活、不抢焦点），

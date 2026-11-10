@@ -62,6 +62,14 @@ pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
     .into()
 }
 
+/// 下次渲染时要展开的插件（agent 装好插件后在设置里直接翻到它，见 src/mcp/ipc.rs）。
+static REVEAL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 请插件页在下次渲染时展开这个插件。
+pub fn reveal(id: &str) {
+    *REVEAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.to_string());
+}
+
 fn entry(id: &str) -> Option<Entry> {
     registry::current()
         .iter()
@@ -776,6 +784,13 @@ fn placeholder(pref: &Preference, stored: bool) -> String {
 
 impl Render for PluginsPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let revealed = REVEAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(id) = revealed {
+            self.select(Some(id), window, cx);
+        }
         // 选中的插件可能被删掉或重命名（热重载），对齐一下。
         if self
             .selected

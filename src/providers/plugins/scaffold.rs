@@ -103,6 +103,12 @@ pub fn create(root: &Path) -> Result<PathBuf> {
             "Too many example plugins in {}; remove some first",
             root.display()
         ))?;
+    write_starter(&dir, &id)?;
+    Ok(dir)
+}
+
+/// 在 `dir`（不存在则新建）里写入起步模板，插件 id 为 `id`。`helmp mcp` 的脚手架工具也用它。
+pub fn write_starter(dir: &Path, id: &str) -> Result<()> {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin)
         .with_context(|| trf!("创建 {}", "Couldn't create {}", bin.display()))?;
@@ -126,10 +132,10 @@ pub fn create(root: &Path) -> Result<PathBuf> {
     write(bin.join("list.sh"), LIST, true)?;
     write(
         dir.join("plugin.json"),
-        &MANIFEST.replace("__ID__", &id),
+        &MANIFEST.replace("__ID__", id),
         false,
     )?;
-    Ok(dir)
+    Ok(())
 }
 
 #[cfg(test)]

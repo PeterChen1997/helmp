@@ -40,6 +40,9 @@ pub struct Config {
     pub plugins: BTreeMap<String, PluginSettings>,
     /// 首次启动的权限引导是否已完成或跳过。
     pub onboarding_done: bool,
+    /// `helmp mcp`（给 coding agent 用的 MCP 服务）的隐私开关，见 docs/mcp.md。
+    #[serde(default)]
+    pub mcp_server: McpServerConfig,
 }
 
 impl Default for Config {
@@ -59,6 +62,7 @@ impl Default for Config {
             script_dirs: Vec::new(),
             plugins: BTreeMap::new(),
             onboarding_done: false,
+            mcp_server: McpServerConfig::default(),
         }
     }
 }
@@ -403,6 +407,14 @@ impl Default for FilesConfig {
             in_root_search: true,
         }
     }
+}
+
+/// MCP 服务（`helmp mcp`）的设置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct McpServerConfig {
+    /// 让 agent 也能搜到隐私内容（剪贴板历史、Agent 会话记录）。默认关。
+    pub expose_private: bool,
 }
 
 /// 开发者小工具。

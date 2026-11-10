@@ -121,6 +121,17 @@ impl Helmp {
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
+    /// 以同样的隔离环境起一个长时间运行的子进程（如 `helmp mcp`），stdin / stdout 走管道。
+    pub fn spawn(&self, args: &[&str]) -> std::process::Child {
+        self.command()
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn helmp")
+    }
+
     pub fn query(&self, text: &str) -> Vec<Row> {
         self.cli(&["query", text])
             .lines()
