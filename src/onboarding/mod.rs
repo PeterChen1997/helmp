@@ -158,7 +158,9 @@ impl Global for OnboardingWindow {}
 /// 什么都看不到，用户以为没打开）。登录时自动启动、图形自检时不显示。
 pub fn maybe_show(cx: &mut App) {
     let first_run = !crate::config::get().onboarding_done;
+    // HELMP_NO_WELCOME：排查与测试用，启动时不弹欢迎页。
     if std::env::var_os("HELMP_SELF_TEST").is_some()
+        || std::env::var_os("HELMP_NO_WELCOME").is_some()
         || (!first_run && launched_as_login_item())
     {
         return;
