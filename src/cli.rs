@@ -2,7 +2,10 @@
 //!
 //! ```text
 //! helmp query <text>            打印结果：badge \t title \t subtitle \t id
-//! helmp run <id> [query]        执行某个结果（先用同一 query 查出来）
+//! helmp run <id> [query] [--form k=v]... [--action <标题>] [--then <标题>]
+//!                               执行某个结果（先用同一 query 查出来）。--form 填表单字段，
+//!                               --action 改为执行 ⌘K 里同名的次级操作，--then 再执行返回详情里的同名操作
+//!                               （如确认页的「确定」）。配合 HELMP_DRY_RUN=1 做端到端测试。
 //! helmp providers               列出已注册的 provider
 //! ```
 
@@ -17,11 +20,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
     let command = args.first()?;
     let result = match command.as_str() {
         "query" => query(engine, &args[1..].join(" ")),
-        "run" => run_item(
-            engine,
-            args.get(1).map(String::as_str),
-            &args[2.min(args.len())..].join(" "),
-        ),
+        "run" => run_item(engine, args.get(1).map(String::as_str), &args[2.min(args.len())..]),
         "providers" => {
             for id in engine.provider_ids() {
                 println!("{id}");
@@ -65,13 +64,82 @@ fn query(engine: &Engine, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
+/// `run` 的参数：查询词和各个开关。
+#[derive(Default)]
+struct RunArgs {
+    query: Vec<String>,
+    form: crate::provider::ActionInput,
+    action: Option<String>,
+    then: Option<String>,
+}
+
+fn parse_run_args(args: &[String]) -> Result<RunArgs> {
+    let mut parsed = RunArgs::default();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        let mut value = |flag: &str| {
+            rest.next()
+                .cloned()
+                .with_context(|| trf!("{flag} 后面缺少参数", "{flag} needs a value"))
+        };
+        match arg.as_str() {
+            "--form" => {
+                let pair = value("--form")?;
+                let (key, val) = pair
+                    .split_once('=')
+                    .with_context(|| trf!("--form 要写成 键=值：{pair}", "--form expects key=value: {pair}"))?;
+                parsed.form.form.insert(key.to_string(), val.to_string());
+            }
+            "--action" => parsed.action = Some(value("--action")?),
+            "--then" => parsed.then = Some(value("--then")?),
+            _ => parsed.query.push(arg.clone()),
+        }
+    }
+    Ok(parsed)
+}
+
+fn run_item(engine: &Engine, id: Option<&str>, args: &[String]) -> Result<()> {
     let id = id.context(tr("用法：helmp run <id> [query]", "Usage: helmp run <id> [query]"))?;
+    let args = parse_run_args(args)?;
+    let text = args.query.join(" ");
     start(engine);
-    let Some(item) = lookup(engine, text).into_iter().find(|item| item.id == id) else {
+    let Some(item) = lookup(engine, &text).into_iter().find(|item| item.id == id) else {
         bail!(trf!("查询 {text:?} 的结果里没有 {id}", "No result {id} for query {text:?}"));
     };
-    match item.action.run()? {
+    let action = match &args.action {
+        None => item.action.clone(),
+        Some(title) => find_action(&item.actions, title)?,
+    };
+    let outcome = action.run_with(&args.form)?;
+    let detail_actions = match &outcome {
+        Outcome::Show(detail) => detail.actions.clone(),
+        _ => Vec::new(),
+    };
+    print_outcome(outcome);
+    if let Some(title) = &args.then {
+        let next = find_action(&detail_actions, title)?;
+        print_outcome(next.run_with(&args.form)?);
+    }
+    Ok(())
+}
+
+fn find_action(actions: &[crate::provider::NamedAction], title: &str) -> Result<crate::provider::Action> {
+    actions
+        .iter()
+        .find(|named| named.title.eq_ignore_ascii_case(title))
+        .map(|named| named.action.clone())
+        .with_context(|| {
+            let titles: Vec<_> = actions.iter().map(|a| a.title.as_str()).collect();
+            trf!(
+                "没有名为「{title}」的操作（可选：{}）",
+                "No action named {title:?} (available: {})",
+                titles.join(" / ")
+            )
+        })
+}
+
+fn print_outcome(outcome: Outcome) {
+    match outcome {
         Outcome::Done => println!("done"),
         Outcome::Message(message) => println!("{message}"),
         Outcome::EnterScope(scope) => println!("enter scope {scope}"),
@@ -103,5 +171,4 @@ fn run_item(engine: &Engine, id: Option<&str>, text: &str) -> Result<()> {
             }
         }
     }
-    Ok(())
 }

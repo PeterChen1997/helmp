@@ -637,6 +637,9 @@ fn failure_detail(model: &ModelConfig, err: &anyhow::Error) -> Detail {
 /// 没有辅助功能权限时只复制，并说明原因。
 fn replace_selection(text: String) -> Action {
     Action::new(move || {
+        if let Some(outcome) = crate::effects::dry("replace-selection", &text) {
+            return Ok(outcome);
+        }
         Action::copy(text.clone()).run()?;
         if !crate::providers::clipboard::macos::accessibility_trusted() {
             return Ok(Outcome::Message(
@@ -724,6 +727,9 @@ static SPEAKING: Mutex<Option<Child>> = Mutex::new(None);
 /// 用系统 `say` 朗读，按语言挑声音。不等读完就返回，面板保持打开。
 fn speak(text: String, language: String) -> Action {
     Action::new(move || {
+        if let Some(outcome) = crate::effects::dry("speak", &format!("{language} {text}")) {
+            return Ok(outcome);
+        }
         let mut speaking = SPEAKING.lock().expect("speaking poisoned");
         if let Some(mut previous) = speaking.take() {
             let _ = previous.kill();

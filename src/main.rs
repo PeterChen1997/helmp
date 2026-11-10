@@ -8,6 +8,7 @@ mod cli;
 mod config;
 mod deeplink;
 mod dock;
+mod effects;
 mod engine;
 mod history;
 mod hotkey;

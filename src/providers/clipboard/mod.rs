@@ -502,6 +502,9 @@ impl Inner {
 
     /// 选中某条：写回系统剪贴板、移到最前；需要粘贴且有辅助功能权限时再模拟 ⌘V。
     fn paste(&self, id: i64, mode: PasteMode) -> Result<Outcome> {
+        if let Some(outcome) = crate::effects::dry("paste", &format!("{id} {mode:?}")) {
+            return Ok(outcome);
+        }
         let (entry, image_path) = {
             let guard = self.store.lock().expect("clipboard store poisoned");
             let store = guard.as_ref().context(not_ready())?;

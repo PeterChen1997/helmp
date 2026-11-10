@@ -204,7 +204,14 @@ fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
             name: cmd.symbol,
             tint: TINT,
         },
-        action: Action::new(cmd.run),
+        action: Action::new({
+            let key = cmd.key;
+            let run = cmd.run;
+            move || match crate::effects::dry("screenshot", key) {
+                Some(outcome) => Ok(outcome),
+                None => run(),
+            }
+        }),
         action_title: text(cmd.action_title).into(),
         actions: if cmd.ocr { ocr_actions() } else { Vec::new() },
         ..Item::blank()

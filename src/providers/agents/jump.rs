@@ -79,7 +79,7 @@ fn command(program: &str) -> Command {
 }
 
 fn dry_run() -> bool {
-    std::env::var("HELMP_DRY_RUN").as_deref() == Ok("1")
+    crate::effects::dry_run()
 }
 
 pub fn action(jump: Jump) -> Action {

@@ -95,6 +95,9 @@ impl Action {
     pub fn open(target: impl Into<String>) -> Self {
         let target = target.into();
         Self::new(move || {
+            if let Some(outcome) = crate::effects::dry("open", &target) {
+                return Ok(outcome);
+            }
             let status = std::process::Command::new("open").arg(&target).status()?;
             anyhow::ensure!(
                 status.success(),
@@ -130,6 +133,9 @@ impl Action {
         let text = text.into();
         Self::new(move || {
             use std::io::Write as _;
+            if let Some(outcome) = crate::effects::dry("copy", &text) {
+                return Ok(outcome);
+            }
             let mut child = std::process::Command::new("pbcopy")
                 .env("LANG", "en_US.UTF-8")
                 .env("LC_ALL", "en_US.UTF-8")
@@ -153,6 +159,9 @@ impl Action {
     pub fn reveal(path: impl Into<String>) -> Self {
         let path = path.into();
         Self::new(move || {
+            if let Some(outcome) = crate::effects::dry("reveal", &path) {
+                return Ok(outcome);
+            }
             let status = std::process::Command::new("open")
                 .arg("-R")
                 .arg(&path)
