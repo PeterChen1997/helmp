@@ -23,6 +23,8 @@
 //! helmp mcp [install <claude|codex|cursor> | status]
 //!                               给 coding agent 用的 MCP 服务（stdio），见 src/mcp 与 docs/mcp.md
 //! helmp mcp-client …            管理 MCP 服务器（list / add / remove / tools / import，见 providers/mcp/cli.rs）
+//! helmp update check            检查更新：打印 current / latest / status（update-available | up-to-date）/ feed
+//! helmp update install [--yes]  下载、校验并安装更新；不带 --yes 只打印计划并失败退出（见 src/updates）
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -40,6 +42,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
         "plugins" => plugins(&args[1..]),
         "mcp" => crate::mcp::cli(engine, &args[1..]),
         "mcp-client" => crate::providers::mcp::cli::run(&args[1..]),
+        "update" => crate::updates::cli(&args[1..]),
         "providers" => {
             for id in engine.provider_ids() {
                 println!("{id}");

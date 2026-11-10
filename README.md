@@ -92,7 +92,7 @@ Helmp needs macOS 15 Sequoia or later.
 2. Open the dmg and drag Helmp into Applications.
 3. Launch Helmp from Applications. The first-run guide walks you through the permissions (see below).
 
-There are no automatic updates yet: to upgrade, download the new release and replace the app.
+Helmp checks for updates once a day (turn it off in Settings › General) and installs one only when you click "Download and Install" in Settings › About, after checking its signature. See [docs/updates.md](docs/updates.md).
 
 If you ran a self-built (ad-hoc signed) Helmp before, the signed build may not be allowed to read the API keys it saved in the Keychain. Helmp tells you when that happens; enter the key again in Settings › Models and it works from then on. macOS may also ask for the permissions again, because it records them per signature.
 
@@ -261,13 +261,13 @@ HELMP_TRACE=1 cargo run          # log UI events to stderr
 cargo test --release
 ```
 
-This runs the unit tests and the end-to-end suite (`tests/e2e_*.rs`). The end-to-end tests run the real `helmp` binary through "query → run" for each feature: app search, calculator, units and currency, time, developer tools, emoji, colors, files, settings panes, system toggles, bookmarks, dictionary, window management, processes and ports, snippets, the clipboard, translate, OCR, script commands, plugins, MCP servers (against a mock server built from `examples/mock_mcp_server.rs`) and agent sessions. Each test gets its own temporary data folder and `HOME`, and runs with `HELMP_DRY_RUN=1`, so copying, pasting, opening URLs, moving windows and quitting processes are only reported (one test does quit a `sleep` process it started itself). They never read or write your clipboard or Keychain, never touch `~/.claude` or `~/.codex`, and never reach the real network: HTTP goes to a local mock server. A few tests that depend on your machine (such as Spotlight having indexed the repository) are marked `#[ignore]`; run them with `-- --ignored`. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add one.
+This runs the unit tests and the end-to-end suite (`tests/e2e_*.rs`). The end-to-end tests run the real `helmp` binary through "query → run" for each feature: app search, calculator, units and currency, time, developer tools, emoji, colors, files, settings panes, system toggles, bookmarks, dictionary, window management, processes and ports, snippets, the clipboard, translate, OCR, script commands, plugins, MCP servers (against a mock server built from `examples/mock_mcp_server.rs`), agent sessions and updates. Each test gets its own temporary data folder and `HOME`, and runs with `HELMP_DRY_RUN=1`, so copying, pasting, opening URLs, moving windows and quitting processes are only reported (one test does quit a `sleep` process it started itself). They never read or write your clipboard or Keychain, never touch `~/.claude` or `~/.codex`, and never reach the real network: HTTP goes to a local mock server. A few tests that depend on your machine (such as Spotlight having indexed the repository) are marked `#[ignore]`; run them with `-- --ignored`. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add one.
 
 ## Roadmap
 
 Ideas we want to get to. None of these exist yet, and the order may change.
 
-- A Homebrew cask and automatic updates. Signed, notarized builds are already on GitHub Releases, but the "Check for Updates" menu item and the update toggle in Settings have nothing to check against yet.
+- A Homebrew cask. Signed, notarized builds are on GitHub Releases, and Helmp updates itself.
 - Expose Helmp's capabilities (app search, clipboard, screenshot, OCR) to coding agents as an MCP server.
 - More agents beyond Claude Code and Codex.
 - Script commands: Alfred Script Filter JSON output, custom icons, and live `inline` mode with `refreshTime` (both fields are parsed today but not used).

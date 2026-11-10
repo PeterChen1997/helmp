@@ -488,10 +488,10 @@ impl SettingsView {
     }
 
     /// 全局快捷键在后台重新注册（改配置后 ≤50ms、或别的 App 抢占后），结果不经过本窗口：
-    /// 轮询注册表的代数，变了就重绘，各行的「未生效」警示才跟得上。窗口关闭后自行结束。
+    /// 轮询注册表的代数，变了就重绘，各行的「未生效」警示才跟得上。更新状态同理。窗口关闭后自行结束。
     fn watch_hotkey_registry(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let mut seen = crate::hotkey::generation();
+            let mut seen = (crate::hotkey::generation(), crate::updates::generation());
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(250))
@@ -499,7 +499,8 @@ impl SettingsView {
                 let Some(this) = this.upgrade() else {
                     break;
                 };
-                let now = crate::hotkey::generation();
+                // 更新状态（检查结果、下载进度）也在后台线程变化，一并轮询。
+                let now = (crate::hotkey::generation(), crate::updates::generation());
                 if now != seen {
                     seen = now;
                     this.update(cx, |_, cx| cx.notify());

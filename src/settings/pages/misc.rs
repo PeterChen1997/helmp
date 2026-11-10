@@ -418,7 +418,100 @@ impl SettingsView {
                             )),
                     ),
             )
+            .child(widgets::group_header(tr("更新", "Updates"), pal))
+            .child(widgets::group(update_rows(pal), pal))
             .child(widgets::group(vec![dir_row.into_any_element()], pal))
             .into_any_element()
     }
+}
+
+/// 关于页的「更新」分组：状态行 + 按钮、更新说明、安装后的说明。
+/// 状态在 `crate::updates` 里，设置窗口按它的代数轮询重绘（见 `watch_hotkey_registry`）。
+fn update_rows(pal: &Palette) -> Vec<AnyElement> {
+    use crate::updates::{self, Busy, install::Location};
+
+    let state = updates::snapshot();
+    let busy = state.busy != Busy::Idle;
+    let status = state.status_line();
+    let failed = state.check_error.is_some() || state.install_error.is_some();
+    let available = state.available().filter(|_| state.unsupported_macos().is_none());
+
+    let (help, button) = match available {
+        Some(manifest) => {
+            let (help, label) = match updates::install::current_location() {
+                Location::Replace { .. } => (
+                    tr(
+                        "下载后校验签名，再退出 Helmp 替换为新版本并重新打开。",
+                        "Helmp verifies the download's signature, then quits, replaces itself and reopens.",
+                    )
+                    .to_string(),
+                    tr("下载并安装", "Download and Install"),
+                ),
+                Location::Manual { reason } => (
+                    trf!(
+                        "{reason}，所以改为下载 dmg，由你拖进「应用程序」。",
+                        "{reason}, so Helmp downloads the dmg for you to drag into Applications."
+                    ),
+                    tr("下载 dmg", "Download dmg"),
+                ),
+            };
+            let size = manifest
+                .asset(updates::manifest::AssetKind::Zip)
+                .map(|asset| format!("{:.1} MB", asset.size as f64 / 1_000_000.0));
+            let help = match size {
+                Some(size) => format!("{help} {}", trf!("大小约 {size}。", "About {size}.")),
+                None => help,
+            };
+            (
+                help,
+                widgets::push_button("update-install", label, busy, |_, _, _| {
+                    updates::install_in_background();
+                }),
+            )
+        }
+        None => (
+            trf!("当前版本 {}", "Current version {}", env!("CARGO_PKG_VERSION")),
+            widgets::push_button(
+                "update-check",
+                tr("检查更新", "Check for Updates"),
+                busy,
+                |_, _, _| updates::check_in_background(true),
+            ),
+        ),
+    };
+    let status_label = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .gap(px(2.))
+        .child(match failed {
+            true => widgets::error_text(status, pal),
+            false => widgets::label(status, pal),
+        })
+        .child(widgets::help_text(help, pal));
+    let mut rows = vec![widgets::row(status_label, button).into_any_element()];
+
+    if let Some(notes) = state.available().and_then(|manifest| manifest.notes()) {
+        rows.push(
+            div()
+                .px(px(14.))
+                .py(px(10.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(widgets::label(tr("更新说明", "What's New"), pal))
+                .child(widgets::help_text(notes.to_string(), pal))
+                .into_any_element(),
+        );
+    }
+    if let Some(notice) = state.notice {
+        rows.push(
+            div()
+                .px(px(14.))
+                .py(px(10.))
+                .child(widgets::help_text(notice, pal))
+                .into_any_element(),
+        );
+    }
+    rows
 }

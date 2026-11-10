@@ -87,7 +87,9 @@ bash script/release.sh --dry-run   # print each command instead of building, sig
 bash script/release.sh             # the real thing
 ```
 
-It needs a "Developer ID Application" certificate in your keychain (or `HELMP_SIGN_IDENTITY`) and an App Store Connect API key for `notarytool`; `HELMP_NOTARY_KEY_ID`, `HELMP_NOTARY_ISSUER` and `HELMP_NOTARY_KEY_PATH` override the defaults at the top of the script. `--dry-run` still checks that the certificate and the key file exist. The script stops with `RELEASE_FAILED` if a tool or credential is missing or notarization isn't accepted, and prints the notary log in that case. Publishing the GitHub release itself is a separate, manual step.
+It needs a "Developer ID Application" certificate in your keychain (or `HELMP_SIGN_IDENTITY`) and an App Store Connect API key for `notarytool`; `HELMP_NOTARY_KEY_ID`, `HELMP_NOTARY_ISSUER` and `HELMP_NOTARY_KEY_PATH` override the defaults at the top of the script. `--dry-run` still checks that the certificate and the key file exist. The script stops with `RELEASE_FAILED` if a tool or credential is missing or notarization isn't accepted, and prints the notary log in that case.
+
+`script/publish-release.sh` then publishes the update: it writes `latest.json` (release notes come from the version's section in `CHANGELOG.md`), uploads the installers and the manifest to Qiniu (`helmp/releases/`) and refreshes the CDN, and attaches them to the GitHub release `v<version>`, creating it if needed. Without a flag it only writes the manifest; `--dry-run` also lists the uploads; `--publish` does them. See [docs/updates.md](docs/updates.md#publishing-a-release).
 
 ### Commit messages
 
@@ -186,7 +188,9 @@ bash script/release.sh --dry-run   # 只打印每一步要执行的命令，不�
 bash script/release.sh             # 正式打包
 ```
 
-需要钥匙串里有「Developer ID Application」证书（或用 `HELMP_SIGN_IDENTITY` 指定），以及给 `notarytool` 用的 App Store Connect API 密钥；`HELMP_NOTARY_KEY_ID`、`HELMP_NOTARY_ISSUER`、`HELMP_NOTARY_KEY_PATH` 可以覆盖脚本开头的默认值。`--dry-run` 也会先检查证书和密钥文件是否存在。缺工具、缺证书或密钥、公证没通过时，脚本会以 `RELEASE_FAILED` 退出，公证失败还会打印公证日志。在 GitHub 上创建 release 并上传产物是另外手动做的一步。
+需要钥匙串里有「Developer ID Application」证书（或用 `HELMP_SIGN_IDENTITY` 指定），以及给 `notarytool` 用的 App Store Connect API 密钥；`HELMP_NOTARY_KEY_ID`、`HELMP_NOTARY_ISSUER`、`HELMP_NOTARY_KEY_PATH` 可以覆盖脚本开头的默认值。`--dry-run` 也会先检查证书和密钥文件是否存在。缺工具、缺证书或密钥、公证没通过时，脚本会以 `RELEASE_FAILED` 退出，公证失败还会打印公证日志。
+
+之后用 `script/publish-release.sh` 发布更新：写出 `latest.json`（更新说明取自 `CHANGELOG.md` 里这个版本的一节），把安装包和清单上传到七牛（`helmp/releases/`）并刷新 CDN，再附到 GitHub 发布 `v<版本>` 上（没有就先创建）。不带参数只生成清单；`--dry-run` 还会列出要上传的内容；`--publish` 才真正上传。见 [docs/updates.zh-CN.md](docs/updates.zh-CN.md#发布新版本)。
 
 ### 提交信息
 

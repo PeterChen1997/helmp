@@ -1,4 +1,4 @@
-//! 内置命令：退出 Helmp、打开设置。也是最小的 provider 示例。
+//! 内置命令：退出 Helmp、打开设置、检查更新。也是最小的 provider 示例。
 
 use crate::i18n::tr;
 use crate::matcher;
@@ -19,7 +19,7 @@ struct Command {
 /// 查询里没提 helmp、只命中「设置」类通用词时的分数上限：低于应用名的子串命中（700）。
 const GENERIC_SCORE: u32 = 500;
 
-const COMMANDS: [Command; 2] = [
+const COMMANDS: [Command; 3] = [
     Command {
         key: "settings",
         title: ("Helmp 设置", "Helmp Settings"),
@@ -45,6 +45,33 @@ const COMMANDS: [Command; 2] = [
         action_title: ("打开设置", "Open Settings"),
         // 动作在后台线程执行，不能直接开窗口；交给界面线程。
         run: || Ok(Outcome::OpenSettings),
+    },
+    Command {
+        key: "check-updates",
+        title: ("检查 Helmp 更新", "Check for Helmp Updates"),
+        subtitle: (
+            "打开设置 › 关于并立即检查新版本",
+            "Opens Settings › About and checks for a new version",
+        ),
+        keywords: &[
+            "检查更新",
+            "helmp 更新",
+            "更新 helmp",
+            "check for updates",
+            "update helmp",
+            "helmp update",
+        ],
+        icon: Icon::Symbol {
+            name: "refresh-cw",
+            tint: Tint::Green,
+        },
+        shortcut: None,
+        action_title: ("检查更新", "Check for Updates"),
+        // 动作在后台线程（或命令行）执行：只做标记，由界面的轮询任务发起检查，再翻到关于页看结果。
+        run: || {
+            crate::updates::request_check();
+            Ok(Outcome::OpenSettingsPage(crate::settings::Page::About))
+        },
     },
     Command {
         key: "quit",
@@ -149,6 +176,18 @@ mod tests {
         }
         assert!(find("helmp 设置", "builtin:settings").unwrap().score >= 900);
         assert!(find("helmp settings", "builtin:settings").unwrap().score >= 900);
+    }
+
+    #[test]
+    fn check_updates_command_shows_about_page() {
+        // 结果显示在关于页：动作必须把用户带过去，而不是在后台默默检查。
+        for query in ["检查更新", "check for updates", "update helmp"] {
+            let item = find(query, "builtin:check-updates").unwrap_or_else(|| panic!("{query:?}"));
+            assert_eq!(
+                item.action.run().unwrap(),
+                Outcome::OpenSettingsPage(crate::settings::Page::About)
+            );
+        }
     }
 
     #[test]
