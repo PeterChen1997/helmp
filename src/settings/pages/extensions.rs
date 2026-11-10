@@ -183,6 +183,7 @@ impl SettingsView {
             })
             .child(self.render_web_search(&config.web_search.engines(), pal, cx))
             .child(self.render_system_commands(config.system_commands.confirm_dangerous, pal, cx))
+            .child(self.render_files(config.files.in_root_search, pal, cx))
             .child(widgets::group_header(tr("脚本目录", "Script Folders"), pal))
             .child(self.render_script_dirs(&config.script_dirs, pal, cx))
             .child(
@@ -476,6 +477,84 @@ impl SettingsView {
                             cx.listener(|this, on: &bool, _, cx| {
                                 let on = *on;
                                 this.save(cx, move |c| c.system_commands.confirm_dangerous = on);
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+                ],
+                pal,
+            ))
+    }
+
+    /// 文件搜索：搜索范围、排除目录（逗号分隔，失焦或回车保存），是否混入根搜索。
+    fn render_files(
+        &mut self,
+        in_root: bool,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let field = |input: &Entity<InputState>| {
+            div()
+                .flex()
+                .items_center()
+                .w(px(260.))
+                .h(px(26.))
+                .px(px(6.))
+                .rounded(px(6.))
+                .bg(pal.control)
+                .border_1()
+                .border_color(pal.separator)
+                .font_family("Menlo")
+                .text_size(px(12.))
+                .child(Input::new(input).appearance(false))
+        };
+        div()
+            .flex()
+            .flex_col()
+            .child(widgets::group_header(tr("文件搜索", "File Search"), pal))
+            .child(widgets::group(
+                vec![
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("搜索范围", "Search in"),
+                            tr(
+                                "目录，逗号分隔；~ 表示家目录",
+                                "Folders, comma-separated; ~ is your home folder",
+                            ),
+                            pal,
+                        ),
+                        field(&self.files_roots),
+                    )
+                    .into_any_element(),
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("排除", "Exclude"),
+                            tr(
+                                "目录名（任意层级都排除）或路径，逗号分隔",
+                                "Folder names (excluded at any depth) or paths, comma-separated",
+                            ),
+                            pal,
+                        ),
+                        field(&self.files_excluded),
+                    )
+                    .into_any_element(),
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("在全局搜索中显示文件", "Show files in the main search"),
+                            tr(
+                                "关闭后只在「文件」范围（输入 f 加空格）里搜索文件",
+                                "When off, files are searched only in the Files scope (type f and a space)",
+                            ),
+                            pal,
+                        ),
+                        widgets::switch(
+                            "files-in-root-search",
+                            in_root,
+                            tr("在全局搜索中显示文件", "Show files in the main search"),
+                            pal,
+                            cx.listener(|this, on: &bool, _, cx| {
+                                let on = *on;
+                                this.save(cx, move |c| c.files.in_root_search = on);
                             }),
                         ),
                     )

@@ -2,12 +2,17 @@
 
 mod agents;
 mod apps;
+mod bookmarks;
 mod builtin;
 mod calculator;
 pub mod clipboard;
+mod dictionary;
+mod files;
 mod screenshot;
 mod scripts;
+mod settings_panes;
 mod system;
+mod toggles;
 mod translate;
 pub mod websearch;
 
@@ -27,5 +32,10 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
         Arc::new(websearch::WebSearch::new()),
+        Arc::new(files::Files::new()),
+        Arc::new(settings_panes::SettingsPanes),
+        Arc::new(toggles::Toggles::new()),
+        Arc::new(bookmarks::Bookmarks::default()),
+        Arc::new(dictionary::Dictionary::new()),
     ]
 }

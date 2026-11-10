@@ -402,6 +402,53 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
                 "Shown first when nothing local matches; set engines below",
             )),
         ),
+        "files" => (
+            tr("文件搜索", "File Search"),
+            builtin,
+            "file-search",
+            Tint::Blue,
+            Some(tr(
+                "用 Spotlight 按文件名搜索，范围与排除目录在下方设置",
+                "Searches file names with Spotlight; set folders below",
+            )),
+        ),
+        "settings-panes" => (
+            tr("系统设置面板", "System Settings Panes"),
+            builtin,
+            "settings-2",
+            Tint::Gray,
+            None,
+        ),
+        "toggles" => (
+            tr("系统开关", "System Toggles"),
+            builtin,
+            "sliders-horizontal",
+            Tint::Orange,
+            Some(tr(
+                "防休眠、音量、显示隐藏文件、弹出磁盘",
+                "Keep awake, volume, hidden files, eject disks",
+            )),
+        ),
+        "bookmarks" => (
+            tr("浏览器书签", "Browser Bookmarks"),
+            builtin,
+            "bookmark",
+            Tint::Orange,
+            Some(tr(
+                "Chrome、Edge、Brave、Arc、Safari（需完全磁盘访问）",
+                "Chrome, Edge, Brave, Arc, Safari (needs Full Disk Access)",
+            )),
+        ),
+        "dictionary" => (
+            tr("词典", "Dictionary"),
+            builtin,
+            "book-a",
+            Tint::Red,
+            Some(tr(
+                "使用 macOS 自带词典，离线查词",
+                "Uses the built-in macOS dictionaries offline",
+            )),
+        ),
         // 新插件还没登记显示名：显示 id，至少能开关。
         _ => ("", builtin, "puzzle", Tint::Gray, None),
     };
@@ -656,6 +703,21 @@ pub fn toggle_ocr_language(config: &mut Config, code: &str, on: bool) -> bool {
         }
         _ => false,
     }
+}
+
+// ---------------------------------------------------------------- 文件搜索
+
+/// 逗号（中英文）或换行分隔的列表 → 去空白、去空项。
+pub fn parse_list(text: &str) -> Vec<String> {
+    text.split([',', '，', '\n'])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn format_list(items: &[String]) -> String {
+    items.join(", ")
 }
 
 // ---------------------------------------------------------------- 通用工具
@@ -991,6 +1053,15 @@ mod tests {
     }
 
     #[test]
+    fn file_search_lists_round_trip() {
+        // 范围和排除目录在一个输入框里用逗号分隔；中文逗号、多余空格不能变成奇怪的目录名。
+        let list = parse_list(" ~ ,~/Work，node_modules,, target ");
+        assert_eq!(list, ["~", "~/Work", "node_modules", "target"]);
+        assert_eq!(format_list(&list), "~, ~/Work, node_modules, target");
+        assert!(parse_list("  ").is_empty());
+    }
+
+    #[test]
     fn known_providers_have_display_names() {
         // 扩展表格里显示 provider id（如 `builtin`）对用户没有意义。
         for id in [
@@ -1004,6 +1075,11 @@ mod tests {
             "system",
             "calculator",
             "websearch",
+            "files",
+            "settings-panes",
+            "toggles",
+            "bookmarks",
+            "dictionary",
         ] {
             assert!(!extension_meta(id).name.is_empty(), "{id}");
         }
