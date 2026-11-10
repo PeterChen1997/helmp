@@ -149,7 +149,11 @@ fn run(command: MenuCommand, cx: &mut App) {
         MenuCommand::Settings => crate::settings::open(cx),
         // 在回调里已经处理（见 MenuTarget::clicked）。
         MenuCommand::CheckUpdates => {}
-        MenuCommand::Quit => cx.quit(),
+        MenuCommand::Quit => {
+            // MCP 服务器子进程随 Helmp 一起结束（不等它们自己发现 stdin 关了）。
+            crate::providers::mcp::manager::global().stop_all();
+            cx.quit()
+        }
     }
 }
 

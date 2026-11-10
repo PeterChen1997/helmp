@@ -34,7 +34,7 @@ Extension ids for `scope/`:
 | `clipboard` | Clipboard history |
 | `agents` | Agent sessions |
 
-Settings pages (case-insensitive): `general`, `extensions`, `plugins`, `models`, `agents`, `clipboard`, `screenshot`, `appearance`, `about`.
+Settings pages (case-insensitive): `general`, `extensions`, `plugins`, `mcp`, `models`, `agents`, `clipboard`, `screenshot`, `appearance`, `about`.
 
 ### Details
 
@@ -96,7 +96,7 @@ open "helmp://show?q=wx"
 | `clipboard` | 剪贴板历史 |
 | `agents` | Agent 会话 |
 
-设置页面（不区分大小写）：`general`（通用）、`extensions`（扩展）、`plugins`（插件）、`models`（模型）、`agents`（Agent）、`clipboard`（剪贴板）、`screenshot`（截图）、`appearance`（外观）、`about`（关于）。
+设置页面（不区分大小写）：`general`（通用）、`extensions`（扩展）、`plugins`（插件）、`mcp`（MCP 服务器）、`models`（模型）、`agents`（Agent）、`clipboard`（剪贴板）、`screenshot`（截图）、`appearance`（外观）、`about`（关于）。
 
 ### 细节
 

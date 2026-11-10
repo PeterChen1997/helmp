@@ -122,7 +122,8 @@ Text fields (`name`, `title`…) take a plain string or `{"en": "…", "zh-Hans"
 | `icon`, `tint` | | Lucide icon name or `.png` in the folder; tint: `blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | Only `["clipboard.read"]` can be declared (needed for `{{clipboard}}`); everything else is derived |
 | `preferences` | | See below |
-| `commands` | yes | At least one |
+| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers`) |
+| `mcpServers` | | MCP servers the plugin brings; their tools become commands while the plugin is enabled. See [MCP servers](mcp-client.md#plugins-can-bundle-servers) |
 
 ### Preferences
 
@@ -198,6 +199,8 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Write to the clipboard | `copy` / `paste` actions, `script` output `copy` / `paste` |
 | Send ⌘V to the front app | `paste` |
 | Run scripts from the plugin folder | `script` actions and `list` commands. Scripts run as you, not sandboxed: only enable plugins you trust |
+| Run a local program: `npx` | Each `command` in `mcpServers` (also as you, not sandboxed) |
+| Network access: `host` | Also each `url` in `mcpServers` |
 
 Bundled plugins are on by default. Your plugins are off until you turn them on; Helmp stores the permissions you confirmed and asks again if they change.
 

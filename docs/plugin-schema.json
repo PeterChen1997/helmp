@@ -5,7 +5,7 @@
   "description": "For editor completion. `helmp plugins validate <folder>` is the source of truth: it also checks template variables, hosts and file paths. See docs/plugins.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "name", "version", "author", "commands"],
+  "required": ["schemaVersion", "id", "name", "version", "author"],
   "properties": {
     "$schema": { "type": "string" },
     "$comment": { "description": "Free-form note for humans; ignored." },
@@ -30,9 +30,38 @@
       "uniqueItems": true
     },
     "preferences": { "type": "array", "items": { "$ref": "#/$defs/preference" } },
-    "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/command" } }
+    "commands": {
+      "description": "At least one command, unless the plugin only bundles mcpServers.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" }
+    },
+    "mcpServers": {
+      "description": "MCP servers bundled with the plugin (name -> server). They run only while the plugin is enabled; their tools become launcher commands. See docs/mcp-client.md.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/mcpServer" }
+    }
   },
+  "anyOf": [
+    { "required": ["commands"], "properties": { "commands": { "minItems": 1 } } },
+    { "required": ["mcpServers"], "properties": { "mcpServers": { "minProperties": 1 } } }
+  ],
   "$defs": {
+    "mcpServer": {
+      "description": "Exactly one of command (stdio) or url (Streamable HTTP). env / headers values may only use {{pref.<id>}}.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "$comment": { "description": "Free-form note for humans; ignored." },
+        "command": { "description": "A program name looked up on PATH (npx, uvx, node…) or ./path inside the plugin folder.", "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "cwd": { "description": "Relative to the plugin folder; defaults to it.", "type": "string" },
+        "url": { "description": "Static https:// or http:// URL.", "type": "string", "pattern": "^https?://" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "oneOf": [{ "required": ["command"] }, { "required": ["url"] }]
+    },
     "text": {
       "description": "Plain string, or localized strings. Localized text needs \"en\" (the fallback).",
       "oneOf": [

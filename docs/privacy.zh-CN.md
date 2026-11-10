@@ -2,7 +2,7 @@
 
 [English](privacy.md) · 简体中文
 
-一句话：Helmp 没有账号、没有遥测、没有崩溃上报，也不检查更新。它保存的东西都在你 Mac 上的同一个目录里。会发出的网络请求只有两类：发往你为翻译配置的模型接口，以及你运行已启用插件的命令时、发往该插件声明的主机。
+一句话：Helmp 没有账号、没有遥测、没有崩溃上报，也不检查更新。它保存的东西都在你 Mac 上的同一个目录里。会发出的网络请求只有两类：发往你为翻译配置的模型接口，以及你运行已启用插件的命令时、发往该插件声明的主机。你添加的 MCP 服务器是你自己选的程序或服务：Helmp 启动或连接它们，并把你运行的工具的参数发给它们；它们还会访问什么，由它们自己决定。
 
 本页描述的是当前代码的实际行为。如果发现对不上，请开 issue 告诉我们。
 
@@ -23,6 +23,7 @@
 | `fx.json` | 最近一次取到的欧洲央行汇率（日期和汇率表），货币换算用 | 随时可删，联网后会重新下载 |
 | `snippets.json` | 你的文本片段（名称、关键词、内容、标签） | 「设置 › 片段」里删除，或删掉文件 |
 | `plugins/` | 你安装或新建的插件（每个文件夹里一个 `plugin.json`）。插件的密钥不在这里，存在钥匙串 | 「设置 › 插件」里管理，或删掉文件夹 |
+| `mcp/` | MCP 客户端的数据：`tools.json`（服务器工具列表的缓存）、`logs/<服务器>.log`（每个服务器的 stderr 和启动 / 停止 / 出错记录，超过 1 MB 自动截短）、`images/`（工具返回的图片，7 天后删除）。服务器设置在 `config.json`，令牌在钥匙串 | 随时可删，工具列表会重新读取 |
 | `emoji-recent.json`、`colors/` | 最近用过的 emoji，以及换算或取过的颜色的色块图 | 随时可删 |
 | `emoji-recent.json` | 最近粘贴或复制过的 emoji，最多 24 个 | 删除文件 |
 | `colors/` | 转换或取到的颜色的小色块 PNG | 随时可删 |
@@ -49,9 +50,12 @@
 
 钥匙串条目和保存它的 App 的签名绑定。自己构建的（ad-hoc 签名）Helmp 存下的 Key，签名发布版可能读不到；遇到这种情况 Helmp 会直接说明，在「设置 › 模型」里重新保存一次 Key，就会替换掉旧条目。
 
+[MCP 服务器](mcp-client.zh-CN.md)的密钥类环境变量和请求头（名字含 TOKEN、KEY、SECRET、PASSWORD、AUTH…，以及 `Authorization`）存在服务名 `dev.helmp.mcp` 下，账户 `<服务器名>/env:<变量名>` 或 `<服务器名>/header:<请求头名>`，从别的客户端导入时发现的也一样。`config.json` 里只记它们的名字。删除服务器时一并删除。
+
 ## 会读取但不保存的内容
 
 - **应用。** `/Applications`、`/System/Applications`、`~/Applications` 里各个 App 的 `Info.plist` 和本地化文件，用来在内存里建搜索索引。
+- **其他 MCP 客户端的配置。** 只在你点「设置 › MCP › 从 Claude Code / Codex / Cursor 导入」（或运行 `helmp mcp-client import`）时读取：`~/.claude.json`（以及 `$CLAUDE_CONFIG_DIR/.claude.json`）、`$CODEX_HOME/config.toml` 或 `~/.codex/config.toml`、`~/.cursor/mcp.json`，以及你指定的项目目录里的 `.mcp.json` / `.cursor/mcp.json`。只读，只复制你勾选的服务器。
 - **Agent 会话。** 只读，Helmp 运行期间每秒轮询一次：
   - Claude Code：`~/.claude/sessions/*.json`；会话没有标题时读 `~/.claude/projects/*/<会话>.jsonl` 的最后 64 KB；Claude 桌面 App 在 `~/Library/Application Support/Claude/claude-code-sessions/` 下的会话文件。支持 `CLAUDE_CONFIG_DIR`。
   - Codex：`~/.codex/thread-writer-locks/`（判断会话是否还活着）、以只读方式打开的 `state_5.sqlite`，以及会话日志的最后 64 KB。支持 `CODEX_HOME`。
@@ -69,6 +73,7 @@
 - **翻译**会把你要翻译的文字和一段简短的指令，发到你配置的接口：Anthropic、OpenAI 兼容地址，或者 Ollama（默认 `http://localhost:11434`）。翻译在你停止输入片刻后自动开始，所以每次停顿都可能发出一个请求，而不只是按回车时；完全相同的请求直接用内存里的历史结果。设置里的「测试连接」也会向同一个接口发一个很小的请求。每个请求 30 秒超时。Helmp 没有自己的服务器，这些请求不经过任何中转。
 - **「设置 › 模型」**会检查你添加的每个 Ollama 接口是否在运行（`GET <接口地址>/api/tags`，2 秒超时）。
 - **你启用的插件**只在你运行它的命令时发请求，而且只发往它权限里列出的主机（启用前在「设置 › 插件」里能看到）。比如自带的 flomo 插件在你回车时把内容发到你的 flomo webhook。发出前 Helmp 会再核对一次主机名，不跟随重定向。插件里的脚本以你的身份运行，能做的事和脚本命令一样多。
+- **MCP 服务器**：你添加的（或已启用插件带的）服务器，是 Helmp 以你的身份启动、不受沙盒限制的程序（stdio），或它连接的网址（HTTP）。你运行某个工具时，Helmp 把你填的参数发给这个服务器；也会向它要工具列表（刚添加时、列表变化时、重新连上时）。stdio 服务器拿到你配置的环境变量（含钥匙串里的密钥），HTTP 服务器拿到你配置的请求头。服务器拿这些做什么、还会访问哪些主机，由服务器自己决定，所以只添加你信任的服务器。服务器第一次用到才启动，空闲 10 分钟后停止（标了「常驻」的除外）。精选里用 `npx` / `uvx` 启动的服务器，第一次运行会从 npm / PyPI 下载包。
 - **货币换算**在启动时如果本地汇率超过一天，会下载欧洲央行每日参考汇率（`GET https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`，8 秒超时），之后每小时检查一次、一天最多下载一次。请求里不带任何关于你或你输入内容的信息。
 - **开发工具 › 公网 IP** 只在你对这一行按回车时，向 `https://api.ipify.org`（或设置 `devtools.public_ip_url` 里的地址）查询你的公网 IP。
 - 除此之外没有任何网络请求：没有统计、遥测、崩溃上报，也不检查更新。菜单里的「检查更新…」目前只会显示当前版本，设置里的「自动检查更新」开关暂时也不起作用。

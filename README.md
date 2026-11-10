@@ -71,6 +71,7 @@ Most modules can also be entered with a prefix followed by a space (`f `, `bm `,
 ### Integrations and plugins
 
 - **Plugins.** A folder with a declarative `plugin.json`: commands that open URLs or URL schemes, send HTTP requests, run a script, copy or paste; forms; preferences, with secrets kept in the Keychain; and lists filled by a script that prints Alfred Script Filter JSON. No code required. Bundled: flomo, Quick Search (`gh`, `npm`, `crates`, `mdn`, `gt`, `zhihu`, `bili`, `xhs`) and Obsidian quick capture. Before one of your own plugins is turned on, Helmp shows what it is allowed to do. See [Plugins](#plugins).
+- **MCP servers.** Connect [Model Context Protocol](https://modelcontextprotocol.io) servers and their tools become commands, with a form generated from each tool's input schema. Import them from Claude Code, Codex or Cursor in one click, pick a featured one (filesystem, fetch, Git, Playwright, Context7…), or paste JSON. See [MCP servers](#mcp-servers).
 - **Raycast-compatible script commands.** Drop a script with `@raycast.*` header comments into the scripts folder and it shows up as a command. Any language, up to three arguments rendered as a form, `silent` / `compact` / `fullOutput` output modes, a confirmation page for scripts marked `needsConfirmation`, and a 30-second hard timeout.
 - **`helmp://` deep links.** Open the panel with a query, jump into an extension, run a plugin command or open a settings page from scripts, Shortcuts or other launchers. See [docs/deeplinks.md](docs/deeplinks.md).
 - **Coding agents (MCP).** Connect Claude Code, Codex or Cursor and ask them for a Helmp feature: they build it as a plugin, test it and install it, and you turn it on. They can also search and use Helmp; side effects ask you in the panel first. See [Coding agents](#coding-agents-mcp).
@@ -78,7 +79,7 @@ Most modules can also be entered with a prefix followed by a space (`f `, `bm `,
 Smaller things that make it pleasant to use daily:
 
 - Reopen within 90 seconds and your last query is still there, selected; after that, or after you ran something, you start fresh.
-- A settings window (General, Extensions, Plugins, Models, Agents, Clipboard, Snippets, Screenshot, Appearance, About) and a first-run guide for permissions.
+- A settings window (General, Extensions, Plugins, MCP, Models, Agents, Clipboard, Snippets, Screenshot, Appearance, About) and a first-run guide for permissions.
 - A headless CLI (`helmp query wx`, `helmp plugins`) for scripting and debugging.
 
 ## Install
@@ -234,6 +235,10 @@ Writing your own: the tutorial and manifest reference are in [docs/plugins.md](d
 
 `helmp mcp` is an MCP server for coding agents. Connect one in **Settings › Agents › Connect Coding Agents** (or `helmp mcp install claude|codex|cursor`), restart it, and ask for what you want ("make a plugin that sends the selected text to my Feishu bot"). The agent reads the plugin guide, scaffolds, validates and dry-run tests the plugin against a local mock, and installs it; it stays off until you review its permissions and turn it on in Settings › Plugins, and the agent must ask you before publishing it to the plugin center. Agents can also search Helmp and run results: pure computations (calculator, conversions, time, developer tools, dictionary, translation) return text directly; anything else shows "Claude Code wants to run: …" in the panel and runs only if you press Return. Clipboard history and agent sessions are hidden from agents by default. See [docs/mcp.md](docs/mcp.md).
 
+## MCP servers
+
+Settings › MCP manages [Model Context Protocol](https://modelcontextprotocol.io) servers; every tool they offer becomes a launcher command (type its name, fill in the form, press <kbd>↵</kbd>). Add servers by importing them read-only from Claude Code, Codex or Cursor, from the built-in featured list (Helmp shows the exact command first), by pasting the usual `{"mcpServers": {...}}` JSON, or by hand. Servers start on first use, stop after 10 idle minutes, restart with a backoff after a crash, and log to `mcp/logs/` in the data folder. Tokens and keys go to the Keychain. Tools marked destructive ask before they run. Plugins can bundle servers too. `helmp mcp-client list|add|remove|tools|import` does the same from a terminal. Details: [docs/mcp-client.md](docs/mcp-client.md).
+
 ## Command line
 
 ```bash
@@ -244,6 +249,7 @@ cargo run -- plugins             # list plugins and their state
 cargo run -- plugins validate <folder>   # check a plugin you're writing
 cargo run -- mcp                 # MCP server for coding agents (stdio)
 cargo run -- mcp install claude  # register it with Claude Code (or codex, cursor); `mcp status` shows all
+cargo run -- mcp-client list     # MCP servers: state, tools, command (also add / remove / tools / import)
 HELMP_DRY_RUN=1 cargo run -- run <id> agent   # print the agent jump instead of doing it
 HELMP_TRACE=1 cargo run          # log UI events to stderr
 ```
@@ -254,7 +260,7 @@ HELMP_TRACE=1 cargo run          # log UI events to stderr
 cargo test --release
 ```
 
-This runs the unit tests and the end-to-end suite (`tests/e2e_*.rs`). The end-to-end tests run the real `helmp` binary through "query → run" for each feature: app search, calculator, units and currency, time, developer tools, emoji, colors, files, settings panes, system toggles, bookmarks, dictionary, window management, processes and ports, snippets, the clipboard, translate, OCR, script commands, plugins and agent sessions. Each test gets its own temporary data folder and `HOME`, and runs with `HELMP_DRY_RUN=1`, so copying, pasting, opening URLs, moving windows and quitting processes are only reported (one test does quit a `sleep` process it started itself). They never read or write your clipboard or Keychain, never touch `~/.claude` or `~/.codex`, and never reach the real network: HTTP goes to a local mock server. A few tests that depend on your machine (such as Spotlight having indexed the repository) are marked `#[ignore]`; run them with `-- --ignored`. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add one.
+This runs the unit tests and the end-to-end suite (`tests/e2e_*.rs`). The end-to-end tests run the real `helmp` binary through "query → run" for each feature: app search, calculator, units and currency, time, developer tools, emoji, colors, files, settings panes, system toggles, bookmarks, dictionary, window management, processes and ports, snippets, the clipboard, translate, OCR, script commands, plugins, MCP servers (against a mock server built from `examples/mock_mcp_server.rs`) and agent sessions. Each test gets its own temporary data folder and `HOME`, and runs with `HELMP_DRY_RUN=1`, so copying, pasting, opening URLs, moving windows and quitting processes are only reported (one test does quit a `sleep` process it started itself). They never read or write your clipboard or Keychain, never touch `~/.claude` or `~/.codex`, and never reach the real network: HTTP goes to a local mock server. A few tests that depend on your machine (such as Spotlight having indexed the repository) are marked `#[ignore]`; run them with `-- --ignored`. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add one.
 
 ## Roadmap
 

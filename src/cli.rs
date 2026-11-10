@@ -11,6 +11,7 @@
 //! helmp plugins validate <目录>  校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出
 //! helmp mcp [install <claude|codex|cursor> | status]
 //!                               给 coding agent 用的 MCP 服务（stdio），见 src/mcp 与 docs/mcp.md
+//! helmp mcp-client …            管理 MCP 服务器（list / add / remove / tools / import，见 providers/mcp/cli.rs）
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -27,6 +28,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
         "run" => run_item(engine, args.get(1).map(String::as_str), &args[2.min(args.len())..]),
         "plugins" => plugins(&args[1..]),
         "mcp" => crate::mcp::cli(engine, &args[1..]),
+        "mcp-client" => crate::providers::mcp::cli::run(&args[1..]),
         "providers" => {
             for id in engine.provider_ids() {
                 println!("{id}");

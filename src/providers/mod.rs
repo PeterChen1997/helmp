@@ -10,6 +10,7 @@ pub mod clipboard;
 mod dictionary;
 mod files;
 pub mod plugins;
+pub mod mcp;
 mod color;
 mod devtools;
 mod emoji;
@@ -38,6 +39,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(clipboard::Clipboard::new()),
         Arc::new(scripts::Scripts::new()),
         Arc::new(plugins::Plugins::new()),
+        Arc::new(mcp::Mcp),
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
         Arc::new(processes::Processes::default()),

@@ -85,7 +85,36 @@ pub struct Manifest {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub preferences: Vec<Preference>,
+    /// 只带 MCP 服务器的插件可以没有命令。
+    #[serde(default)]
     pub commands: Vec<Command>,
+    /// 插件带的 MCP 服务器（名字 → 启动方式）：插件启用后，它们的工具出现在搜索里（见 providers::mcp）。
+    #[serde(default)]
+    pub mcp_servers: BTreeMap<String, McpServerSpec>,
+}
+
+/// 插件带的 MCP 服务器：`command`（stdio）或 `url`（Streamable HTTP）二选一。
+/// `env` / `headers` 的值是模板，只能用 `{{pref.<id>}}`（密钥写成 secret 偏好设置，不写进清单）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerSpec {
+    /// 给人看的注释（JSON 没有注释语法），任意内容，忽略。
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde::de::IgnoredAny>,
+    /// 程序名（在 PATH 里找，如 `npx`、`uvx`、`node`），或插件目录里的 `./相对路径`。
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// 工作目录，相对插件目录；缺省为插件目录。
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -840,6 +869,118 @@ impl Checker<'_> {
         }
     }
 
+    /// 插件带的 MCP 服务器：名字、command / url 二选一、相对命令在插件目录里、模板只能用 pref。
+    fn mcp_server(&mut self, at: &str, name: &str, server: &McpServerSpec, dir: Option<&Path>) {
+        self.key(at, name);
+        match (&server.command, &server.url) {
+            (Some(command), None) => {
+                if let Some(relative) = command.strip_prefix("./") {
+                    self.script_path(&format!("{at}.command"), relative, dir);
+                } else if command.is_empty()
+                    || command.contains('/')
+                    || command.contains(char::is_whitespace)
+                {
+                    self.error(
+                        &format!("{at}.command"),
+                        tr(
+                            "要么是程序名（如 npx、uvx，在 PATH 里找），要么是插件目录里的 ./相对路径；参数写进 args",
+                            "use a program name (npx, uvx… looked up on PATH) or a ./relative path in the plugin folder; put arguments in args",
+                        )
+                        .into(),
+                    );
+                }
+                if let Some(cwd) = &server.cwd
+                    && !safe_relative(cwd)
+                {
+                    self.error(
+                        &format!("{at}.cwd"),
+                        tr(
+                            "工作目录必须相对插件目录，不能含 ..",
+                            "cwd must be relative to the plugin folder without ..",
+                        )
+                        .into(),
+                    );
+                }
+                if !server.headers.is_empty() {
+                    self.error(
+                        &format!("{at}.headers"),
+                        tr("stdio 服务器没有请求头", "stdio servers have no headers").into(),
+                    );
+                }
+                self.env(&format!("{at}.env"), &server.env);
+            }
+            (None, Some(url)) => {
+                if url.contains("{{") {
+                    self.error(
+                        &format!("{at}.url"),
+                        tr(
+                            "MCP 服务器的地址不能用模板（主机名要在启用前确定）",
+                            "an MCP server URL can't use templates (the host must be known before enabling)",
+                        )
+                        .into(),
+                    );
+                } else if let Err(problem) = http_url_source(url, self.manifest) {
+                    self.error(&format!("{at}.url"), problem);
+                }
+                if server.cwd.is_some() || !server.args.is_empty() || !server.env.is_empty() {
+                    self.error(
+                        at,
+                        tr(
+                            "http 服务器不能有 args / env / cwd",
+                            "http servers can't have args, env or cwd",
+                        )
+                        .into(),
+                    );
+                }
+            }
+            _ => self.error(
+                at,
+                tr(
+                    "command 和 url 必须写一个且只写一个",
+                    "needs exactly one of command or url",
+                )
+                .into(),
+            ),
+        }
+        let values = server
+            .env
+            .iter()
+            .map(|(k, v)| (format!("{at}.env.{k}"), v))
+            .chain(
+                server
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (format!("{at}.headers.{k}"), v)),
+            );
+        for (place, value) in values {
+            match Template::parse(value) {
+                Err(err) => self.error(&place, err.to_string()),
+                Ok(template) => {
+                    for var in template.vars() {
+                        match var {
+                            Var::Pref(key) if self.manifest.preference(key).is_some() => {}
+                            Var::Pref(key) => self.error(
+                                &place,
+                                trf!(
+                                    "没有偏好设置 {key:?}（先在 preferences 里声明）",
+                                    "no preference {key:?} (declare it in preferences)"
+                                ),
+                            ),
+                            _ => self.error(
+                                &place,
+                                tr(
+                                    "MCP 服务器的 env / headers 只能用 {{pref.<id>}}",
+                                    "MCP server env and headers may only use {{pref.<id>}}",
+                                )
+                                .into(),
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn http(&mut self, at: &str, spec: &HttpSpec) {
         let url_at = format!("{at}.url");
         match http_url_source(&spec.url, self.manifest) {
@@ -1120,10 +1261,17 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
         }
     }
 
-    if manifest.commands.is_empty() {
+    for (name, server) in &manifest.mcp_servers {
+        check.mcp_server(&format!("mcpServers.{name}"), name, server, dir);
+    }
+    if manifest.commands.is_empty() && manifest.mcp_servers.is_empty() {
         check.error(
             "commands",
-            tr("至少要有一个命令", "needs at least one command").into(),
+            tr(
+                "至少要有一个命令（或一个 mcpServers）",
+                "needs at least one command (or an mcpServers entry)",
+            )
+            .into(),
         );
     }
     let mut command_ids = BTreeSet::new();
@@ -1392,6 +1540,37 @@ mod tests {
                 err.contains(needle),
                 "expected {needle:?} in:\n{err}\nfor {text}"
             );
+        }
+    }
+
+    #[test]
+    fn plugins_can_bundle_mcp_servers() {
+        // 插件带 MCP 服务器：命令是程序名或插件目录里的文件；密钥只能经偏好设置，不能写进清单。
+        let ok = r#"{"schemaVersion":1,"id":"com.example.m","name":"M","version":"1.0.0","author":"A",
+            "preferences":[{"id":"token","type":"secret","title":"Token"}],
+            "mcpServers":{
+                "gh":{"command":"npx","args":["-y","@x/gh"],"env":{"GITHUB_TOKEN":"{{pref.token}}"}},
+                "docs":{"url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer {{pref.token}}"}}
+            }}"#;
+        assert_eq!(errors(ok), "", "只带 MCP 服务器、没有命令的插件也合法");
+        let bad = r#"{"schemaVersion":1,"id":"com.example.m","name":"M","version":"1.0.0","author":"A",
+            "mcpServers":{
+                "a":{"command":"/usr/bin/evil"},
+                "b":{"command":"npx","url":"https://x.com/mcp"},
+                "c":{"command":"npx","env":{"K":"{{clipboard}}","T":"{{pref.nope}}"}},
+                "d":{"url":"https://{{query}}.com/mcp"},
+                "bad name!":{"command":"npx"}
+            }}"#;
+        let text = errors(bad);
+        for needle in [
+            "mcpServers.a.command",
+            "mcpServers.b: needs exactly one of command or url",
+            "mcpServers.c.env.K: MCP server env and headers may only use",
+            "mcpServers.c.env.T: no preference \"nope\"",
+            "mcpServers.d.url",
+            "mcpServers.bad name!: id",
+        ] {
+            assert!(text.contains(needle), "{needle}\n{text}");
         }
     }
 

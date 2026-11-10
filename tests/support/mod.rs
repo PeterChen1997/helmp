@@ -62,6 +62,13 @@ impl Helmp {
         self
     }
 
+    /// 命令自己改了 config.json（如 `helmp mcp-client add`）：读回来，之后的命令在它的基础上运行
+    /// （否则下一次调用会用测试里的配置覆盖掉）。
+    pub fn keep_config(&mut self) {
+        let text = std::fs::read_to_string(self.data.join("config.json")).expect("read config");
+        self.config = serde_json::from_str(&text).expect("config json");
+    }
+
     pub fn env(mut self, key: &str, value: impl Into<String>) -> Self {
         self.envs.push((key.to_string(), value.into()));
         self

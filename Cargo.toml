@@ -39,6 +39,8 @@ sha1 = "0.10"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4", "v7"] }
 png = "0.18"
+# MCP 客户端：只读导入 Codex 的 ~/.codex/config.toml。
+toml = "1"
 dispatch2 = "0.3"
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
