@@ -9,6 +9,8 @@
 //! helmp providers               列出已注册的 provider
 //! helmp plugins                 列出清单插件：状态 \t id \t 版本 \t 来源 \t 名称（出错的附原因）
 //! helmp plugins validate <目录>  校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出
+//! helmp mcp [install <claude|codex|cursor> | status]
+//!                               给 coding agent 用的 MCP 服务（stdio），见 src/mcp 与 docs/mcp.md
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -24,6 +26,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
         "query" => query(engine, &args[1..].join(" ")),
         "run" => run_item(engine, args.get(1).map(String::as_str), &args[2.min(args.len())..]),
         "plugins" => plugins(&args[1..]),
+        "mcp" => crate::mcp::cli(engine, &args[1..]),
         "providers" => {
             for id in engine.provider_ids() {
                 println!("{id}");
@@ -113,7 +116,7 @@ fn plugins(args: &[String]) -> Result<()> {
     }
 }
 
-fn start(engine: &Engine) {
+pub(crate) fn start(engine: &Engine) {
     crate::providers::clipboard::disable_capture();
     for (id, err) in engine.start_blocking() {
         eprintln!(
@@ -124,7 +127,7 @@ fn start(engine: &Engine) {
 }
 
 /// 查询时识别范围前缀（如 `cb `），与图形界面一致。
-fn lookup(engine: &Engine, text: &str) -> Vec<crate::provider::Item> {
+pub(crate) fn lookup(engine: &Engine, text: &str) -> Vec<crate::provider::Item> {
     match engine.resolve_prefix(text) {
         Some((scope, rest)) => {
             let filter = scope.filters.first().cloned().unwrap_or_default();
@@ -220,36 +223,43 @@ fn find_action(actions: &[crate::provider::NamedAction], title: &str) -> Result<
 }
 
 fn print_outcome(outcome: Outcome) {
+    println!("{}", outcome_text(outcome));
+}
+
+/// 执行结果的纯文本形式（CLI 输出、MCP 服务返回给 agent 的文字共用）。
+pub(crate) fn outcome_text(outcome: Outcome) -> String {
+    let mut lines = Vec::new();
     match outcome {
-        Outcome::Done => println!("done"),
-        Outcome::Message(message) => println!("{message}"),
-        Outcome::EnterScope(scope) => println!("enter scope {scope}"),
-        Outcome::EnterScopeWith(scope, text) => println!("enter scope {scope}: {text}"),
-        Outcome::OpenSettings => println!("open settings"),
-        Outcome::OpenSettingsPage(page) => println!("open settings: {page:?}"),
-        Outcome::Dismiss => println!("dismiss"),
+        Outcome::Done => lines.push("done".to_string()),
+        Outcome::Message(message) => lines.push(message),
+        Outcome::EnterScope(scope) => lines.push(format!("enter scope {scope}")),
+        Outcome::EnterScopeWith(scope, text) => lines.push(format!("enter scope {scope}: {text}")),
+        Outcome::OpenSettings => lines.push("open settings".to_string()),
+        Outcome::OpenSettingsPage(page) => lines.push(format!("open settings: {page:?}")),
+        Outcome::Dismiss => lines.push("dismiss".to_string()),
         Outcome::Show(detail) => {
-            println!("{}", detail.title);
+            lines.push(detail.title);
             for block in detail.blocks {
                 match block {
                     Block::Text(text)
                     | Block::Code(text)
                     | Block::Caption(text)
-                    | Block::Result { text, .. } => println!("{text}"),
-                    Block::Quote { label, text } => println!("{label}{}{text}", tr("：", ": ")),
+                    | Block::Result { text, .. } => lines.push(text),
+                    Block::Quote { label, text } => lines.push(format!("{label}{}{text}", tr("：", ": "))),
                     Block::Image(path) => {
-                        println!("{}", trf!("[图片 {}]", "[Image {}]", path.display()))
+                        lines.push(trf!("[图片 {}]", "[Image {}]", path.display()))
                     }
                 }
             }
             for (key, value) in detail.metadata {
-                println!("{key}{}{value}", tr("：", ": "));
+                lines.push(format!("{key}{}{value}", tr("：", ": ")));
             }
             // 确认页这类带操作的详情：列出可选操作，第一个是回车。
             if !detail.actions.is_empty() {
                 let titles: Vec<_> = detail.actions.iter().map(|a| a.title.as_str()).collect();
-                println!("{}{}", tr("操作：", "Actions: "), titles.join(" / "));
+                lines.push(format!("{}{}", tr("操作：", "Actions: "), titles.join(" / ")));
             }
         }
     }
+    lines.join("\n")
 }

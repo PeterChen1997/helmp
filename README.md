@@ -73,6 +73,7 @@ Most modules can also be entered with a prefix followed by a space (`f `, `bm `,
 - **Plugins.** A folder with a declarative `plugin.json`: commands that open URLs or URL schemes, send HTTP requests, run a script, copy or paste; forms; preferences, with secrets kept in the Keychain; and lists filled by a script that prints Alfred Script Filter JSON. No code required. Bundled: flomo, Quick Search (`gh`, `npm`, `crates`, `mdn`, `gt`, `zhihu`, `bili`, `xhs`) and Obsidian quick capture. Before one of your own plugins is turned on, Helmp shows what it is allowed to do. See [Plugins](#plugins).
 - **Raycast-compatible script commands.** Drop a script with `@raycast.*` header comments into the scripts folder and it shows up as a command. Any language, up to three arguments rendered as a form, `silent` / `compact` / `fullOutput` output modes, a confirmation page for scripts marked `needsConfirmation`, and a 30-second hard timeout.
 - **`helmp://` deep links.** Open the panel with a query, jump into an extension, run a plugin command or open a settings page from scripts, Shortcuts or other launchers. See [docs/deeplinks.md](docs/deeplinks.md).
+- **Coding agents (MCP).** Connect Claude Code, Codex or Cursor and ask them for a Helmp feature: they build it as a plugin, test it and install it, and you turn it on. They can also search and use Helmp; side effects ask you in the panel first. See [Coding agents](#coding-agents-mcp).
 
 Smaller things that make it pleasant to use daily:
 
@@ -229,6 +230,10 @@ A plugin is a folder with a declarative `plugin.json`: forms, preferences (secre
 
 Writing your own: the tutorial and manifest reference are in [docs/plugins.md](docs/plugins.md), and [docs/plugin-schema.json](docs/plugin-schema.json) is a JSON Schema for editor completion. The bundled plugins in [`resources/plugins/`](resources/plugins) double as examples.
 
+## Coding agents (MCP)
+
+`helmp mcp` is an MCP server for coding agents. Connect one in **Settings › Agents › Connect Coding Agents** (or `helmp mcp install claude|codex|cursor`), restart it, and ask for what you want ("make a plugin that sends the selected text to my Feishu bot"). The agent reads the plugin guide, scaffolds, validates and dry-run tests the plugin against a local mock, and installs it; it stays off until you review its permissions and turn it on in Settings › Plugins, and the agent must ask you before publishing it to the plugin center. Agents can also search Helmp and run results: pure computations (calculator, conversions, time, developer tools, dictionary, translation) return text directly; anything else shows "Claude Code wants to run: …" in the panel and runs only if you press Return. Clipboard history and agent sessions are hidden from agents by default. See [docs/mcp.md](docs/mcp.md).
+
 ## Command line
 
 ```bash
@@ -237,6 +242,8 @@ cargo run -- run <id> [query]    # run one result
 cargo run -- providers           # list registered providers
 cargo run -- plugins             # list plugins and their state
 cargo run -- plugins validate <folder>   # check a plugin you're writing
+cargo run -- mcp                 # MCP server for coding agents (stdio)
+cargo run -- mcp install claude  # register it with Claude Code (or codex, cursor); `mcp status` shows all
 HELMP_DRY_RUN=1 cargo run -- run <id> agent   # print the agent jump instead of doing it
 HELMP_TRACE=1 cargo run          # log UI events to stderr
 ```

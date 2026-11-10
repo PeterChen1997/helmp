@@ -876,6 +876,13 @@ impl Launcher {
         self.run(item, action, true, window, cx);
     }
 
+    /// 展示一个外来的项并执行它（agent 的确认请求，见 src/mcp/ipc.rs）：与 `run_item` 相同，
+    /// 只是不记进「最近使用」。
+    pub fn present(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        let action = item.action.clone();
+        self.run(item, action, false, window, cx);
+    }
+
     pub fn execute_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.selected_item().cloned() else {
             return;

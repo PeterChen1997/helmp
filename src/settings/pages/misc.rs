@@ -12,6 +12,10 @@ use crate::settings::widgets;
 use crate::settings::{SettingsView, sync_component_theme};
 use crate::style::{self, Palette};
 
+/// 最近一次「连接」的结果（成功的说明或错误）。
+static MCP_CONNECT_STATUS: std::sync::Mutex<Option<Result<String, String>>> =
+    std::sync::Mutex::new(None);
+
 impl SettingsView {
     pub(in crate::settings) fn render_agents(
         &mut self,
@@ -72,6 +76,81 @@ impl SettingsView {
                 ),
                 pal,
             ))
+            .child(div().mt(px(20.)).child(self.render_mcp_connect(pal, cx)))
+            .into_any_element()
+    }
+
+    /// 「连接到 coding agent」：把 `helmp mcp` 登记到 Claude Code / Codex / Cursor（见 src/mcp/connect.rs）。
+    /// 只在用户点按钮时写 agent 的配置；状态每次渲染现读（配置文件很小，`~/.claude.json` 也只读不写）。
+    fn render_mcp_connect(&mut self, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        use crate::mcp::connect::{self, Agent, Status};
+        let mut rows = Vec::new();
+        for agent in Agent::ALL {
+            let status = connect::status(agent).unwrap_or(Status::NotConnected);
+            let path = agent
+                .config_path()
+                .map(|path| display_path(&path))
+                .unwrap_or_default();
+            let button = match status {
+                Status::Connected => tr("已连接", "Connected"),
+                Status::Outdated(_) => tr("重新连接", "Reconnect"),
+                Status::NotConnected => tr("连接", "Connect"),
+            };
+            rows.push(
+                widgets::row(
+                    widgets::label_with_help(
+                        agent.name(),
+                        format!("{} · {path}", status.label()),
+                        pal,
+                    ),
+                    widgets::push_button(
+                        SharedString::from(format!("mcp-connect-{}", agent.slug())),
+                        button,
+                        status == Status::Connected,
+                        cx.listener(move |_, _: &ClickEvent, _, cx| {
+                            cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                let result = cx
+                                    .background_spawn(async move { connect::install(agent) })
+                                    .await;
+                                let message = match result {
+                                    Ok(installed) => Ok(connect::describe(agent, &installed)),
+                                    Err(err) => Err(format!("{err:#}")),
+                                };
+                                *MCP_CONNECT_STATUS
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message);
+                                let _ = this.update(cx, |_, cx| cx.notify());
+                            })
+                            .detach();
+                        }),
+                    ),
+                )
+                .into_any_element(),
+            );
+        }
+        let last = MCP_CONNECT_STATUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        div()
+            .flex()
+            .flex_col()
+            .child(widgets::group_header(tr("连接到 coding agent", "Connect Coding Agents"), pal))
+            .child(widgets::group(rows, pal))
+            .child(widgets::help_text(
+                tr(
+                    "连接后，Claude Code / Codex / Cursor 可以按你的需求直接做出 Helmp 插件，也能搜索和使用 Helmp。\
+                     有副作用的操作会先在面板里问你；新插件要你在「插件」页启用后才生效；上传到插件中心前一定先问你。",
+                    "Once connected, Claude Code, Codex or Cursor can build Helmp plugins for what you ask and search \
+                     or use Helmp. Anything with side effects asks you in the panel first; new plugins only work after \
+                     you enable them in Plugins; nothing is published to the plugin center without asking you.",
+                ),
+                pal,
+            ))
+            .when_some(last, |el, last| match last {
+                Ok(text) => el.child(widgets::help_text(text, pal)),
+                Err(text) => el.child(widgets::error_text(text, pal)),
+            })
             .into_any_element()
     }
 

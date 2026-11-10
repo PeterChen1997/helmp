@@ -24,6 +24,7 @@ use crate::style::{self, Palette};
 
 use hotkey::{HotkeyEvent, HotkeyRecorder};
 pub use model::Page;
+pub use plugins_pane::reveal as reveal_plugin;
 
 const WINDOW_SIZE: Size<Pixels> = size(px(840.), px(640.));
 const SIDEBAR_WIDTH: Pixels = px(220.);
