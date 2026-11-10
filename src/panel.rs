@@ -192,6 +192,27 @@ pub fn panel_origin(visible: NSRect, size: NSSize) -> NSPoint {
     NSPoint::new(x.round(), y.round())
 }
 
+/// 把面板此刻的画面存成 PNG（图形自检用它截 README 配图）。
+///
+/// 系统截图接口（CGWindowListCreateImage / ScreenCaptureKit）连自己的窗口都要屏幕录制权限，
+/// 所以这里让 GPUI 把当前状态离屏画一遍再读回像素。只有 GPUI 画的内容层（预乘 alpha）：
+/// 毛玻璃是系统合成的，不在图里，背景是半透明的，配图时需要自己垫底色。
+#[cfg(feature = "readme-shots")]
+pub fn snapshot(window: &mut Window, cx: &mut App, path: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    // 屏幕外的窗口不会自己出新帧，截之前先按当前状态画一帧。
+    window.draw(cx).clear(cx);
+    let image = window.render_to_image()?;
+    image
+        .save(path)
+        .with_context(|| format!("写入 {}", path.display()))
+}
+
+#[cfg(not(feature = "readme-shots"))]
+pub fn snapshot(_window: &mut Window, _cx: &mut App, _path: &std::path::Path) -> anyhow::Result<()> {
+    anyhow::bail!("截图需要用 `--features readme-shots` 编译")
+}
+
 pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {

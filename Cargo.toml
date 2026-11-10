@@ -28,7 +28,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3.5.1", features = ["json"] }
 security-framework = "3.7.0"
+# 只为 readme-shots 打开 GPUI 的离屏渲染（与 gpui-kit 用的是同一版本）。
+gpui-pre = { version = "=0.3.11", optional = true }
+gpui-pre-macos = { version = "=0.3.11", optional = true }
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[features]
+# 截 README 配图：图形自检的 `snap:<名字>` 用 GPUI 的离屏渲染把面板存成 PNG（不需要屏幕录制权限）。
+# 只给 `cargo build --release --features readme-shots` 用，发布包不带。
+readme-shots = ["dep:gpui-pre", "gpui-pre/test-support", "dep:gpui-pre-macos", "gpui-pre-macos/test-support"]
 
 [profile.dev]
 opt-level = 1

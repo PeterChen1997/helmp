@@ -206,11 +206,45 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
             }
         }
 
-        // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入。
+        // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入，
+        // `wait:<秒>` 干等，`snap:<名字>` 截图（需 `--features readme-shots`，见 docs/images/README.md）。
         // 每步之后打印范围、焦点、表单和结果；最后一步多等一会儿，留给输入即译和模型调用。
         if let Ok(keys) = std::env::var("HELMP_SELF_TEST_KEYS") {
             let tokens: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
             for (ix, token) in tokens.iter().enumerate() {
+                // `wait:<秒>`：干等，留给慢操作（如图片 OCR）跑完。
+                if let Some(secs) = token.strip_prefix("wait:").and_then(|s| s.parse().ok()) {
+                    cx.background_executor().timer(Duration::from_secs(secs)).await;
+                    continue;
+                }
+                // `snap:<名字>`：把面板此刻的画面存成 `$HELMP_SNAPSHOT_DIR/<名字>.png`（README 配图）。
+                if let Some(name) = token.strip_prefix("snap:") {
+                    let dir = std::env::var_os("HELMP_SNAPSHOT_DIR").unwrap_or_else(|| ".".into());
+                    let path = std::path::Path::new(&dir).join(format!("{name}.png"));
+                    // 面板在屏幕外时系统不驱动重绘：手动画几帧，让图标（先生成 PNG、再异步解码）加载出来再截。
+                    for _ in 0..2 {
+                        window
+                            .update(cx, |_, window, cx| {
+                                // 把鼠标「挪」到右侧详情区的空白处，免得启动时光标所在的那一行带着悬停高亮。
+                                let rest = MouseMoveEvent {
+                                    position: point(px(620.), px(330.)),
+                                    pressed_button: None,
+                                    modifiers: Modifiers::default(),
+                                };
+                                window.dispatch_event(PlatformInput::MouseMove(rest), cx);
+                                window.draw(cx).clear(cx)
+                            })
+                            .expect("launcher window gone");
+                        cx.background_executor().timer(settle).await;
+                    }
+                    window
+                        .update(cx, move |_, window, cx| match panel::snapshot(window, cx, &path) {
+                            Ok(()) => println!("self-test snap {}", path.display()),
+                            Err(err) => println!("self-test snap {} 失败：{err:#}", path.display()),
+                        })
+                        .expect("launcher window gone");
+                    continue;
+                }
                 if let Some(text) = token.strip_prefix('~') {
                     // 文字走窗口的正常输入路径，落到当前有焦点的输入框。
                     for ch in text.chars() {

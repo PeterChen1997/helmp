@@ -19,7 +19,6 @@ Helmp（读作 help me）是一个 Spotlight 式的 macOS 启动器：按 <kbd>�
 
 > **当前状态：早期。** Helmp 还在积极开发中，暂时没有打包好的安装包，需要从源码构建。
 
-<!-- 截图：下面这些文件还是占位，待补清单见 docs/images/README.md。 -->
 <p align="center">
   <img src="docs/images/screenshot-home.png" width="720" alt="首页：等你处理的会话、最近使用与快捷命令">
 </p>
