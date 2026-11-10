@@ -374,7 +374,7 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
             None,
         ),
         "screenshot" => (
-            tr("截图与文字识别", "Screenshot & Text Recognition"),
+            tr("截图与文字识别", "Screenshot & OCR"),
             builtin,
             "scan-text",
             Tint::Indigo,

@@ -543,7 +543,11 @@ impl Plugins {
                     subtitle: err.lines().next().unwrap_or_default().to_string(),
                     badge: badge().into(),
                     score: PREFIX_SCORE,
-                    icon,
+                    // 和设置 › 插件里出错的插件同一个图标：一眼看出是错误，不是普通结果。
+                    icon: Icon::Symbol {
+                        name: "triangle-alert",
+                        tint: Tint::Red,
+                    },
                     action: Action::new(move || Ok(Outcome::Message(message.clone()))),
                     action_title: tr("查看错误", "Show Error").into(),
                     ..Item::blank()

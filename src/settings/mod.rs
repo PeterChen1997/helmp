@@ -52,20 +52,29 @@ pub fn open_page(cx: &mut App, page: Page) {
 
 /// 打开（或前置）设置窗口。菜单栏「设置…」与面板里的 ⌘, 调用它。
 pub fn open(cx: &mut App) {
+    let offscreen = self_test_offscreen();
     // App 是 Accessory 策略：不激活整个 App，窗口只会出现在别的 App 后面。
-    cx.activate(true);
+    if !offscreen {
+        cx.activate(true);
+    }
     if let Some(handle) = cx.try_global::<SettingsWindow>().map(|global| global.0)
         && handle
             .update(cx, |_, window, cx| {
                 sync_component_theme(window, cx);
-                window.activate_window();
+                if !offscreen {
+                    window.activate_window();
+                }
             })
             .is_ok()
     {
         return;
     }
 
-    let bounds = Bounds::centered(None, WINDOW_SIZE, cx);
+    let bounds = if offscreen {
+        Bounds::new(point(px(-10000.), px(-10000.)), WINDOW_SIZE)
+    } else {
+        Bounds::centered(None, WINDOW_SIZE, cx)
+    };
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some(window_title().into()),
@@ -74,8 +83,9 @@ pub fn open(cx: &mut App) {
         }),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(720.), px(520.))),
-        focus: true,
-        show: true,
+        focus: !offscreen,
+        // 自检时先不显示，挪到屏幕外再前置（见下），免得在屏幕上闪一下。
+        show: !offscreen,
         kind: WindowKind::Normal,
         is_movable: true,
         is_resizable: true,
@@ -91,11 +101,27 @@ pub fn open(cx: &mut App) {
             cx.set_global(SettingsWindow(handle));
             let _ = handle.update(cx, |_, window, cx| {
                 sync_component_theme(window, cx);
-                window.activate_window();
+                if !offscreen {
+                    window.activate_window();
+                } else if let Some(ns_window) = crate::panel::ns_window(window) {
+                    ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
+                    ns_window.orderFrontRegardless();
+                }
             });
         }
         Err(err) => eprintln!("helmp: 打开设置窗口失败：{err:#}"),
     }
+}
+
+/// 图形自检（`HELMP_SELF_TEST`）期间设置窗口摆在屏幕外：不激活 App、不成为 key window、
+/// 不切出 Dock 图标，免得打扰正在用电脑的人（截图靠离屏渲染，见 `panel::snapshot`）。
+pub(crate) fn self_test_offscreen() -> bool {
+    std::env::var_os("HELMP_SELF_TEST").is_some()
+}
+
+/// 已打开的设置窗口（图形自检截图用）。
+pub fn window_handle(cx: &App) -> Option<AnyWindowHandle> {
+    cx.try_global::<SettingsWindow>().map(|global| global.0)
 }
 
 fn window_title() -> &'static str {
@@ -129,6 +155,11 @@ pub(crate) fn sync_component_theme(window: &mut Window, cx: &mut App) {
     };
     if cx.theme().mode != mode {
         Theme::change(mode, Some(window), cx);
+    }
+    // 组件主题的开关圆钮取窗口底色：深色下是近黑的圆钮压在深灰轨道上，关着的开关几乎看不见。
+    // 照 macOS 原生开关一律用白色圆钮（切换明暗会重置主题色，所以每次都检查）。
+    if cx.theme().switch_thumb != white() {
+        Theme::update(cx, |theme| theme.colors.switch_thumb = white());
     }
 }
 
@@ -201,7 +232,9 @@ fn web_engine_name_placeholder() -> &'static str {
 
 impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        crate::dock::track_window(cx);
+        if !self_test_offscreen() {
+            crate::dock::track_window(cx);
+        }
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(search_placeholder()));
         let hotkey = cx.new(|cx| {
             HotkeyRecorder::new(

@@ -1413,6 +1413,16 @@ pub fn icon_element(icon: &ItemIcon, size: Pixels, pal: &Palette) -> AnyElement 
                     .size(size * 0.58),
             )
             .into_any_element(),
+        ItemIcon::Glyph(text) => div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(size)
+            .text_size(size * 0.82)
+            .line_height(size)
+            .child(text.clone())
+            .into_any_element(),
     }
 }
 
@@ -1517,7 +1527,8 @@ fn render_detail(
                     .line_height(px(line))
                     .text_color(pal.fg);
                 match result_text {
-                    Some(state) => body.child(
+                    // 只读文本框自带 10 pt 的左右内边距：往外让出这么多，文字才和标题、说明左对齐。
+                    Some(state) => body.mx(px(-10.)).child(
                         Textarea::new(state)
                             .appearance(false)
                             .readonly(true)
@@ -1572,6 +1583,8 @@ fn render_detail(
                     img(path.clone())
                         .max_h(px(if has_result { 96. } else { 220. }))
                         .max_w_full()
+                        // 卡片的 overflow_hidden 只按矩形裁：铺满卡片的图（如色块）要自己圆角。
+                        .rounded(px(12.))
                         .object_fit(ObjectFit::Contain),
                 ),
         });
@@ -1636,6 +1649,9 @@ impl Launcher {
             .items_center()
             .gap(px(10.))
             .min_h(px(if two_line { 48. } else { 44. }))
+            // 结果列表是可滚动的纵向 flex：不禁止收缩的话，结果一多每行就被压扁到 min_h，
+            // 行高和结果少时不一样，副标题也贴着下沿。
+            .flex_none()
             .px(px(10.))
             .py(px(4.))
             .rounded(px(10.))
@@ -1643,7 +1659,25 @@ impl Launcher {
             .when(!on, |row| {
                 row.text_color(pal.fg).hover(|row| row.bg(pal.key_bg))
             })
-            .child(icon_element(&item.icon, px(28.), pal))
+            .child(match &item.icon {
+                // 蓝色底块和选中行的底色几乎同色，选中时图标只剩一个白色符号、看不出底块：描一圈白边。
+                ItemIcon::Symbol {
+                    tint: crate::provider::Tint::Blue,
+                    ..
+                } if on => div()
+                    .flex_none()
+                    .rounded(px(7.))
+                    .shadow(vec![BoxShadow {
+                        color: gpui_kit::white().opacity(0.6),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(1.),
+                        inset: false,
+                    }])
+                    .child(icon_element(&item.icon, px(28.), pal))
+                    .into_any_element(),
+                _ => icon_element(&item.icon, px(28.), pal),
+            })
             .child(
                 div()
                     .flex()
@@ -1683,6 +1717,7 @@ impl Launcher {
     ) -> AnyElement {
         div()
             .flex()
+            .flex_none()
             .gap(px(6.))
             .px(px(4.))
             .children(items.iter().map(|(ix, item)| {
@@ -1739,6 +1774,7 @@ impl Launcher {
             if last_badge != Some(item.badge.as_str()) && !item.badge.is_empty() {
                 children.push(
                     div()
+                        .flex_none()
                         .px(px(12.))
                         .pt(px(10.))
                         .pb(px(4.))
@@ -2110,7 +2146,8 @@ impl Launcher {
         } else if let Some(item) = self.selected_item() {
             let primary = match self.result_actions().and_then(|actions| actions.first()) {
                 Some(action) => action.title.clone(),
-                None if item.form.is_some() => tr("运行", "Run").to_string(),
+                // 表单也用结果自己的动作名（保存、提交、翻译），比笼统的「运行」说得清回车会做什么。
+                None if item.action_title.is_empty() => tr("运行", "Run").to_string(),
                 None => item.action_title.clone(),
             };
             footer = footer.child(div().ml_auto().child(hint(primary.into(), "↵".into())));

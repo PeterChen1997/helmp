@@ -719,7 +719,7 @@ fn item_image(icon: &Icon) -> Option<Retained<NSImage>> {
         Icon::File(path) => {
             NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(&path.to_string_lossy()))
         }
-        Icon::Symbol { .. } | Icon::None => return None,
+        Icon::Symbol { .. } | Icon::Glyph(_) | Icon::None => return None,
     };
     image.setSize(NSSize::new(16.0, 16.0));
     Some(image)

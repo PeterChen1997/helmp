@@ -414,8 +414,8 @@ impl Render for SnippetsPane {
             .flex_col()
             .child(div().mb(px(16.)).child(widgets::help_text(
                 tr(
-                    "常用文字存成片段，在启动器里输入「sn 」或「片段 」搜索，回车粘贴到正在用的 App。",
-                    "Save text you use often. Type “sn ” in Helmp to search, then press Return to paste into the app you’re using.",
+                    "常用文字存成片段，在启动器里输入「sn」或「片段」加空格搜索，回车粘贴到正在用的 App。",
+                    "Save text you use often. Type “sn” and a space in Helmp to search, then press Return to paste into the app you’re using.",
                 ),
                 &pal,
             )))

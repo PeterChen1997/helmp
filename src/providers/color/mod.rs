@@ -86,7 +86,7 @@ fn detail(color: Rgba, swatch: Option<PathBuf>, actions: Vec<NamedAction>) -> De
         icon: swatch.clone().map(Icon::Image).unwrap_or(ICON),
         title: color.hex(),
         tag: None,
-        blocks: swatch.into_iter().map(Block::Image).collect(),
+        blocks: swatch_strip(color).ok().into_iter().map(Block::Image).collect(),
         metadata: formats(color)
             .into_iter()
             .map(|(_, label, value)| (label.to_string(), value))
@@ -191,23 +191,38 @@ fn sample() -> Result<Option<Rgba>> {
         .context(tr("取色器没有返回结果", "The color sampler didn’t return"))
 }
 
-/// 写一个 48×48 的色块 PNG（按颜色缓存，已存在就不重写）。
+/// 列表图标用的 48×48 色块 PNG（按颜色缓存，已存在就不重写）。
 fn swatch(color: Rgba) -> Result<PathBuf> {
+    swatch_sized(color, 48, 48)
+}
+
+/// 详情区的横条色块：图片按原始尺寸（pt）居中画在卡片里，方块图只占中间一小块、两边露白底。
+/// 宽度取详情区卡片的宽（面板 880 pt 时约 448 pt），高度留给下面的各种写法。
+fn swatch_strip(color: Rgba) -> Result<PathBuf> {
+    swatch_sized(color, 448, 64)
+}
+
+fn swatch_sized(color: Rgba, width: u32, height: u32) -> Result<PathBuf> {
     let dir = crate::paths::data_dir()?.join("colors");
     std::fs::create_dir_all(&dir)?;
     let [r, g, b, a] = color.bytes();
-    let path = dir.join(format!("{r:02x}{g:02x}{b:02x}{a:02x}.png"));
+    // 方块沿用旧文件名（已有缓存照用），其他尺寸带上尺寸。
+    let name = if (width, height) == (48, 48) {
+        format!("{r:02x}{g:02x}{b:02x}{a:02x}.png")
+    } else {
+        format!("{r:02x}{g:02x}{b:02x}{a:02x}-{width}x{height}.png")
+    };
+    let path = dir.join(name);
     if path.exists() {
         return Ok(path);
     }
-    const SIZE: u32 = 48;
-    let pixels: Vec<u8> = std::iter::repeat_n([r, g, b, a], (SIZE * SIZE) as usize)
+    let pixels: Vec<u8> = std::iter::repeat_n([r, g, b, a], (width * height) as usize)
         .flatten()
         .collect();
     let tmp = path.with_extension("png.tmp");
     {
         let file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
-        let mut encoder = png::Encoder::new(file, SIZE, SIZE);
+        let mut encoder = png::Encoder::new(file, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header()?;

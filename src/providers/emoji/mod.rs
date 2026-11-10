@@ -232,8 +232,8 @@ fn item(entry: &Entry, score: u32) -> Item {
         .join("-");
     Item {
         id: format!("{PROVIDER_ID}:{id}"),
-        // 列表图标位暂时画不了任意字符（Icon 只有图片和内置符号），字符放在标题最前面。
-        title: format!("{}  {name}", entry.text),
+        // 字符本身画在图标位（和其他结果的图标对齐），标题只放名字。
+        title: name.to_string(),
         subtitle: keywords
             .iter()
             .take(6)
@@ -246,7 +246,7 @@ fn item(entry: &Entry, score: u32) -> Item {
             "Emoji".into()
         },
         score,
-        icon: Icon::None,
+        icon: Icon::Glyph(entry.text.to_string()),
         action: remembering(entry.text, paste_text(entry.text.to_string())),
         action_title: tr("粘贴", "Paste").into(),
         actions,
@@ -314,19 +314,19 @@ impl Provider for Emoji {
                 .next()
                 .is_some_and(|c| !c.is_ascii_digit() && !c.is_whitespace())
         {
-            return search(rest, false, SCOPE_LIMIT)
-                .into_iter()
-                .map(|(entry, score)| item(entry, score))
-                .collect();
+            return ranked(search(rest, false, SCOPE_LIMIT), |score| score);
         }
         let mut items: Vec<Item> = Vec::new();
         if query.chars().count() >= 2 {
             items.extend(
-                search(query, true, ROOT_LIMIT)
-                    .into_iter()
-                    .filter(|(_, score)| *score >= 800)
+                ranked(
+                    search(query, true, ROOT_LIMIT)
+                        .into_iter()
+                        .filter(|(_, score)| *score >= 800)
+                        .collect(),
                     // 排在应用、命令这些本地结果后面。
-                    .map(|(entry, score)| item(entry, score / 4)),
+                    |score| score / 4,
+                ),
             );
         }
         items.extend(entry_command(query));
@@ -350,11 +350,17 @@ impl Provider for Emoji {
                 .map(|(rank, entry)| item(entry, 1000u32.saturating_sub(rank as u32)))
                 .collect();
         }
-        search(query, false, SCOPE_LIMIT)
-            .into_iter()
-            .map(|(entry, score)| item(entry, score))
-            .collect()
+        ranked(search(query, false, SCOPE_LIMIT), |score| score)
     }
+}
+
+/// 按 `search` 排好的顺序出结果：分数按名次再减一点，保证严格递减。
+/// 引擎对同分结果按标题排序，不这样做的话「最近用过、表的顺序」会被按名字重排。
+fn ranked(hits: Vec<(&'static Entry, u32)>, scale: impl Fn(u32) -> u32) -> Vec<Item> {
+    hits.into_iter()
+        .enumerate()
+        .map(|(rank, (entry, score))| item(entry, scale(score).saturating_sub(rank as u32)))
+        .collect()
 }
 
 /// 「表情」「符号」「emoji」本身：进入范围。
@@ -392,6 +398,14 @@ mod tests {
         items.iter().map(|item| item.title.clone()).collect()
     }
 
+    /// 图标位上画的字符。
+    fn glyph(item: &Item) -> &str {
+        match &item.icon {
+            Icon::Glyph(text) => text,
+            _ => "",
+        }
+    }
+
     #[test]
     fn table_is_complete_and_parses() {
         // 生成脚本出错（列数不对、漏了中文）时整张表会悄悄变小。
@@ -427,7 +441,7 @@ mod tests {
                 items
                     .iter()
                     .take(8)
-                    .any(|item| item.title.starts_with(expected)),
+                    .any(|item| glyph(item).starts_with(expected)),
                 "{query:?}: {:?}",
                 titles(&items).into_iter().take(8).collect::<Vec<_>>()
             );
