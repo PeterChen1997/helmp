@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Helmp · macOS launcher with an agent switcher</title>
-  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, snippets, file and bookmark search, screenshot OCR, translation with your own model, unit and currency conversion, window management, developer tools and declarative plugins. English and Chinese interface. No account, no telemetry.">
+  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, snippets, file and bookmark search, screenshot OCR, translation with your own model, unit and currency conversion, window management, developer tools, plugins and MCP servers. English and Chinese interface. No account, no telemetry.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0b0d16" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#dfe8fd" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1131" media="(prefers-color-scheme: dark)">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Helmp">
   <meta property="og:description" content="A native macOS launcher that knows which coding agent is waiting for you.">
   <meta property="og:url" content="https://blog.peterchen97.cn/helmp/">
-  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/icon-512.png">
+  <meta property="og:image" content="https://blog.peterchen97.cn/helmp/assets/og.png">
   <link rel="icon" type="image/png" href="assets/icon-64.png">
   <link rel="apple-touch-icon" href="assets/icon-512.png">
   <link rel="stylesheet" href="assets/style.css">
@@ -36,447 +36,505 @@
   </script>
 </head>
 <body>
-  <div class="backdrop" aria-hidden="true">
-    <div class="blob blob-a"></div>
-    <div class="blob blob-b"></div>
-    <div class="blob blob-c"></div>
-  </div>
+  <a class="skip" href="#main"><span lang="en">Skip to content</span><span lang="zh-CN">跳到正文</span></a>
+  <div class="backdrop" aria-hidden="true"></div>
 
-  <header class="topbar">
-    <div class="topbar-inner">
+  <header class="menubar">
+    <div class="menubar-inner">
       <a class="brand" href="./">
-        <img src="assets/icon-64.png" width="28" height="28" alt="">
+        <img src="assets/icon-64.png" width="22" height="22" alt="">
         <span>Helmp</span>
       </a>
-      <nav class="nav" aria-label="Sections">
+      <nav class="menu" aria-label="Sections">
+        <a href="#agents"><span lang="en">Agents</span><span lang="zh-CN">Agent</span></a>
         <a href="#features"><span lang="en">Features</span><span lang="zh-CN">功能</span></a>
         <a href="#plugins"><span lang="en">Plugins</span><span lang="zh-CN">插件</span></a>
-        <a href="plugins/"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></a>
-        <a href="#shortcuts"><span lang="en">Shortcuts</span><span lang="zh-CN">快捷键</span></a>
         <a href="#privacy"><span lang="en">Privacy</span><span lang="zh-CN">隐私</span></a>
-        <a href="#faq">FAQ</a>
+        <a href="#install"><span lang="en">Install</span><span lang="zh-CN">安装</span></a>
+        <a href="#faq"><span lang="en">FAQ</span><span lang="zh-CN">问答</span></a>
       </nav>
-      <div class="lang-switch" role="group" aria-label="Language / 语言">
-        <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
-        <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+      <div class="menubar-extras">
+        <a class="status-item" href="#agents" title="Agent">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><rect x="2.5" y="2.5" width="15" height="15" rx="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 6.5v7M13 6.5v7M7 10h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="sr-only"><span lang="en">An agent is waiting: see how Helmp shows it</span><span lang="zh-CN">有 agent 在等你：看看 Helmp 怎么提示</span></span>
+        </a>
+        <div class="lang-switch" role="group" aria-label="Language / 语言">
+          <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+          <button type="button" data-set-lang="zh" aria-pressed="false">中文</button>
+        </div>
       </div>
     </div>
   </header>
 
-  <main>
-    <!-- ============ Hero ============ -->
-    <section class="hero">
-      <img class="hero-icon" src="assets/icon-512.png" width="160" height="160" alt="Helmp icon">
-      <h1>Helmp</h1>
-      <p class="tagline">
-        <span lang="en">A native macOS launcher that knows which coding agent is waiting for you.</span>
-        <span lang="zh-CN">原生 macOS 启动器，还知道哪个 coding agent 在等你。</span>
-      </p>
-      <p class="lede" lang="en">Find apps by pinyin, jump to the Claude Code or Codex session that needs you, search your clipboard, files and bookmarks, paste snippets, pull text out of screenshots, translate with your own model, convert units and currencies, and arrange windows. Written in Rust with GPUI. No account, no telemetry.</p>
-      <p class="lede" lang="zh-CN">拼音搜应用，一键跳到正在等你的 Claude Code / Codex 会话，翻剪贴板历史、文件和书签，粘贴常用片段，识别截图里的文字，用你自己的模型翻译，换算单位和汇率，摆放窗口。Rust + GPUI 编写，不用登录，没有遥测。</p>
-      <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-          <span lang="en">Download</span>
-          <span lang="zh-CN">下载</span>
-        </a>
-        <a class="btn btn-glass" href="https://github.com/PeterChen1997/helmp">
-          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          GitHub
-        </a>
+  <main id="main">
+    <!-- ============ Hero：壁纸 + 浮在上面的真实面板 ============ -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy wrap">
+        <h1 id="hero-title">
+          <span lang="en">A native Mac launcher that knows which agent is waiting.</span>
+          <span lang="zh-CN"><span class="seg">原生 Mac 启动器，</span><span class="seg">知道哪个 agent 在等你。</span></span>
+        </h1>
+        <p class="hero-lede" lang="en">Find apps by pinyin, search your clipboard, read text from screenshots, translate with your own model, and jump straight to the Claude Code or Codex session that needs you. Written in Rust with GPUI. No account, no telemetry.</p>
+        <p class="hero-lede" lang="zh-CN">拼音搜应用、翻剪贴板、截图识字、用你自己的模型翻译，还能一键跳到正在等你的 Claude Code / Codex 会话。Rust + GPUI 原生编写，不用登录，没有遥测。</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            <span lang="en">Download for Mac</span><span lang="zh-CN">下载 Mac 版</span>
+          </a>
+          <a class="btn btn-glass" href="https://github.com/PeterChen1997/helmp">
+            <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            <span lang="en">Source on GitHub</span><span lang="zh-CN">GitHub 源码</span>
+          </a>
+        </div>
+        <ul class="facts">
+          <li><span lang="en">macOS 15 or later</span><span lang="zh-CN">macOS 15 及以上</span></li>
+          <li><span lang="en">Signed &amp; notarized</span><span lang="zh-CN">签名并公证</span></li>
+          <li><span lang="en">MIT licensed</span><span lang="zh-CN">MIT 协议</span></li>
+          <li><span lang="en">Free and open source</span><span lang="zh-CN">免费开源</span></li>
+        </ul>
       </div>
-      <p class="meta">
-        <span lang="en">macOS 15 or later · English &amp; 简体中文 · MIT licensed · Early preview</span>
-        <span lang="zh-CN">macOS 15 及以上 · 中英双语界面 · MIT 协议 · 早期预览版</span>
-      </p>
 
-      <!-- 用 HTML 画的面板示意（Agent 会话视图），不是截图。 -->
-      <div class="panel" role="img" aria-label="Helmp panel showing agent sessions / Helmp 面板：Agent 会话">
-        <div class="panel-search">
-          <span class="scope-chip">
-            <span lang="en">Agent sessions</span><span lang="zh-CN">Agent 会话</span>
-          </span>
-          <span class="panel-query">helmp<span class="caret"></span></span>
-          <span class="segmented">
-            <span class="on"><span lang="en">All</span><span lang="zh-CN">全部</span></span>
-            <span>Claude</span>
-            <span>Codex</span>
-          </span>
+      <div class="stage wrap" data-stage>
+        <div class="stage-tabs" role="tablist" aria-label="Helmp screenshots / Helmp 截图">
+          <button type="button" role="tab" id="tab-agents" aria-controls="shot-agents" aria-selected="true"><span lang="en">Agent sessions</span><span lang="zh-CN">Agent 会话</span></button>
+          <button type="button" role="tab" id="tab-apps" aria-controls="shot-apps" aria-selected="false" tabindex="-1"><span lang="en">Pinyin search</span><span lang="zh-CN">拼音搜应用</span></button>
+          <button type="button" role="tab" id="tab-clipboard" aria-controls="shot-clipboard" aria-selected="false" tabindex="-1"><span lang="en">Clipboard</span><span lang="zh-CN">剪贴板</span></button>
+          <button type="button" role="tab" id="tab-translate" aria-controls="shot-translate" aria-selected="false" tabindex="-1"><span lang="en">Translate</span><span lang="zh-CN">翻译</span></button>
+          <button type="button" role="tab" id="tab-ocr" aria-controls="shot-ocr" aria-selected="false" tabindex="-1"><span lang="en">OCR</span><span lang="zh-CN">截图识字</span></button>
+          <button type="button" role="tab" id="tab-plugin" aria-controls="shot-plugin" aria-selected="false" tabindex="-1"><span lang="en">Plugins</span><span lang="zh-CN">插件</span></button>
         </div>
-        <div class="panel-body">
-          <div class="panel-list">
-            <div class="section-title"><span lang="en">Waiting for you</span><span lang="zh-CN">等你处理</span> <em>1</em></div>
-            <div class="row selected">
-              <span class="tile tile-claude">C</span>
-              <span class="row-text">
-                <span class="row-title"><span lang="en">Polish the settings window</span><span lang="zh-CN">打磨设置窗口</span></span>
-                <span class="row-sub">~/code/helmp · main · <span lang="en">2 min ago</span><span lang="zh-CN">2 分钟前</span></span>
-              </span>
-              <span class="tag tag-waiting"><span lang="en">Waiting</span><span lang="zh-CN">等你</span></span>
-            </div>
-            <div class="section-title"><span lang="en">Running</span><span lang="zh-CN">进行中</span> <em>1</em></div>
-            <div class="row">
-              <span class="tile tile-codex">X</span>
-              <span class="row-text">
-                <span class="row-title"><span lang="en">Fix the flaky OCR test</span><span lang="zh-CN">修掉不稳定的 OCR 测试</span></span>
-                <span class="row-sub">~/code/helmp · ocr-fix</span>
-              </span>
-              <span class="tag tag-running"><span lang="en">Running</span><span lang="zh-CN">运行中</span></span>
-            </div>
-            <div class="section-title"><span lang="en">Recently finished</span><span lang="zh-CN">最近完成</span> <em>1</em></div>
-            <div class="row">
-              <span class="tile tile-claude">C</span>
-              <span class="row-text">
-                <span class="row-title"><span lang="en">Write the landing page</span><span lang="zh-CN">写产品落地页</span></span>
-                <span class="row-sub">~/code/helmp · site · <span lang="en">1 h ago</span><span lang="zh-CN">1 小时前</span></span>
-              </span>
-              <span class="tag tag-done"><span lang="en">Done</span><span lang="zh-CN">已完成</span></span>
-            </div>
+
+        <div class="panel">
+          <div class="panel-shot" role="tabpanel" id="shot-agents" aria-labelledby="tab-agents" aria-describedby="cap-agents">
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/agents-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-en-dark.png">
+              <img src="assets/shots/agents-en-light.png" width="1520" height="962" alt="Helmp panel listing Claude Code and Codex sessions: two waiting for you, one running, two recently finished, with the selected session's last message on the right" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/agents-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-zh-dark.png">
+              <img src="assets/shots/agents-zh-light.png" width="1520" height="962" alt="Helmp 面板列出 Claude Code 和 Codex 会话：两个等你处理、一个进行中、两个最近完成，右侧是选中会话的最后一条消息" decoding="async" loading="lazy">
+            </picture>
           </div>
-          <div class="panel-detail">
-            <div class="detail-head">
-              <span class="tile tile-claude">C</span>
-              <span class="detail-title"><span lang="en">Polish the settings window</span><span lang="zh-CN">打磨设置窗口</span></span>
-            </div>
-            <div class="quote">
-              <div class="quote-label"><span lang="en">Last message</span><span lang="zh-CN">最后一条消息</span></div>
-              <p><span lang="en">Allow editing src/settings/pages/general.rs?</span><span lang="zh-CN">允许修改 src/settings/pages/general.rs 吗？</span></p>
-            </div>
-            <dl class="kv">
-              <dt><span lang="en">Project</span><span lang="zh-CN">项目</span></dt><dd>~/code/helmp</dd>
-              <dt><span lang="en">Branch</span><span lang="zh-CN">分支</span></dt><dd>main</dd>
-              <dt><span lang="en">Source</span><span lang="zh-CN">来源</span></dt><dd>Claude Code · iTerm2</dd>
-            </dl>
+          <div class="panel-shot" role="tabpanel" id="shot-apps" aria-labelledby="tab-apps" aria-describedby="cap-apps" hidden>
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/apps-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/apps-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/apps-en-dark.png">
+              <img src="assets/shots/apps-en-light.png" width="1520" height="962" alt="Searching jsq in Helmp: Calculator (计算器) is the first result, matched by its pinyin initials" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/apps-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/apps-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/apps-zh-dark.png">
+              <img src="assets/shots/apps-zh-light.png" width="1520" height="962" alt="在 Helmp 里输入 jsq：计算器排第一，按拼音首字母匹配" decoding="async" loading="lazy">
+            </picture>
+          </div>
+          <div class="panel-shot" role="tabpanel" id="shot-clipboard" aria-labelledby="tab-clipboard" aria-describedby="cap-clipboard" hidden>
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/clipboard-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/clipboard-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/clipboard-en-dark.png">
+              <img src="assets/shots/clipboard-en-light.png" width="1520" height="962" alt="Clipboard history in Helmp: a pinned item, today's text, link, image and command, grouped by day, with a type filter" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/clipboard-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/clipboard-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/clipboard-zh-dark.png">
+              <img src="assets/shots/clipboard-zh-light.png" width="1520" height="962" alt="Helmp 剪贴板历史：置顶条目，今天复制的文字、链接、图片和命令，按天分组，可按类型筛选" decoding="async" loading="lazy">
+            </picture>
+          </div>
+          <div class="panel-shot" role="tabpanel" id="shot-translate" aria-labelledby="tab-translate" aria-describedby="cap-translate" hidden>
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/translate-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/translate-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/translate-en-dark.png">
+              <img src="assets/shots/translate-en-light.png" width="1520" height="962" alt="Translate in Helmp: a Chinese sentence translated into English by a local Qwen3 model through Ollama" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/translate-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/translate-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/translate-zh-dark.png">
+              <img src="assets/shots/translate-zh-light.png" width="1520" height="962" alt="Helmp 翻译：一句英文由本机 Ollama 上的 Qwen3 模型译成中文" decoding="async" loading="lazy">
+            </picture>
+          </div>
+          <div class="panel-shot" role="tabpanel" id="shot-ocr" aria-labelledby="tab-ocr" aria-describedby="cap-ocr" hidden>
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/ocr-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/ocr-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/ocr-en-dark.png">
+              <img src="assets/shots/ocr-en-light.png" width="1520" height="962" alt="Text and a QR code recognized from an image in Helmp, with line breaks kept" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/ocr-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/ocr-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/ocr-zh-dark.png">
+              <img src="assets/shots/ocr-zh-light.png" width="1520" height="962" alt="Helmp 从一张图片里识别出的文字和二维码，保留了换行" decoding="async" loading="lazy">
+            </picture>
+          </div>
+          <div class="panel-shot" role="tabpanel" id="shot-plugin" aria-labelledby="tab-plugin" aria-describedby="cap-plugin" hidden>
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/plugin-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/plugin-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/plugin-en-dark.png">
+              <img src="assets/shots/plugin-en-light.png" width="1520" height="962" alt="The bundled flomo plugin in Helmp: what you typed after flomo becomes the memo in a form, ready to send" decoding="async" loading="lazy">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/plugin-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/plugin-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/plugin-zh-dark.png">
+              <img src="assets/shots/plugin-zh-light.png" width="1520" height="962" alt="Helmp 自带的 flomo 插件：flomo 后面输入的内容进了表单，回车就记成一条 MEMO" decoding="async" loading="lazy">
+            </picture>
           </div>
         </div>
-        <div class="panel-status">
-          <span><kbd>↵</kbd> <span lang="en">Jump to session</span><span lang="zh-CN">跳转到会话</span></span>
-          <span><kbd>⌘K</kbd> <span lang="en">Actions</span><span lang="zh-CN">更多操作</span></span>
+
+        <div class="stage-captions">
+          <p id="cap-agents" data-caption="agents">
+            <span lang="en">Type <kbd>ag</kbd> and a space, or press <kbd>⌃⌥A</kbd>. Claude Code and Codex sessions are grouped into waiting for you, running and recently finished. Return jumps to the exact terminal tab or desktop app.</span>
+            <span lang="zh-CN">输入 <kbd>ag</kbd> 加空格，或按 <kbd>⌃⌥A</kbd>。Claude Code 和 Codex 的会话按「等你处理 / 进行中 / 最近完成」排好，回车直接跳到对应的终端标签页或桌面 App。</span>
+          </p>
+          <p id="cap-apps" data-caption="apps" hidden>
+            <span lang="en">Type <kbd>jsq</kbd>, the pinyin initials of 计算器, and Calculator comes first. English names, Chinese names, full pinyin and initials all work.</span>
+            <span lang="zh-CN">输入 <kbd>jsq</kbd>，「计算器」排第一。英文名、中文名、全拼、首字母都能搜，详情里写明这次是怎么匹配上的。</span>
+          </p>
+          <p id="cap-clipboard" data-caption="clipboard" hidden>
+            <span lang="en">Press <kbd>⇧⌘V</kbd> for clipboard history: text, images and files, kept on your Mac with no limit, grouped by day, pinned items first.</span>
+            <span lang="zh-CN">按 <kbd>⇧⌘V</kbd> 打开剪贴板历史：文本、图片、文件，只存在本机、不限条数，按天分组，置顶的排最前。</span>
+          </p>
+          <p id="cap-translate" data-caption="translate" hidden>
+            <span lang="en">Press <kbd>⌥⇧T</kbd> to translate the selected text with your own model: Anthropic, any OpenAI-compatible API, or Ollama on your Mac.</span>
+            <span lang="zh-CN">按 <kbd>⌥⇧T</kbd> 用你自己的模型翻译选中的文字：Anthropic、任意 OpenAI 兼容接口，或本机的 Ollama。</span>
+          </p>
+          <p id="cap-ocr" data-caption="ocr" hidden>
+            <span lang="en">Press <kbd>⇧⌘2</kbd>, drag over anything on screen, and Apple Vision reads the text and QR codes on your Mac. Line breaks are kept.</span>
+            <span lang="zh-CN">按 <kbd>⇧⌘2</kbd> 框选屏幕上的任何区域，Apple Vision 在本机识别其中的文字和二维码，保留换行。</span>
+          </p>
+          <p id="cap-plugin" data-caption="plugin" hidden>
+            <span lang="en">A plugin is a folder with a <code>plugin.json</code>. The bundled flomo plugin turns what you type into a memo; Return sends it.</span>
+            <span lang="zh-CN">插件就是一个带 <code>plugin.json</code> 的文件夹。自带的 flomo 插件把你输入的内容做成一条 MEMO，回车发送。</span>
+          </p>
         </div>
       </div>
-      <p class="caption">
-        <span lang="en">Illustration of the agent session view. Real screenshots coming soon.</span>
-        <span lang="zh-CN">Agent 会话视图示意，实机截图稍后补上。</span>
-      </p>
+    </section>
+
+    <!-- ============ Agent ============ -->
+    <section id="agents" class="section" aria-labelledby="agents-title">
+      <div class="wrap">
+        <div class="split">
+          <div class="split-copy">
+            <h2 id="agents-title"><span lang="en">Made for working next to coding agents</span><span lang="zh-CN">为和 coding agent 一起干活而做</span></h2>
+            <p class="lede" lang="en">While Claude Code and Codex work in a dozen terminal tabs, Helmp keeps track of which one stopped to ask you something. When a session is waiting, the menu bar icon gets an orange dot.</p>
+            <p class="lede" lang="zh-CN">Claude Code 和 Codex 在一堆终端标签页里干活，Helmp 替你记着哪个停下来在问你。有会话在等你时，菜单栏图标右上角会亮一个橙点。</p>
+          </div>
+          <figure class="crop glass" aria-labelledby="crop-cap">
+            <picture lang="en">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-en-dark.webp">
+              <source type="image/webp" srcset="assets/shots/agents-en-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-en-dark.png">
+              <img src="assets/shots/agents-en-light.png" width="1520" height="962" alt="" loading="lazy" decoding="async">
+            </picture>
+            <picture lang="zh-CN">
+              <source type="image/webp" media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-zh-dark.webp">
+              <source type="image/webp" srcset="assets/shots/agents-zh-light.webp">
+              <source media="(prefers-color-scheme: dark)" srcset="assets/shots/agents-zh-dark.png">
+              <img src="assets/shots/agents-zh-light.png" width="1520" height="962" alt="" loading="lazy" decoding="async">
+            </picture>
+            <figcaption id="crop-cap" class="sr-only"><span lang="en">The session list from the Helmp panel</span><span lang="zh-CN">Helmp 面板里的会话列表</span></figcaption>
+          </figure>
+        </div>
+
+        <div class="trio">
+          <div>
+            <h3><span lang="en">Sees who is waiting</span><span lang="zh-CN">看得见谁在等你</span></h3>
+            <p lang="en">Sessions from the CLI and the desktop apps, with each one's last message. Return selects the exact tab in iTerm2 and Terminal. Helmp only reads <code>~/.claude</code> and <code>~/.codex</code>: no writes, no hooks.</p>
+            <p lang="zh-CN">命令行和桌面 App 里的会话都列出来，附最后一条消息。回车在 iTerm2 和系统终端里精确选中那个标签页。Helmp 对 <code>~/.claude</code>、<code>~/.codex</code> 只读，不写入，不装 hooks。</p>
+          </div>
+          <div>
+            <h3><span lang="en">Agents build Helmp plugins</span><span lang="zh-CN">agent 帮你写插件</span></h3>
+            <p lang="en">Connect <code>helmp mcp</code> to Claude Code, Codex or Cursor and describe what you want. The agent scaffolds, validates, dry-runs and installs a plugin, which stays off until you approve it.</p>
+            <p lang="zh-CN">把 <code>helmp mcp</code> 接到 Claude Code、Codex 或 Cursor，说出你想要的功能。agent 生成模板、校验、演练、安装，插件在你确认权限前保持停用。</p>
+          </div>
+          <div>
+            <h3><span lang="en">MCP servers become commands</span><span lang="zh-CN">MCP 服务器变成命令</span></h3>
+            <p lang="en">Import servers from Claude Code, Codex or Cursor, or pick from a curated list. Each tool becomes a launcher command with a form built from its schema; destructive tools ask first, tokens stay in the Keychain.</p>
+            <p lang="zh-CN">从 Claude Code、Codex、Cursor 导入，或者从精选列表里添加。每个工具都变成一条启动器命令，按参数自动生成表单；破坏性工具先确认，令牌只存钥匙串。</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ============ Features ============ -->
-    <section id="features" class="section">
-      <h2>
-        <span lang="en">Everything one keystroke away</span>
-        <span lang="zh-CN">一个快捷键，全都够得着</span>
-      </h2>
-      <p class="section-lede">
-        <span lang="en">Press <kbd>⌥ Space</kbd>, type a few letters, hit Return.</span>
-        <span lang="zh-CN">按 <kbd>⌥ Space</kbd>，打几个字母，回车。</span>
-      </p>
+    <section id="features" class="section" aria-labelledby="features-title">
+      <div class="wrap">
+        <h2 id="features-title"><span lang="en">Everything else a launcher should do</span><span lang="zh-CN">启动器该做的，也都做好了</span></h2>
+        <p class="lede" lang="en">Most modules open with a prefix and a space, like <kbd>f</kbd> for files or <kbd>dev</kbd> for developer tools. Every one can get your own aliases in Settings › Extensions.</p>
+        <p class="lede" lang="zh-CN">大多数模块输入「前缀 + 空格」就能进入，比如 <kbd>f</kbd> 搜文件、<kbd>dev</kbd> 开发工具。每个扩展都能在「设置 › 扩展」里加自己的别名。</p>
 
-      <div class="grid">
-        <article class="card card-wide">
-          <div class="card-icon icon-indigo">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 10 3 2-3 2"/><path d="M13 15h4"/></svg>
-          </div>
-          <h3><span lang="en">See which agent is waiting for you</span><span lang="zh-CN">一眼看到哪个 agent 在等你</span></h3>
-          <p lang="en">Claude Code and Codex sessions, from the terminal and the desktop apps, grouped into waiting, running and recently finished. Press Return to land in the exact iTerm2 or Terminal tab, or open the session in the desktop app. Helmp only reads <code>~/.claude</code> and <code>~/.codex</code>; it never writes there and installs no hooks.</p>
-          <p lang="zh-CN">命令行和桌面 App 里的 Claude Code、Codex 会话，按「等你处理」「进行中」「最近完成」分组。回车直接落到 iTerm2 或终端里对应的标签页，或者在桌面 App 里打开。Helmp 对 <code>~/.claude</code>、<code>~/.codex</code> 只读，不写入，也不装 hooks。</p>
-        </article>
+        <div class="groups">
+          <section class="group" aria-labelledby="g-search">
+            <h3 id="g-search"><span lang="en">Search</span><span lang="zh-CN">搜索</span></h3>
+            <dl class="items">
+              <div><dt><span lang="en">Apps, by pinyin too</span><span lang="zh-CN">应用，支持拼音</span></dt>
+                <dd><span lang="en"><kbd>wx</kbd>, <kbd>weixin</kbd> and <kbd>微信</kbd> all find WeChat. Every reading of a polyphonic character counts.</span><span lang="zh-CN"><kbd>wx</kbd>、<kbd>weixin</kbd>、<kbd>微信</kbd> 都能找到微信，多音字的每个读音都算数。</span></dd></div>
+              <div><dt><span lang="en">Files and recent files</span><span lang="zh-CN">文件与最近文件</span></dt>
+                <dd><span lang="en"><kbd>f</kbd> searches with Spotlight; with no query it lists files from the last 30 days, searchable by pinyin initials.</span><span lang="zh-CN"><kbd>f</kbd> 用 Spotlight 搜文件名；不输入时列出最近 30 天用过的文件，能用拼音首字母搜。</span></dd></div>
+              <div><dt><span lang="en">Browser bookmarks</span><span lang="zh-CN">浏览器书签</span></dt>
+                <dd><span lang="en"><kbd>bm</kbd> reads Chrome, Edge, Brave, Arc and Safari, and opens each bookmark in the browser it came from.</span><span lang="zh-CN"><kbd>bm</kbd> 读取 Chrome、Edge、Brave、Arc 和 Safari 的书签，用书签所在的浏览器打开。</span></dd></div>
+              <div><dt><span lang="en">System Settings panes</span><span lang="zh-CN">系统设置面板</span></dt>
+                <dd><span lang="en">Type <kbd>bluetooth</kbd> or <kbd>蓝牙</kbd> to open that page, including each Privacy &amp; Security subpage.</span><span lang="zh-CN">输入 <kbd>蓝牙</kbd> 或 <kbd>ly</kbd> 直接打开那一页，「隐私与安全性」的子页也能直达。</span></dd></div>
+              <div><dt><span lang="en">Dictionary</span><span lang="zh-CN">词典</span></dt>
+                <dd><span lang="en"><kbd>define</kbd> or <kbd>查</kbd> looks words up offline in the macOS dictionaries.</span><span lang="zh-CN"><kbd>查</kbd> 或 <kbd>define</kbd> 用 macOS 自带词典离线查词。</span></dd></div>
+              <div><dt><span lang="en">Web search fallback</span><span lang="zh-CN">网页搜索兜底</span></dt>
+                <dd><span lang="en">Google, Baidu and GitHub at the end of every result list. Add your own URL templates.</span><span lang="zh-CN">结果末尾总有 Google、百度、GitHub 搜索，也能添加自己的网址模板。</span></dd></div>
+            </dl>
+          </section>
 
-        <article class="card">
-          <div class="card-icon icon-blue">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
-          </div>
-          <h3><span lang="en">App search that speaks pinyin</span><span lang="zh-CN">会拼音的应用搜索</span></h3>
-          <p lang="en"><code>wx</code>, <code>weixin</code> and <code>微信</code> all find WeChat. Initials, full pinyin, polyphonic characters and localized names all count, and the index updates when you install apps.</p>
-          <p lang="zh-CN"><code>wx</code>、<code>weixin</code>、<code>微信</code> 都能找到微信。首字母、全拼、多音字、中文本地化名都算数，装卸应用后索引自动更新。</p>
-        </article>
+          <section class="group" aria-labelledby="g-work">
+            <h3 id="g-work"><span lang="en">Everyday</span><span lang="zh-CN">效率</span></h3>
+            <dl class="items">
+              <div><dt><span lang="en">Clipboard history</span><span lang="zh-CN">剪贴板历史</span></dt>
+                <dd><span lang="en"><kbd>⇧⌘V</kbd>. Unlimited, local, skips items password managers mark as concealed. Paste as plain text, pin, or merge several.</span><span lang="zh-CN"><kbd>⇧⌘V</kbd>。不限条数、只在本机，密码管理器标记为隐藏的内容不记录。可粘贴为纯文本、置顶、合并粘贴。</span></dd></div>
+              <div><dt><span lang="en">Snippets</span><span lang="zh-CN">文本片段</span></dt>
+                <dd><span lang="en"><kbd>sn</kbd>. Placeholders for date, clipboard, cursor and form fields. Imports from Raycast and Alfred.</span><span lang="zh-CN"><kbd>sn</kbd>。支持日期、剪贴板、光标位置和表单等占位符，能导入 Raycast 和 Alfred 的片段。</span></dd></div>
+              <div><dt><span lang="en">Screenshot OCR</span><span lang="zh-CN">截图识别文字</span></dt>
+                <dd><span lang="en"><kbd>⇧⌘2</kbd>. Text and QR codes via Apple Vision, in up to 11 languages. Copy as one line, or send it to Translate.</span><span lang="zh-CN"><kbd>⇧⌘2</kbd>。用 Apple Vision 识别文字和二维码，最多 11 种语言。可复制为单行，或直接带进翻译。</span></dd></div>
+              <div><dt><span lang="en">Translate with your model</span><span lang="zh-CN">用你的模型翻译</span></dt>
+                <dd><span lang="en"><kbd>⌥⇧T</kbd>. Picks up the selected text, translates as you pause, replaces the selection with <kbd>⌘↵</kbd>.</span><span lang="zh-CN"><kbd>⌥⇧T</kbd>。自动带上选中的文字，停顿片刻就翻译，<kbd>⌘↵</kbd> 用译文替换原文。</span></dd></div>
+              <div><dt><span lang="en">Calculator, units, currency</span><span lang="zh-CN">计算、单位与汇率</span></dt>
+                <dd><span lang="en"><kbd>10 km to mi</kbd>, <kbd>3斤</kbd>, <kbd>100 usd to cny</kbd>. ECB reference rates, cached for offline use.</span><span lang="zh-CN"><kbd>10 km to mi</kbd>、<kbd>3斤</kbd>、<kbd>100 usd to cny</kbd>。汇率来自欧洲央行，缓存在本机，离线也能换算。</span></dd></div>
+              <div><dt><span lang="en">Time zones and timestamps</span><span lang="zh-CN">时间、时区与时间戳</span></dt>
+                <dd><span lang="en"><kbd>time tokyo</kbd>, <kbd>3pm 北京 in 纽约</kbd>, Unix timestamps, <kbd>next friday</kbd>. All offline.</span><span lang="zh-CN"><kbd>东京时间</kbd>、<kbd>3pm 北京 in 纽约</kbd>、Unix 时间戳、<kbd>3天后</kbd>，全程离线。</span></dd></div>
+              <div><dt><span lang="en">Emoji and symbols</span><span lang="zh-CN">Emoji 与符号</span></dt>
+                <dd><span lang="en">Search by English or Chinese name, or by pinyin: <kbd>:xiao</kbd>.</span><span lang="zh-CN">按中英文名称搜，中文名也能用拼音：<kbd>:xiao</kbd>。</span></dd></div>
+            </dl>
+          </section>
 
-        <article class="card">
-          <div class="card-icon icon-teal">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1"/><path d="M9 10h6M9 14h6M9 18h3"/></svg>
-          </div>
-          <h3><span lang="en">Clipboard history, no limits</span><span lang="zh-CN">不限条数的剪贴板历史</span></h3>
-          <p lang="en">Text, images and files, kept locally in SQLite. Password-manager content is skipped, and you can exclude apps. Return pastes into the app you came from. Pin what you reuse, or paste several items in the order you copied them.</p>
-          <p lang="zh-CN">文本、图片、文件都存在本机的 SQLite 里。密码管理器的内容自动跳过，还能排除指定 App。回车直接粘贴回你刚才的 App。常用的可以置顶，也能把几条按复制顺序合并粘贴。</p>
-        </article>
+          <section class="group" aria-labelledby="g-dev">
+            <h3 id="g-dev"><span lang="en">Developers</span><span lang="zh-CN">开发者</span></h3>
+            <dl class="items">
+              <div><dt><span lang="en">Developer tools</span><span lang="zh-CN">开发工具</span></dt>
+                <dd><span lang="en"><kbd>dev</kbd>. UUID, passwords, hashes, Base64, URL encoding, JSON, case conversion, JWT decoding. Paste a JWT or JSON and the answer is already there.</span><span lang="zh-CN"><kbd>dev</kbd>。UUID、密码、哈希、Base64、URL 编解码、JSON 格式化、命名风格转换、JWT 解码。直接粘贴 JWT 或 JSON 也会出结果。</span></dd></div>
+              <div><dt><span lang="en">Processes and ports</span><span lang="zh-CN">进程与端口</span></dt>
+                <dd><span lang="en"><kbd>kill</kbd> lists processes by CPU. <kbd>:3000</kbd> puts whatever holds port 3000 first.</span><span lang="zh-CN"><kbd>kill</kbd> 按 CPU 列出进程，<kbd>:3000</kbd> 把占用这个端口的进程排第一。</span></dd></div>
+              <div><dt><span lang="en">Color picker</span><span lang="zh-CN">取色与颜色转换</span></dt>
+                <dd><span lang="en">Pick from the screen or type <kbd>#ff8800</kbd>: HEX, RGB, HSL, OKLCH, SwiftUI and NSColor.</span><span lang="zh-CN">从屏幕取色，或输入 <kbd>#ff8800</kbd>：HEX、RGB、HSL、OKLCH、SwiftUI、NSColor 各种写法。</span></dd></div>
+            </dl>
+          </section>
 
-        <article class="card">
-          <div class="card-icon icon-green">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 11h14M5 16h8"/><path d="m16 15 2 2 3-4"/></svg>
-          </div>
-          <h3><span lang="en">Snippets</span><span lang="zh-CN">文本片段</span></h3>
-          <p lang="en">Type <code>sn</code> and a few letters to paste text you use often. Placeholders fill in the date, the clipboard or a value you're asked for. Import from Raycast and Alfred.</p>
-          <p lang="zh-CN">输入 <code>sn</code> 加几个字母，粘贴常用的文字。占位符可以填上日期、剪贴板内容，或者粘贴前问你要的值。能从 Raycast 和 Alfred 导入。</p>
-        </article>
+          <section class="group" aria-labelledby="g-system">
+            <h3 id="g-system"><span lang="en">System</span><span lang="zh-CN">系统</span></h3>
+            <dl class="items">
+              <div><dt><span lang="en">Window management</span><span lang="zh-CN">窗口管理</span></dt>
+                <dd><span lang="en">18 commands: halves, quarters, thirds, center, next display. <kbd>zbp</kbd> is 左半屏.</span><span lang="zh-CN">18 条命令：半屏、四角、三分之一、居中、移到下一个显示器。<kbd>zbp</kbd> 就是左半屏。</span></dd></div>
+              <div><dt><span lang="en">System commands and toggles</span><span lang="zh-CN">系统命令与开关</span></dt>
+                <dd><span lang="en">Lock, sleep, dark mode, empty Trash, Keep Awake for <kbd>2h</kbd>, volume, hidden files. Anything you can't undo asks first.</span><span lang="zh-CN">锁屏、睡眠、深色模式、清空废纸篓、<kbd>防休眠 2h</kbd>、音量、隐藏文件。无法撤销的先确认。</span></dd></div>
+              <div><dt><span lang="en">Shortcuts that check for clashes</span><span lang="zh-CN">录快捷键时就查冲突</span></dt>
+                <dd><span lang="en">Every module can have its own hotkey. While you record one, Helmp tells you what it collides with.</span><span lang="zh-CN">每个模块都能有自己的快捷键。录制时 Helmp 当场告诉你和谁撞了。</span></dd></div>
+              <div><dt><span lang="en">English and Chinese</span><span lang="zh-CN">中英双语</span></dt>
+                <dd><span lang="en">Follows your system language and switches without a restart. Pinyin search works in both.</span><span lang="zh-CN">默认跟随系统语言，切换不用重启。两种语言下都能用拼音搜。</span></dd></div>
+            </dl>
+          </section>
 
-        <article class="card">
-          <div class="card-icon icon-orange">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M8 10h8M8 14h5"/></svg>
-          </div>
-          <h3><span lang="en">Screenshot to text</span><span lang="zh-CN">截图识字</span></h3>
-          <p lang="en">Select a region and get its text with Apple Vision on your Mac, line breaks and paragraphs intact. QR codes are read too. Chinese and English by default, nine more languages in Settings. <kbd>⌘T</kbd> sends the text to Translate.</p>
-          <p lang="zh-CN">框选一块区域，用本机的 Apple Vision 识别文字，保留换行和分段，图里的二维码也能读出来。默认识别中英文，设置里还能再加九种语言。<kbd>⌘T</kbd> 把结果带进翻译。</p>
-        </article>
+          <section class="group" aria-labelledby="g-int">
+            <h3 id="g-int"><span lang="en">Integrations</span><span lang="zh-CN">集成</span></h3>
+            <dl class="items">
+              <div><dt><span lang="en">Declarative plugins</span><span lang="zh-CN">声明式插件</span></dt>
+                <dd><span lang="en">Open links, send HTTP requests, run scripts, show forms and lists. Secrets go to the Keychain.</span><span lang="zh-CN">打开链接、发 HTTP 请求、运行脚本、表单和列表，密钥只进钥匙串。</span></dd></div>
+              <div><dt><span lang="en">Raycast Script Commands</span><span lang="zh-CN">Raycast 脚本命令</span></dt>
+                <dd><span lang="en">Drop scripts with <code>@raycast.*</code> headers into the scripts folder and they become commands.</span><span lang="zh-CN">带 <code>@raycast.*</code> 头注释的脚本放进脚本目录，就变成一条命令。</span></dd></div>
+              <div><dt><span lang="en">MCP servers</span><span lang="zh-CN">MCP 服务器</span></dt>
+                <dd><span lang="en">Their tools become commands with generated forms. Servers start on first use and stop when idle.</span><span lang="zh-CN">工具变成命令，自动生成表单。第一次用到才启动，空闲后停止。</span></dd></div>
+              <div><dt><span lang="en"><code>helmp://</code> links and a CLI</span><span lang="zh-CN"><code>helmp://</code> 深链与命令行</span></dt>
+                <dd><span lang="en">Open Helmp with a query from scripts or Shortcuts; <code>helmp query wx</code> works headless.</span><span lang="zh-CN">从脚本或快捷指令里带着查询唤起 Helmp；<code>helmp query wx</code> 无界面也能跑。</span></dd></div>
+            </dl>
+          </section>
+        </div>
 
-        <article class="card">
-          <div class="card-icon icon-purple">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9M8.5 4v2M6 6c.6 3 2.6 5.4 5 6.5M11 6c-.7 3.2-3 5.8-6 7"/><path d="m12 20 4-9 4 9M13.4 17h5.2"/></svg>
-          </div>
-          <h3><span lang="en">Translate with your own model</span><span lang="zh-CN">用你自己的模型翻译</span></h3>
-          <p lang="en">Anthropic, any OpenAI-compatible endpoint, or Ollama on your Mac. Keys stay in the Keychain. It translates as you type, picks up the selected text, and <kbd>⌘↵</kbd> puts the translation back in its place. <kbd>⌘R</kbd> reads it aloud.</p>
-          <p lang="zh-CN">支持 Anthropic、任意 OpenAI 兼容接口和本机 Ollama，Key 存在钥匙串里。边输入边翻译，自动带上选中的文字，<kbd>⌘↵</kbd> 把译文替换回原处，<kbd>⌘R</kbd> 朗读译文。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-orange">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7h7"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01M8.5 15h.01M12 15h.01M15.5 15h.01M8.5 18h.01M12 18h.01M15.5 18h.01"/></svg>
-          </div>
-          <h3><span lang="en">Math, units and currency</span><span lang="zh-CN">算数、单位与汇率</span></h3>
-          <p lang="en">Type <code>(12+8)*1.5</code>, <code>10 km to mi</code>, <code>3斤</code> or <code>100 usd to cny</code> and the answer is the first result. Exchange rates come from the ECB and are cached, so conversion works offline.</p>
-          <p lang="zh-CN">输入 <code>(12+8)*1.5</code>、<code>10 km to mi</code>、<code>3斤</code> 或 <code>100 usd to cny</code>，答案直接排在第一条。汇率来自欧洲央行（ECB）并缓存在本机，离线也能换算。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-blue">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
-          </div>
-          <h3><span lang="en">Time zones and timestamps</span><span lang="zh-CN">时区与时间戳</span></h3>
-          <p lang="en"><code>time tokyo</code>, <code>3pm 北京 in 纽约</code>, <code>1731234567</code>, <code>in 3 days</code>: every format on its own row, ready to copy. Time zone rules are built in.</p>
-          <p lang="zh-CN"><code>东京时间</code>、<code>3pm 北京 in 纽约</code>、<code>1731234567</code>、<code>3天后</code>：每种写法单独一行，回车复制。时区规则内置，不用联网。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-teal">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><circle cx="11.5" cy="14" r="2.5"/><path d="m13.5 16 2 2"/></svg>
-          </div>
-          <h3><span lang="en">Files, bookmarks and settings</span><span lang="zh-CN">文件、书签与设置</span></h3>
-          <p lang="en"><code>f</code> searches files with Spotlight and lists the ones you used recently, by pinyin too. <code>bm</code> searches Chrome, Edge, Brave, Arc and Safari bookmarks. Type <code>bluetooth</code> to open that page of System Settings.</p>
-          <p lang="zh-CN"><code>f</code> 用 Spotlight 搜文件，还列出最近用过的文件，拼音也能搜。<code>bm</code> 搜 Chrome、Edge、Brave、Arc 和 Safari 的书签。输入 <code>蓝牙</code> 直接打开系统设置的那一页。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-indigo">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/></svg>
-          </div>
-          <h3><span lang="en">Dictionary and web search</span><span lang="zh-CN">词典与网页搜索</span></h3>
-          <p lang="en"><code>define</code> or <code>查</code> looks a word up in the macOS dictionaries, offline. Anything else can go to Google, Baidu or GitHub; reorder the engines or add your own URL template.</p>
-          <p lang="zh-CN"><code>查</code> 或 <code>define</code> 用 macOS 自带词典离线查词。其他输入都能一键交给 Google、百度或 GitHub；引擎可以排序，也能添加自己的网址模板。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-purple">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 14.5c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>
-          </div>
-          <h3><span lang="en">Emoji and symbols</span><span lang="zh-CN">Emoji 与符号</span></h3>
-          <p lang="en">Search emoji and symbols such as arrows, math and <kbd>⌘</kbd><kbd>⌥</kbd><kbd>⇧</kbd> in English or Chinese, pinyin included. <code>:xiao</code> works in the main search. Return pastes it.</p>
-          <p lang="zh-CN">用中英文、拼音搜 emoji 和箭头、数学符号、<kbd>⌘</kbd><kbd>⌥</kbd><kbd>⇧</kbd> 这类符号，全局搜索里输入 <code>:xiao</code> 也行。回车直接粘贴。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-graphite">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 8-4 4 4 4M16 8l4 4-4 4"/><path d="m13.5 5-3 14"/></svg>
-          </div>
-          <h3><span lang="en">Developer tools</span><span lang="zh-CN">开发工具</span></h3>
-          <p lang="en"><code>dev</code>: UUIDs, passwords, hashes, Base64, URL encoding, JSON formatting, naming styles, number bases, JWT decoding, placeholder text and your IP. Paste a JWT or <code>0xff</code> and it just works.</p>
-          <p lang="zh-CN"><code>dev</code>：UUID、密码、哈希、Base64、URL 编解码、JSON 格式化、命名风格、进制转换、JWT 解码、假文和本机 IP。直接粘贴 JWT 或 <code>0xff</code> 也能认出来。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-red">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg>
-          </div>
-          <h3><span lang="en">Processes and ports</span><span lang="zh-CN">进程与端口</span></h3>
-          <p lang="en"><code>kill</code> lists processes by CPU; Return quits, <kbd>⌘↵</kbd> force quits after asking. <code>port 3000</code> shows what is listening on a port.</p>
-          <p lang="zh-CN"><code>kill</code> 按 CPU 列出进程，回车退出，<kbd>⌘↵</kbd> 确认后强制退出。<code>port 3000</code> 看看是谁占着这个端口。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-orange">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6.5 3 3"/><path d="M16 5a2.1 2.1 0 0 1 3 3l-9.5 9.5-4 1 1-4z"/></svg>
-          </div>
-          <h3><span lang="en">Color picker</span><span lang="zh-CN">取色器</span></h3>
-          <p lang="en">Pick any color on screen, or type <code>#ff8800</code> or <code>rgb(…)</code>, and get HEX, RGB, HSL, OKLCH, SwiftUI and NSColor, each one ready to copy.</p>
-          <p lang="zh-CN">从屏幕上取任意颜色，或者输入 <code>#ff8800</code>、<code>rgb(…)</code>，得到 HEX、RGB、HSL、OKLCH、SwiftUI、NSColor 各种写法，逐个复制。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-blue">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M12 4v16M12 12h9"/></svg>
-          </div>
-          <h3><span lang="en">Window management</span><span lang="zh-CN">窗口管理</span></h3>
-          <p lang="en">Halves, quarters, thirds, maximize, center, restore and move to the next display, 18 layouts for the window you were using. <code>zbp</code> is Left Half.</p>
-          <p lang="zh-CN">半屏、四角、三分之一、最大化、居中、恢复、移到下一个显示器，18 种布局，作用于你刚才在用的窗口。<code>zbp</code> 就是左半屏。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-red">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></svg>
-          </div>
-          <h3><span lang="en">System commands and toggles</span><span lang="zh-CN">系统命令与开关</span></h3>
-          <p lang="en">Lock, sleep, dark mode, empty the Trash, restart, keep awake for <code>2h</code>, set the volume, mute, show hidden files, eject disks. Anything you can't undo asks first.</p>
-          <p lang="zh-CN">锁屏、睡眠、深色模式、清空废纸篓、重启，防休眠 <code>2h</code>、调音量、静音、显示隐藏文件、弹出磁盘。无法撤销的操作都会先让你确认。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-graphite">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="m9.5 13-2 2 2 2M14.5 13l2 2-2 2"/></svg>
-          </div>
-          <h3><span lang="en">Your Raycast scripts just work</span><span lang="zh-CN">Raycast 脚本直接能用</span></h3>
-          <p lang="en">Drop a script with <code>@raycast.*</code> headers into the scripts folder. Any language, arguments become a form, risky scripts ask first, and every run is capped at 30 seconds.</p>
-          <p lang="zh-CN">带 <code>@raycast.*</code> 头注释的脚本放进脚本目录就能用。语言不限，参数自动变成表单，危险脚本运行前先确认，每次运行最多 30 秒。</p>
-        </article>
-
-        <article class="card">
-          <div class="card-icon icon-green">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9h18"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/></svg>
-          </div>
-          <h3><span lang="en">Menu bar and <code>helmp://</code> links</span><span lang="zh-CN">菜单栏与 <code>helmp://</code> 链接</span></h3>
-          <p lang="en">No Dock icon. An orange dot appears on the menu bar icon when a session needs you. Scripts and Shortcuts can open Helmp, or run a plugin command, with <code>helmp://</code> links.</p>
-          <p lang="zh-CN">没有 Dock 图标。有会话在等你时，菜单栏图标会亮起一个橙点。脚本和快捷指令可以用 <code>helmp://</code> 链接调出 Helmp，或者运行插件命令。</p>
-        </article>
-
-        <article class="card card-wide">
-          <div class="card-icon icon-red">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
-          </div>
-          <h3><span lang="en">Keyboard first</span><span lang="zh-CN">键盘优先</span></h3>
-          <p lang="en">Global hotkeys for every module, all configurable, and Helmp tells you right away if a new one clashes with something. Type a prefix and a space to jump straight into a module: <code>f</code>, <code>bm</code>, <code>sn</code>, <code>dev</code>, <code>kill</code>, <code>cb</code>, <code>tr</code>…</p>
-          <p lang="zh-CN">每个模块都有全局快捷键，都能改；新设的快捷键和别的冲突时当场告诉你。输入前缀加空格直接进入某个模块：<code>f</code>、<code>bm</code>、<code>sn</code>、<code>dev</code>、<code>kill</code>、<code>cb</code>、<code>tr</code>……</p>
-        </article>
+        <div class="keys glass" aria-labelledby="keys-title">
+          <h3 id="keys-title"><span lang="en">Default shortcuts</span><span lang="zh-CN">默认快捷键</span></h3>
+          <dl>
+            <div><dt><kbd>⌥</kbd><kbd>Space</kbd></dt><dd><span lang="en">Show or hide Helmp</span><span lang="zh-CN">唤起 / 收起面板</span></dd></div>
+            <div><dt><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></dt><dd><span lang="en">Clipboard history</span><span lang="zh-CN">剪贴板历史</span></dd></div>
+            <div><dt><kbd>⇧</kbd><kbd>⌘</kbd><kbd>2</kbd></dt><dd><span lang="en">Capture and read text</span><span lang="zh-CN">截图识别文字</span></dd></div>
+            <div><dt><kbd>⌥</kbd><kbd>⇧</kbd><kbd>T</kbd></dt><dd><span lang="en">Translate the selection</span><span lang="zh-CN">翻译选中的文字</span></dd></div>
+            <div><dt><kbd>⌃</kbd><kbd>⌥</kbd><kbd>A</kbd></dt><dd><span lang="en">Agent sessions</span><span lang="zh-CN">Agent 会话</span></dd></div>
+            <div><dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd><span lang="en">More actions for the selected item</span><span lang="zh-CN">当前项的更多操作</span></dd></div>
+          </dl>
+        </div>
       </div>
     </section>
 
     <!-- ============ Plugins ============ -->
-    <section id="plugins" class="section">
-      <h2><span lang="en">Plugins without code</span><span lang="zh-CN">不写代码的插件</span></h2>
-      <p class="section-lede">
-        <span lang="en">A plugin is a folder with a <code>plugin.json</code>. Describe a form, a request or a link, and Helmp does the rest.</span>
-        <span lang="zh-CN">插件就是一个带 <code>plugin.json</code> 的文件夹。描述好表单、请求或链接，剩下的交给 Helmp。</span>
-      </p>
-      <div class="plugins">
-        <div class="glass plugins-copy">
-          <ul class="plugin-points">
-            <li>
-              <span lang="en"><strong>Bundled:</strong> flomo, Obsidian quick capture, and Quick Search for <code>gh</code>, <code>npm</code>, <code>crates</code>, <code>mdn</code>, Google Translate, Zhihu, Bilibili and Xiaohongshu.</span>
-              <span lang="zh-CN"><strong>自带：</strong>flomo、Obsidian 快速记录，以及「快捷搜索」：<code>gh</code>、<code>npm</code>、<code>crates</code>、<code>mdn</code>、谷歌翻译、知乎、B 站、小红书。</span>
-            </li>
-            <li>
-              <span lang="en"><strong>What a command can do:</strong> open a URL or URL scheme, send an HTTP request, run a script, copy or paste. Add forms, preferences, and lists filled by a script that prints Alfred-style JSON.</span>
-              <span lang="zh-CN"><strong>命令能做什么：</strong>打开网址或 URL scheme、发 HTTP 请求、运行脚本、复制或粘贴；还能加表单、偏好设置，以及由脚本输出 Alfred 格式 JSON 的列表。</span>
-            </li>
-            <li>
-              <span lang="en"><strong>You stay in control:</strong> secrets go to the Keychain, and before you turn on a plugin Helmp shows which hosts it can reach and whether it runs scripts. Manage everything in Settings › Plugins.</span>
-              <span lang="zh-CN"><strong>由你把关：</strong>密钥只存在钥匙串里；启用插件前，Helmp 会列出它能访问哪些主机、会不会运行脚本。在「设置 › 插件」里统一管理。</span>
-            </li>
-            <li>
-              <span lang="en"><strong>Write your own:</strong> <code>helmp plugins validate</code> checks your manifest. Start with the <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/plugins.md">plugin guide</a>.</span>
-              <span lang="zh-CN"><strong>自己写一个：</strong><code>helmp plugins validate</code> 帮你检查清单。从<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/plugins.zh-CN.md">插件开发文档</a>开始。</span>
-            </li>
-          </ul>
-        </div>
-        <figure class="code plugins-code">
-<pre><code>{
-  "schemaVersion": 1,
-  "id": "dev.helmp.flomo",
-  "name": "flomo",
-  "version": "1.0.0",
-  "author": "Helmp",
-  "preferences": [{
-    "id": "webhook", "type": "secret", "required": true,
-    "title": { "en": "Webhook URL", "zh-Hans": "记录 API 地址" },
-    "allowedHosts": ["flomoapp.com"]
-  }],
-  "commands": [{
-    "id": "memo",
-    "title": { "en": "Save to flomo", "zh-Hans": "记到 flomo" },
-    "keywords": ["flomo", "memo", "记一笔"],
-    "form": [{
-      "id": "content", "type": "textarea", "required": true,
-      "label": { "en": "Memo", "zh-Hans": "内容" },
-      "default": "{{query}}"
-    }],
-    "action": {
-      "type": "http", "method": "POST",
-      "url": "{{pref.webhook}}",
-      "json": { "content": "{{form.content}}" }
-    }
-  }]
-}</code></pre>
-          <figcaption>
-            <span lang="en">The bundled flomo plugin, trimmed. Full source: <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/resources/plugins/dev.helmp.flomo/plugin.json">plugin.json</a></span>
-            <span lang="zh-CN">自带的 flomo 插件（节选）。完整源码：<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/resources/plugins/dev.helmp.flomo/plugin.json">plugin.json</a></span>
-          </figcaption>
-        </figure>
-      </div>
-      <!-- 下面两个标记之间由 script/build-plugin-center.py 生成，不要手改。 -->
-      <!-- plugin-center:start -->
-      <div class="pc-preview">
-        <h3 class="pc-preview-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h3>
-        <p class="pc-preview-lede">
-          <span lang="en">Reviewed plugins you can install from Helmp in one click.</span>
-          <span lang="zh-CN">经过人工审核、在 Helmp 里一键安装的插件。</span>
-        </p>
-        <div class="pc-mini-grid">
-          <a class="glass pc-mini" href="plugins/#plugin-dev.helmp.flomo">
-            <img class="pc-mini-icon" src="plugins/icons/dev.helmp.flomo.png" width="40" height="40" alt="" loading="lazy">
-            <span class="pc-mini-text">
-              <span class="pc-mini-name">flomo</span>
-              <span class="pc-mini-desc"><span lang="en">Save a memo to flomo through your personal webhook (a flomo PRO feature).</span><span lang="zh-CN">用你的记录 API（flomo 会员功能）把一段文字记到 flomo，正文里的 #标签 就是 flomo 标签。</span></span>
-            </span>
-          </a>
-          <a class="glass pc-mini" href="plugins/#plugin-dev.helmp.obsidian">
-            <img class="pc-mini-icon" src="plugins/icons/dev.helmp.obsidian.png" width="40" height="40" alt="" loading="lazy">
-            <span class="pc-mini-text">
-              <span class="pc-mini-name">Obsidian</span>
-              <span class="pc-mini-desc"><span lang="en">Capture a new note into an Obsidian vault with the obsidian://new URL scheme.</span><span lang="zh-CN">用 obsidian://new 链接在 Obsidian 仓库里新建一条笔记，内容不经过网络。</span></span>
-            </span>
-          </a>
-          <a class="glass pc-mini" href="plugins/#plugin-dev.helmp.quicklinks">
-            <img class="pc-mini-icon" src="plugins/icons/dev.helmp.quicklinks.png" width="40" height="40" alt="" loading="lazy">
-            <span class="pc-mini-text">
-              <span class="pc-mini-name"><span lang="en">Quick Search</span><span lang="zh-CN">快捷搜索</span></span>
-              <span class="pc-mini-desc"><span lang="en">Type a keyword, a space, then what to search: gh, npm, crates, mdn, gt, zhihu, bili, xhs.</span><span lang="zh-CN">输入关键词加空格，再输入要搜的内容：gh、npm、crates、mdn、gt、zhihu、bili、xhs。</span></span>
-            </span>
-          </a>
-        </div>
-        <div class="cta">
-          <a class="btn btn-glass" href="plugins/"><span lang="en">Browse the Plugin Center</span><span lang="zh-CN">浏览插件中心</span></a>
+    <section id="plugins" class="section" aria-labelledby="plugins-title">
+      <div class="wrap">
+        <h2 id="plugins-title"><span lang="en">Plugins, written by you or your agent</span><span lang="zh-CN">插件：你写，或者让 agent 写</span></h2>
+        <p class="lede" lang="en">A plugin is a folder with a declarative <code>plugin.json</code>: no code to compile, no runtime to install. Before you turn one on, Helmp shows which hosts it can reach and whether it runs scripts.</p>
+        <p class="lede" lang="zh-CN">插件就是一个带声明式 <code>plugin.json</code> 的文件夹：不用编译，不用装运行时。启用之前，Helmp 会列出它能访问哪些主机、会不会运行脚本。</p>
+
+        <div class="plugins-split">
+          <div class="plugins-center">
+            <!-- 下面两个标记之间由 script/build-plugin-center.py 生成，不要手改。 -->
+            <!-- plugin-center:start -->
+            <div class="pc-preview">
+              <h3 class="pc-preview-title"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></h3>
+              <p class="pc-preview-lede">
+                <span lang="en">Reviewed plugins you can install from Helmp in one click.</span>
+                <span lang="zh-CN">经过人工审核、在 Helmp 里一键安装的插件。</span>
+              </p>
+              <ul class="pc-list glass">
+                <li>
+                  <a class="pc-row" href="plugins/#plugin-dev.helmp.flomo">
+                    <img class="pc-row-icon" src="plugins/icons/dev.helmp.flomo.png" width="44" height="44" alt="" loading="lazy">
+                    <span class="pc-row-text">
+                      <span class="pc-row-name">flomo</span>
+                      <span class="pc-row-desc"><span lang="en">Save a memo to flomo through your personal webhook (a flomo PRO feature).</span><span lang="zh-CN">用你的记录 API（flomo 会员功能）把一段文字记到 flomo，正文里的 #标签 就是 flomo 标签。</span></span>
+                    </span>
+                  </a>
+                </li>
+                <li>
+                  <a class="pc-row" href="plugins/#plugin-dev.helmp.obsidian">
+                    <img class="pc-row-icon" src="plugins/icons/dev.helmp.obsidian.png" width="44" height="44" alt="" loading="lazy">
+                    <span class="pc-row-text">
+                      <span class="pc-row-name">Obsidian</span>
+                      <span class="pc-row-desc"><span lang="en">Capture a new note into an Obsidian vault with the obsidian://new URL scheme.</span><span lang="zh-CN">用 obsidian://new 链接在 Obsidian 仓库里新建一条笔记，内容不经过网络。</span></span>
+                    </span>
+                  </a>
+                </li>
+                <li>
+                  <a class="pc-row" href="plugins/#plugin-dev.helmp.quicklinks">
+                    <img class="pc-row-icon" src="plugins/icons/dev.helmp.quicklinks.png" width="44" height="44" alt="" loading="lazy">
+                    <span class="pc-row-text">
+                      <span class="pc-row-name"><span lang="en">Quick Search</span><span lang="zh-CN">快捷搜索</span></span>
+                      <span class="pc-row-desc"><span lang="en">Type a keyword, a space, then what to search: gh, npm, crates, mdn, gt, zhihu, bili, xhs.</span><span lang="zh-CN">输入关键词加空格，再输入要搜的内容：gh、npm、crates、mdn、gt、zhihu、bili、xhs。</span></span>
+                    </span>
+                  </a>
+                </li>
+              </ul>
+              <a class="btn btn-glass" href="plugins/"><span lang="en">Browse the Plugin Center</span><span lang="zh-CN">浏览插件中心</span></a>
+            </div>
+            <!-- plugin-center:end -->
+          </div>
+
+          <div class="agent-flow glass">
+            <h3><span lang="en">Ask an agent to write one</span><span lang="zh-CN">让 agent 帮你写一个</span></h3>
+            <p class="prompt">
+              <span lang="en">“Make me a plugin that sends the selected text to my Feishu bot.”</span>
+              <span lang="zh-CN">「帮我做一个把选中文字发到飞书机器人的插件。」</span>
+            </p>
+            <ol class="steps">
+              <li><span lang="en">Connect once in Settings › Agents, or run <code>helmp mcp install claude</code> (also <code>codex</code>, <code>cursor</code>).</span><span lang="zh-CN">在「设置 › Agent」里连接一次，或运行 <code>helmp mcp install claude</code>（也支持 <code>codex</code>、<code>cursor</code>）。</span></li>
+              <li><span lang="en">The agent reads the plugin guide, scaffolds the plugin and validates it exactly the way Helmp loads it.</span><span lang="zh-CN">agent 读插件指南、生成模板，并用和 Helmp 加载时完全相同的规则校验。</span></li>
+              <li><span lang="en">It dry-runs the commands in a sandbox, where only requests to a local mock really go out, then installs the plugin switched off.</span><span lang="zh-CN">它在沙箱里演练命令，只有发往本地假服务的请求会真的发出；然后安装插件，保持停用。</span></li>
+              <li><span lang="en">You review the permissions in Settings › Plugins and turn it on.</span><span lang="zh-CN">你在「设置 › 插件」里看过权限后再打开。</span></li>
+              <li><span lang="en">Want to share it? The agent asks before opening a pull request to the Plugin Center.</span><span lang="zh-CN">想分享？agent 先问你，再向插件中心开 PR。</span></li>
+            </ol>
+            <p class="flow-foot"><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/mcp.md" lang="en">How <code>helmp mcp</code> works</a><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/mcp.zh-CN.md" lang="zh-CN"><code>helmp mcp</code> 说明文档</a></p>
+          </div>
         </div>
       </div>
-      <!-- plugin-center:end -->
+    </section>
+
+    <!-- ============ Privacy ============ -->
+    <section id="privacy" class="section" aria-labelledby="privacy-title">
+      <div class="wrap">
+        <h2 id="privacy-title"><span lang="en"><span class="seg">Local first.</span> <span class="seg">No account, no telemetry.</span></span><span lang="zh-CN"><span class="seg">数据留在本机。</span><span class="seg">不用登录，没有遥测。</span></span></h2>
+        <div class="trio">
+          <div>
+            <h3><span lang="en">One folder on your Mac</span><span lang="zh-CN">本机的一个目录</span></h3>
+            <p lang="en">Settings, clipboard history, snippets and caches live in <code>~/Library/Application Support/Helmp/</code>. Delete it and they are gone.</p>
+            <p lang="zh-CN">设置、剪贴板历史、片段和缓存都在 <code>~/Library/Application Support/Helmp/</code>，删掉这个目录就全没了。</p>
+          </div>
+          <div>
+            <h3><span lang="en">Keys in the Keychain</span><span lang="zh-CN">密钥放在钥匙串</span></h3>
+            <p lang="en">Model API keys, plugin secrets and MCP tokens are stored in the macOS Keychain, never in <code>config.json</code>.</p>
+            <p lang="zh-CN">模型 API Key、插件密钥和 MCP 令牌都存在 macOS 钥匙串里，从不写进 <code>config.json</code>。</p>
+          </div>
+          <div>
+            <h3><span lang="en">Nothing phones home</span><span lang="zh-CN">不往外报数据</span></h3>
+            <p lang="en">No analytics, no telemetry, no crash reports, no update checks. Agent session files are only read, never written.</p>
+            <p lang="zh-CN">没有统计、遥测、崩溃上报，也不检查更新。Agent 的会话文件只读不写。</p>
+          </div>
+        </div>
+
+        <div class="ledger glass">
+          <h3><span lang="en">Every network request Helmp makes</span><span lang="zh-CN">Helmp 会发出的全部网络请求</span></h3>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col"><span lang="en">Feature</span><span lang="zh-CN">功能</span></th>
+                <th scope="col"><span lang="en">Goes to</span><span lang="zh-CN">发往</span></th>
+                <th scope="col"><span lang="en">When</span><span lang="zh-CN">什么时候</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"><span lang="en">Translate</span><span lang="zh-CN">翻译</span></th>
+                <td><span lang="en">The model you configured: Anthropic, an OpenAI-compatible URL, or Ollama</span><span lang="zh-CN">你配置的模型接口：Anthropic、OpenAI 兼容地址或 Ollama</span></td>
+                <td><span lang="en">When you pause typing, and when you test the connection</span><span lang="zh-CN">停止输入片刻后，以及点「测试连接」时</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Models settings</span><span lang="zh-CN">模型设置</span></th>
+                <td><span lang="en">Each Ollama endpoint you added (<code>/api/tags</code>)</span><span lang="zh-CN">你添加的每个 Ollama 接口（<code>/api/tags</code>）</span></td>
+                <td><span lang="en">To check whether it is running</span><span lang="zh-CN">检查它是否在运行</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Plugins</span><span lang="zh-CN">插件</span></th>
+                <td><span lang="en">Only the hosts listed in the plugin's permissions</span><span lang="zh-CN">只发往插件权限里列出的主机</span></td>
+                <td><span lang="en">When you run one of its commands</span><span lang="zh-CN">你运行它的命令时</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">MCP servers</span><span lang="zh-CN">MCP 服务器</span></th>
+                <td><span lang="en">The servers you added; what they reach is up to them</span><span lang="zh-CN">你添加的服务器；它们还访问什么由它们决定</span></td>
+                <td><span lang="en">When you run a tool or Helmp lists its tools</span><span lang="zh-CN">你运行工具、或 Helmp 读取工具列表时</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Currency</span><span lang="zh-CN">货币换算</span></th>
+                <td><span lang="en">European Central Bank daily reference rates</span><span lang="zh-CN">欧洲央行每日参考汇率</span></td>
+                <td><span lang="en">When the cached rates are over a day old, at most once a day</span><span lang="zh-CN">本地汇率超过一天时，一天最多一次</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Public IP</span><span lang="zh-CN">公网 IP</span></th>
+                <td><code>api.ipify.org</code></td>
+                <td><span lang="en">Only when you press Return on that row</span><span lang="zh-CN">只在你对那一行按回车时</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></th>
+                <td><code>cdn.jsdelivr.net</code></td>
+                <td><span lang="en">When you browse or install plugins</span><span lang="zh-CN">你浏览或安装插件时</span></td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="ledger-foot">
+            <span lang="en">Web searches and links simply open in your browser. The full list of what Helmp stores and reads is in the <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/privacy.md">privacy notes</a>.</span>
+            <span lang="zh-CN">网页搜索和链接只是交给浏览器打开。Helmp 保存和读取了什么，完整清单见<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/privacy.zh-CN.md">隐私说明</a>。</span>
+          </p>
+        </div>
+      </div>
     </section>
 
     <!-- ============ Install ============ -->
-    <section id="install" class="section">
-      <h2><span lang="en">Get Helmp</span><span lang="zh-CN">获取 Helmp</span></h2>
-      <p class="section-lede">
-        <span lang="en">Download the signed, notarized build from GitHub Releases, or build it from source.</span>
-        <span lang="zh-CN">从 GitHub Releases 下载签名并经过公证的安装包，或者从源码构建。</span>
-      </p>
-      <div class="install glass">
-        <ol class="steps">
-          <li>
-            <span lang="en">Download <code>Helmp-&lt;version&gt;.dmg</code> from the <a href="https://github.com/PeterChen1997/helmp/releases/latest">latest release</a>, open it and drag Helmp into Applications. Then launch it.</span>
-            <span lang="zh-CN">从<a href="https://github.com/PeterChen1997/helmp/releases/latest">最新发布</a>下载 <code>Helmp-&lt;版本&gt;.dmg</code>，打开后把 Helmp 拖进「应用程序」，然后启动它。</span>
-          </li>
-          <li>
-            <span lang="en">Follow the first-run guide: drag the Helmp icon into <em>Accessibility</em> and <em>Screen Recording</em> in System Settings.</span>
-            <span lang="zh-CN">跟着首次启动的引导，把 Helmp 图标拖进系统设置的「辅助功能」和「录屏」列表。</span>
-          </li>
-        </ol>
-      </div>
-      <p class="section-lede">
-        <span lang="en">Prefer to build it yourself?</span>
-        <span lang="zh-CN">想自己构建？</span>
-      </p>
-      <div class="install glass">
-        <ol class="steps">
-          <li>
-            <span lang="en">Install <strong>Xcode</strong> and <a href="https://rustup.rs">rustup</a>. The exact Rust version is pinned in the repository and installed automatically.</span>
-            <span lang="zh-CN">安装 <strong>Xcode</strong> 和 <a href="https://rustup.rs">rustup</a>。Rust 的具体版本锁在仓库里，构建时自动安装。</span>
-          </li>
-          <li>
-            <span lang="en">Clone, build and package:</span>
-            <span lang="zh-CN">克隆、构建并打包：</span>
+    <section id="install" class="section" aria-labelledby="install-title">
+      <div class="wrap">
+        <h2 id="install-title"><span lang="en">Get Helmp</span><span lang="zh-CN">安装 Helmp</span></h2>
+        <p class="lede" lang="en">Helmp needs macOS 15 Sequoia or later. There are no automatic updates yet: to upgrade, download the new release and replace the app.</p>
+        <p class="lede" lang="zh-CN">需要 macOS 15 Sequoia 或更新版本。目前还没有自动更新：升级时下载新版本，替换掉旧的 App 即可。</p>
+        <div class="install">
+          <div class="install-card glass">
+            <h3><span lang="en">Download</span><span lang="zh-CN">下载安装包</span></h3>
+            <ol class="steps">
+              <li><span lang="en">Download <code>Helmp-&lt;version&gt;.dmg</code> from the <a href="https://github.com/PeterChen1997/helmp/releases/latest">latest release</a>. It is signed with a Developer ID and notarized by Apple.</span><span lang="zh-CN">从<a href="https://github.com/PeterChen1997/helmp/releases/latest">最新发布</a>下载 <code>Helmp-&lt;版本&gt;.dmg</code>，它用 Developer ID 签名并经过 Apple 公证。</span></li>
+              <li><span lang="en">Open it and drag Helmp into Applications.</span><span lang="zh-CN">打开 dmg，把 Helmp 拖进「应用程序」。</span></li>
+              <li><span lang="en">Launch Helmp. The first-run guide walks you through Accessibility and Screen Recording.</span><span lang="zh-CN">启动 Helmp，首次启动的引导会带你授权「辅助功能」和「录屏」。</span></li>
+            </ol>
+            <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest"><span lang="en">Download the latest release</span><span lang="zh-CN">下载最新版</span></a>
+          </div>
+          <div class="install-card glass">
+            <h3><span lang="en">Build from source</span><span lang="zh-CN">从源码构建</span></h3>
+            <p><span lang="en">You need <a href="https://rustup.rs">rustup</a> and Xcode. The Rust version is pinned in the repository and installed on the first build.</span><span lang="zh-CN">需要 <a href="https://rustup.rs">rustup</a> 和 Xcode。Rust 版本锁在仓库里，第一次构建时自动安装。</span></p>
             <div class="code">
               <button type="button" class="copy" data-copy-target="build-cmd">
                 <span lang="en">Copy</span><span lang="zh-CN">复制</span>
@@ -486,155 +544,82 @@ cd helmp
 bash script/bundle.sh release
 open target/release/Helmp.app</code></pre>
             </div>
-          </li>
-          <li>
-            <span lang="en">Follow the first-run guide: drag the Helmp icon into <em>Accessibility</em> and <em>Screen Recording</em> in System Settings.</span>
-            <span lang="zh-CN">跟着首次启动的引导，把 Helmp 图标拖进系统设置的「辅助功能」和「录屏」列表。</span>
-          </li>
-        </ol>
-      </div>
-    </section>
-
-    <!-- ============ Shortcuts ============ -->
-    <section id="shortcuts" class="section">
-      <h2><span lang="en">Shortcuts</span><span lang="zh-CN">快捷键速查</span></h2>
-      <p class="section-lede">
-        <span lang="en">Defaults. Change any of them in Settings.</span>
-        <span lang="zh-CN">以下是默认值，都可以在设置里修改。</span>
-      </p>
-      <div class="shortcut-cols">
-        <div class="glass shortcut-card">
-          <h3><span lang="en">Anywhere</span><span lang="zh-CN">全局</span></h3>
-          <dl class="keys">
-            <dt><kbd>⌥</kbd><kbd>Space</kbd></dt><dd><span lang="en">Show / hide Helmp</span><span lang="zh-CN">唤起 / 收起面板</span></dd>
-            <dt><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></dt><dd><span lang="en">Clipboard history</span><span lang="zh-CN">剪贴板历史</span></dd>
-            <dt><kbd>⇧</kbd><kbd>⌘</kbd><kbd>2</kbd></dt><dd><span lang="en">Capture a region and read its text</span><span lang="zh-CN">截图并识别文字</span></dd>
-            <dt><kbd>⌥</kbd><kbd>⇧</kbd><kbd>T</kbd></dt><dd><span lang="en">Translate the selected text</span><span lang="zh-CN">翻译选中的文字</span></dd>
-            <dt><kbd>⌃</kbd><kbd>⌥</kbd><kbd>A</kbd></dt><dd><span lang="en">Agent sessions</span><span lang="zh-CN">Agent 会话</span></dd>
-          </dl>
-        </div>
-        <div class="glass shortcut-card">
-          <h3><span lang="en">In the panel</span><span lang="zh-CN">面板内</span></h3>
-          <dl class="keys">
-            <dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd><span lang="en">Move selection</span><span lang="zh-CN">选择</span></dd>
-            <dt><kbd>↵</kbd></dt><dd><span lang="en">Run</span><span lang="zh-CN">执行</span></dd>
-            <dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd><span lang="en">More actions</span><span lang="zh-CN">更多操作</span></dd>
-            <dt><kbd>⇥</kbd></dt><dd><span lang="en">Enter the extension / next filter</span><span lang="zh-CN">进入扩展 / 切换筛选</span></dd>
-            <dt><kbd>esc</kbd></dt><dd><span lang="en">Back, then hide</span><span lang="zh-CN">逐层返回，最后收起</span></dd>
-            <dt><kbd>⌘</kbd><kbd>,</kbd></dt><dd><span lang="en">Settings</span><span lang="zh-CN">设置</span></dd>
-          </dl>
-        </div>
-        <div class="glass shortcut-card">
-          <h3><span lang="en">Prefixes</span><span lang="zh-CN">前缀</span></h3>
-          <dl class="keys">
-            <dt><code>ag&nbsp;</code></dt><dd><span lang="en">Agent sessions</span><span lang="zh-CN">Agent 会话</span></dd>
-            <dt><code>cb&nbsp;</code></dt><dd><span lang="en">Clipboard</span><span lang="zh-CN">剪贴板</span></dd>
-            <dt><code>fy&nbsp;</code> <code>tr&nbsp;</code></dt><dd><span lang="en">Translate</span><span lang="zh-CN">翻译</span></dd>
-            <dt><code>f&nbsp;</code></dt><dd><span lang="en">Files</span><span lang="zh-CN">文件</span></dd>
-            <dt><code>bm&nbsp;</code></dt><dd><span lang="en">Bookmarks</span><span lang="zh-CN">书签</span></dd>
-            <dt><code>sn&nbsp;</code></dt><dd><span lang="en">Snippets</span><span lang="zh-CN">文本片段</span></dd>
-            <dt><code>dev&nbsp;</code></dt><dd><span lang="en">Developer tools</span><span lang="zh-CN">开发工具</span></dd>
-            <dt><code>kill&nbsp;</code></dt><dd><span lang="en">Processes</span><span lang="zh-CN">进程</span></dd>
-            <dt><code>define&nbsp;</code> <code>查&nbsp;</code></dt><dd><span lang="en">Dictionary</span><span lang="zh-CN">词典</span></dd>
-            <dt><code>ocr /path</code></dt><dd><span lang="en">Read text from an image file</span><span lang="zh-CN">识别图片文件里的文字</span></dd>
-          </dl>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ Privacy ============ -->
-    <section id="privacy" class="section">
-      <h2><span lang="en">Your Mac, your data</span><span lang="zh-CN">数据只在你的 Mac 上</span></h2>
-      <div class="privacy-grid">
-        <div class="glass privacy-item">
-          <h3><span lang="en">One local folder</span><span lang="zh-CN">一个本地目录</span></h3>
-          <p lang="en">Settings, clipboard history and caches live in <code>~/Library/Application Support/Helmp/</code>. Delete it and they're gone.</p>
-          <p lang="zh-CN">设置、剪贴板历史和缓存都在 <code>~/Library/Application Support/Helmp/</code>，删掉这个目录就全没了。</p>
-        </div>
-        <div class="glass privacy-item">
-          <h3><span lang="en">Keys in the Keychain</span><span lang="zh-CN">Key 放在钥匙串</span></h3>
-          <p lang="en">Model API keys and plugin secrets are stored in the macOS Keychain, never in a config file.</p>
-          <p lang="zh-CN">模型的 API Key 和插件的密钥存在 macOS 钥匙串里，从不写进配置文件。</p>
-        </div>
-        <div class="glass privacy-item">
-          <h3><span lang="en">No phoning home</span><span lang="zh-CN">不往外发数据</span></h3>
-          <p lang="en">No account, analytics, telemetry or crash reports. Helmp only sends requests to the model you configured for Translate, to the European Central Bank for exchange rates, to the hosts of plugins you turned on when you run them, and for your public IP when you ask. Web searches simply open in your browser.</p>
-          <p lang="zh-CN">没有账号、统计、遥测和崩溃上报。Helmp 只会向这几处发请求：你为翻译配置的模型、提供汇率的欧洲央行、你启用的插件在你运行它时访问的主机，以及你主动查询公网 IP 时的接口。网页搜索只是在浏览器里打开网址。</p>
-        </div>
-        <div class="glass privacy-item">
-          <h3><span lang="en">Read-only agents</span><span lang="zh-CN">Agent 只读</span></h3>
-          <p lang="en">Session files of Claude Code and Codex are only read, and long logs only from their last 64 KB. Nothing is written, nothing is hooked.</p>
-          <p lang="zh-CN">Claude Code 和 Codex 的会话文件只读，长日志也只读末尾 64 KB。不写入，不挂 hooks。</p>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- ============ FAQ ============ -->
-    <section id="faq" class="section">
-      <h2>FAQ</h2>
-      <div class="faq">
-        <details class="glass">
-          <summary><span lang="en">Is Helmp free?</span><span lang="zh-CN">Helmp 免费吗？</span></summary>
-          <p lang="en">Yes. It's open source under the MIT license.</p>
-          <p lang="zh-CN">免费，以 MIT 协议开源。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Is the download safe to open?</span><span lang="zh-CN">下载的安装包能直接打开吗？</span></summary>
-          <p lang="en">Yes. The dmg on GitHub Releases is signed with a Developer ID and notarized by Apple, so macOS opens it without warnings; <code>SHA256SUMS.txt</code> is attached if you want to check it. There are no automatic updates yet: download the new release and replace the app. You can still build from source instead.</p>
-          <p lang="zh-CN">可以。GitHub Releases 上的 dmg 用 Developer ID 签名并经过 Apple 公证，macOS 打开时不会拦；想校验的话，附带了 <code>SHA256SUMS.txt</code>。目前还没有自动更新，升级时下载新版本替换掉旧的 App 即可。也仍然可以从源码构建。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Is the app in English?</span><span lang="zh-CN">界面是中文的吗？</span></summary>
-          <p lang="en">Yes. The interface comes in English and Simplified Chinese and follows your system language. Switch it any time in Settings › General › Language. Chinese app names and pinyin search work either way.</p>
-          <p lang="zh-CN">界面有简体中文和英文两种，默认跟随系统语言，随时可以在「设置 › 通用 › 语言」里切换。无论哪种语言，中文应用名和拼音都照样能搜。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Which Macs does it run on?</span><span lang="zh-CN">支持哪些 Mac？</span></summary>
-          <p lang="en">macOS 15 Sequoia or later. Building requires Xcode, because GPUI compiles Metal shaders.</p>
-          <p lang="zh-CN">macOS 15 Sequoia 及以上。构建需要 Xcode，因为 GPUI 要编译 Metal 着色器。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Can it run Raycast extensions?</span><span lang="zh-CN">能跑 Raycast 扩展吗？</span></summary>
-          <p lang="en">It runs Raycast <em>Script Commands</em> (shell, Python and other scripts with <code>@raycast.*</code> headers). Raycast's Node-based extensions are not supported.</p>
-          <p lang="zh-CN">能跑 Raycast 的 <em>Script Commands</em>（带 <code>@raycast.*</code> 头注释的 Shell、Python 等脚本），不支持基于 Node 的 Raycast 扩展。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Which agents are supported?</span><span lang="zh-CN">支持哪些 agent？</span></summary>
-          <p lang="en">Claude Code and Codex, both the command-line tools and the desktop apps. Jumping to a terminal session selects the exact tab in iTerm2 and Terminal.app; for other terminals Helmp brings the app to the front.</p>
-          <p lang="zh-CN">Claude Code 和 Codex，命令行和桌面 App 都支持。跳转终端里的会话时，iTerm2 和系统终端会精确选中对应的标签页；其他终端则把 App 切到前台。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Does Translate read my clipboard?</span><span lang="zh-CN">翻译会动我的剪贴板吗？</span></summary>
-          <p lang="en">Helmp first asks the front app for the selected text through Accessibility. Only if the app doesn't support that does Helmp press <kbd>⌘C</kbd> for you, read the text, and put your previous clipboard back. That copy is never added to the clipboard history.</p>
-          <p lang="zh-CN">Helmp 先通过辅助功能接口向前台 App 要选中的文字。只有 App 不支持这种方式时，才会替你按一下 <kbd>⌘C</kbd>，读出文字后把剪贴板原来的内容放回去，这次复制也不会进剪贴板历史。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Can I open Helmp from a script or Shortcuts?</span><span lang="zh-CN">能从脚本或快捷指令里调出 Helmp 吗？</span></summary>
-          <p lang="en">Yes, with <code>helmp://</code> links: <code>helmp://show?q=wx</code> opens the panel with a query, <code>helmp://scope/translate?q=hello</code> goes straight to Translate, and <code>helmp://settings/models</code> opens a settings page. See <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">the deep link reference</a>.</p>
-          <p lang="zh-CN">可以，用 <code>helmp://</code> 链接：<code>helmp://show?q=wx</code> 唤起面板并带上查询，<code>helmp://scope/translate?q=hello</code> 直接进入翻译，<code>helmp://settings/models</code> 打开设置的某一页。完整说明见<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">深链接文档</a>。</p>
-        </details>
-        <details class="glass">
-          <summary><span lang="en">Why the name?</span><span lang="zh-CN">为什么叫 Helmp？</span></summary>
-          <p lang="en">Say it fast: "help me".</p>
-          <p lang="zh-CN">读快一点就是 "help me"。</p>
-        </details>
+    <section id="faq" class="section" aria-labelledby="faq-title">
+      <div class="wrap faq-layout">
+        <h2 id="faq-title"><span lang="en">Questions</span><span lang="zh-CN">常见问题</span></h2>
+        <div class="faq glass">
+          <details>
+            <summary><span lang="en">Is Helmp free?</span><span lang="zh-CN">Helmp 免费吗？</span></summary>
+            <p lang="en">Yes. It's open source under the MIT license.</p>
+            <p lang="zh-CN">免费，以 MIT 协议开源。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Is the download safe to open?</span><span lang="zh-CN">下载的安装包能直接打开吗？</span></summary>
+            <p lang="en">Yes. The dmg on GitHub Releases is signed with a Developer ID and notarized by Apple, so macOS opens it without warnings. <code>SHA256SUMS.txt</code> is attached if you want to check it.</p>
+            <p lang="zh-CN">可以。GitHub Releases 上的 dmg 用 Developer ID 签名并经过 Apple 公证，macOS 打开时不会拦。想校验的话，附带了 <code>SHA256SUMS.txt</code>。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Is the interface in English?</span><span lang="zh-CN">界面是中文的吗？</span></summary>
+            <p lang="en">It comes in English and Simplified Chinese and follows your system language. Switch any time in Settings › General › Language. Chinese app names and pinyin search work either way.</p>
+            <p lang="zh-CN">界面有简体中文和英文两种，默认跟随系统语言，随时可以在「设置 › 通用 › 语言」里切换。无论哪种语言，中文应用名和拼音都照样能搜。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Which agents are supported?</span><span lang="zh-CN">支持哪些 agent？</span></summary>
+            <p lang="en">Claude Code and Codex, both the command-line tools and the desktop apps. Jumping to a terminal session selects the exact tab in iTerm2 and Terminal; for other terminals Helmp brings the app to the front. Through <code>helmp mcp</code>, Claude Code, Codex and Cursor can also build plugins and run Helmp commands.</p>
+            <p lang="zh-CN">Claude Code 和 Codex，命令行和桌面 App 都支持。跳转终端里的会话时，iTerm2 和系统终端会精确选中对应的标签页；其他终端则把 App 切到前台。通过 <code>helmp mcp</code>，Claude Code、Codex 和 Cursor 还能帮你写插件、执行 Helmp 的命令。</p>
+          </details>
+          <details>
+            <summary><span lang="en">What can an agent do through <code>helmp mcp</code> without asking?</span><span lang="zh-CN">agent 通过 <code>helmp mcp</code> 能不经同意做什么？</span></summary>
+            <p lang="en">Only pure computations: calculator, conversions, time, developer tools, dictionary, translation. Anything with side effects shows “Claude Code wants to run: …” in the panel; Return allows it, Esc denies it. Clipboard history and session transcripts stay private by default.</p>
+            <p lang="zh-CN">只有纯计算：计算器、换算、时间、开发者工具、词典、翻译。其余有副作用的操作都会在面板里显示「Claude Code 想执行：…」，回车允许，Esc 拒绝。剪贴板历史和会话记录默认不给 agent 看。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Can it run Raycast extensions?</span><span lang="zh-CN">能跑 Raycast 扩展吗？</span></summary>
+            <p lang="en">It runs Raycast <em>Script Commands</em> (shell, Python and other scripts with <code>@raycast.*</code> headers). Raycast's Node-based extensions are not supported.</p>
+            <p lang="zh-CN">能跑 Raycast 的 <em>Script Commands</em>（带 <code>@raycast.*</code> 头注释的 Shell、Python 等脚本），不支持基于 Node 的 Raycast 扩展。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Does Translate touch my clipboard?</span><span lang="zh-CN">翻译会动我的剪贴板吗？</span></summary>
+            <p lang="en">Helmp first asks the front app for the selected text through Accessibility. Only if the app doesn't support that does Helmp press <kbd>⌘C</kbd> for you, read the text, and put your previous clipboard back. That copy never enters the clipboard history.</p>
+            <p lang="zh-CN">Helmp 先通过辅助功能接口向前台 App 要选中的文字。只有 App 不支持这种方式时，才会替你按一下 <kbd>⌘C</kbd>，读出文字后把剪贴板原来的内容放回去，这次复制也不会进剪贴板历史。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Can I open Helmp from a script or Shortcuts?</span><span lang="zh-CN">能从脚本或快捷指令里调出 Helmp 吗？</span></summary>
+            <p lang="en">Yes, with <code>helmp://</code> links: <code>helmp://show?q=wx</code> opens the panel with a query, <code>helmp://scope/translate?q=hello</code> goes straight to Translate. See <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">the deep link reference</a>.</p>
+            <p lang="zh-CN">可以，用 <code>helmp://</code> 链接：<code>helmp://show?q=wx</code> 唤起面板并带上查询，<code>helmp://scope/translate?q=hello</code> 直接进入翻译。完整说明见<a href="https://github.com/PeterChen1997/helmp/blob/HEAD/docs/deeplinks.md">深链接文档</a>。</p>
+          </details>
+          <details>
+            <summary><span lang="en">Why the name?</span><span lang="zh-CN">为什么叫 Helmp？</span></summary>
+            <p lang="en">Say it fast: “help me”.</p>
+            <p lang="zh-CN">读快一点就是 “help me”。</p>
+          </details>
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="footer">
-    <div class="footer-inner">
+    <div class="wrap footer-inner">
       <div class="footer-brand">
-        <img src="assets/icon-64.png" width="22" height="22" alt="">
-        <span>Helmp</span>
+        <img src="assets/icon-64.png" width="28" height="28" alt="">
+        <div>
+          <strong>Helmp</strong>
+          <span lang="en">A native macOS launcher.</span><span lang="zh-CN">原生 macOS 启动器。</span>
+        </div>
       </div>
-      <p>
-        <a href="https://github.com/PeterChen1997/helmp">GitHub</a>
-        <span aria-hidden="true">·</span>
-        <a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a>
-        <span aria-hidden="true">·</span>
-        <span>© 2026 Peter Chen</span>
-      </p>
+      <ul class="footer-links">
+        <li><a href="https://github.com/PeterChen1997/helmp">GitHub</a></li>
+        <li><a href="plugins/"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/CHANGELOG.md"><span lang="en">Changelog</span><span lang="zh-CN">更新日志</span></a></li>
+        <li><a href="https://github.com/PeterChen1997/helmp/blob/HEAD/LICENSE"><span lang="en">MIT License</span><span lang="zh-CN">MIT 协议</span></a></li>
+      </ul>
+      <p class="copyright">© 2026 Peter Chen</p>
     </div>
   </footer>
 

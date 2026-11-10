@@ -1,4 +1,4 @@
-// Helmp 落地页：语言切换与复制按钮。初始语言已由 <head> 里的内联脚本设好。
+// Helmp 落地页：语言切换、复制按钮、首屏截图切换。初始语言已由 <head> 里的内联脚本设好。
 (function () {
   "use strict";
 
@@ -75,5 +75,62 @@
       }
     } catch (e) {}
     done(false);
+  }
+
+  // 首屏截图切换：WAI-ARIA tabs（左右方向键、Home / End 切换，自动激活）。不会自己轮播。
+  var stage = document.querySelector("[data-stage]");
+  if (stage) {
+    var tabs = Array.prototype.slice.call(stage.querySelectorAll('[role="tab"]'));
+
+    var select = function (tab, focus) {
+      for (var i = 0; i < tabs.length; i++) {
+        var t = tabs[i];
+        var on = t === tab;
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        t.tabIndex = on ? 0 : -1;
+        var panel = document.getElementById(t.getAttribute("aria-controls"));
+        if (panel) {
+          if (on && panel.hidden) {
+            panel.hidden = false;
+            panel.classList.remove("is-entering");
+            void panel.offsetWidth; // 重新触发淡入
+            panel.classList.add("is-entering");
+          } else if (!on) {
+            panel.hidden = true;
+          }
+          var caption = document.getElementById(panel.getAttribute("aria-describedby"));
+          if (caption) caption.hidden = !on;
+        }
+      }
+      if (focus) tab.focus();
+      // 窄屏时标签条可以横向滚动：把选中的那个滚进可视范围（不动页面本身的滚动）
+      var bar = tab.parentElement;
+      if (bar && bar.scrollWidth > bar.clientWidth) {
+        var left = tab.offsetLeft - (bar.clientWidth - tab.offsetWidth) / 2;
+        bar.scrollLeft = Math.max(0, left);
+      }
+    };
+
+    stage.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var tab = target.closest('[role="tab"]');
+      if (tab) select(tab, false);
+    });
+
+    stage.addEventListener("keydown", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element) || target.getAttribute("role") !== "tab") return;
+      var index = tabs.indexOf(target);
+      var next = null;
+      if (event.key === "ArrowRight") next = tabs[(index + 1) % tabs.length];
+      else if (event.key === "ArrowLeft") next = tabs[(index - 1 + tabs.length) % tabs.length];
+      else if (event.key === "Home") next = tabs[0];
+      else if (event.key === "End") next = tabs[tabs.length - 1];
+      if (next) {
+        event.preventDefault();
+        select(next, true);
+      }
+    });
   }
 })();
