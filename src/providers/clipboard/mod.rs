@@ -6,6 +6,8 @@
 //! - 全局搜索：查询 ≥ 3 个字符时，最多给 3 条首行高度匹配的历史，分数压在 300 以下，
 //!   不淹没应用结果。
 //! - 首页「快捷命令」里放「剪贴板历史」入口。
+//! - 置顶（⌘K「置顶」）：空查询浏览时排在最前（分组「置顶」），按保留天数清理时跳过。
+//! - 按复制顺序合并粘贴：从选中的这条到最新的文本条目，按复制先后用换行连成一段粘贴。
 //!
 //! 采集遵守 `config.clipboard`：enabled、retention_days、record_images、skip_concealed、
 //! ignore_apps、auto_paste（环境变量 `HELMP_CLIPBOARD_AUTOPASTE` 可覆盖）。
@@ -155,6 +157,29 @@ impl Clipboard {
                 tr("在访达中显示", "Show in Finder"),
                 Some("⌘↵"),
                 Action::new(move || reveal_in_finder(&path)),
+            ));
+        }
+        let pin = !indexed.pinned;
+        let inner = Arc::clone(&self.inner);
+        actions.push(NamedAction::new(
+            if pin {
+                tr("置顶", "Pin")
+            } else {
+                tr("取消置顶", "Unpin")
+            },
+            Some("⌘P"),
+            Action::new(move || {
+                inner.set_pinned(id, pin)?;
+                Ok(Outcome::Done)
+            })
+            .keep_open(),
+        ));
+        if indexed.kind != Kind::Image {
+            let inner = Arc::clone(&self.inner);
+            actions.push(NamedAction::new(
+                tr("按复制顺序合并粘贴到最新", "Paste Through Latest in Copy Order"),
+                None,
+                Action::new(move || inner.paste_sequence(id)),
             ));
         }
         let inner = Arc::clone(&self.inner);
@@ -325,7 +350,9 @@ impl Provider for Clipboard {
             .map(|(position, score)| {
                 let indexed = &index[position];
                 // 空查询按时间浏览，按天分组（设计稿的「今天」）；搜索时按匹配度排序，不再分天。
-                let badge = if query.is_empty() {
+                let badge = if query.is_empty() && indexed.pinned {
+                    tr("置顶", "Pinned").into()
+                } else if query.is_empty() {
                     present::day_label(view.clock, indexed.copied_at_ms)
                 } else {
                     badge().into()
@@ -478,6 +505,39 @@ impl Inner {
         Ok(removed.len())
     }
 
+    fn set_pinned(&self, id: i64, pinned: bool) -> Result<()> {
+        let mut guard = self.store.lock().expect("clipboard store poisoned");
+        let store = guard.as_mut().context(not_ready())?;
+        let entry = store.set_pinned(id, pinned)?;
+        let mut index = self.index.write().expect("clipboard index poisoned");
+        if let Some(indexed) = index.iter_mut().find(|indexed| indexed.id == entry.id) {
+            indexed.pinned = entry.pinned;
+        }
+        Ok(())
+    }
+
+    /// 从第 `id` 条到最新的文本 / 文件条目，按复制先后（旧的在前）用换行连成一段，写回并粘贴。
+    fn paste_sequence(&self, id: i64) -> Result<Outcome> {
+        let ids: Vec<i64> = {
+            let index = self.index.read().expect("clipboard index poisoned");
+            sequence_ids(&index, id).with_context(|| missing(id))?
+        };
+        let detail = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(" ");
+        if let Some(outcome) = crate::effects::dry("paste-sequence", &detail) {
+            return Ok(outcome);
+        }
+        let text = {
+            let guard = self.store.lock().expect("clipboard store poisoned");
+            let store = guard.as_ref().context(not_ready())?;
+            let mut parts = Vec::new();
+            for id in &ids {
+                parts.push(store.get(*id)?.with_context(|| missing(*id))?.content);
+            }
+            parts.join("\n")
+        };
+        paste_text(&text)
+    }
+
     fn delete(&self, id: i64) -> Result<()> {
         let mut guard = self.store.lock().expect("clipboard store poisoned");
         let store = guard.as_mut().context(not_ready())?;
@@ -531,6 +591,79 @@ impl Inner {
         }
         Ok(Outcome::Done)
     }
+}
+
+/// 「按复制顺序合并粘贴」要粘的条目：从 `id` 这条到最新（索引新的在前），跳过图片，旧的在前。
+/// 置顶条目不按时间排，不算在区间里（选中的就是置顶条目时只粘它自己）。
+fn sequence_ids(index: &[Indexed], id: i64) -> Option<Vec<i64>> {
+    let position = index.iter().position(|indexed| indexed.id == id)?;
+    let selected = &index[position];
+    if selected.pinned {
+        return Some(vec![id]);
+    }
+    let mut ids: Vec<i64> = index[..=position]
+        .iter()
+        .filter(|indexed| indexed.kind != Kind::Image && !indexed.pinned)
+        .map(|indexed| indexed.id)
+        .collect();
+    ids.reverse();
+    Some(ids)
+}
+
+/// 系统剪贴板里当前的纯文本（片段的 `{clipboard}`）。只读，不记录。
+pub fn current_text() -> Option<String> {
+    use watcher::Pasteboard as _;
+    macos::SystemPasteboard.text()
+}
+
+/// 把一段文字写进剪贴板并粘贴到前台 App（片段、合并粘贴共用）。
+///
+/// 写入时打 TransientType 标记、暂停记录：这段文字不进剪贴板历史。粘贴后约 300 ms 把原来的纯文本剪贴板
+/// 还原回去（原来是图片 / 文件时不还原，避免丢格式——这时剪贴板里留着粘贴的文字）。
+/// 没有辅助功能权限或关了自动粘贴时只复制，返回提示。
+pub fn paste_text(text: &str) -> Result<Outcome> {
+    paste_text_then(text, 0)
+}
+
+/// 同 [`paste_text`]，粘贴后再按 `left` 次 ←，把光标放回 `{cursor}` 的位置。
+pub fn paste_text_then(text: &str, left: usize) -> Result<Outcome> {
+    let detail = if left > 0 {
+        format!("{text} [cursor ←{left}]")
+    } else {
+        text.to_string()
+    };
+    if let Some(outcome) = crate::effects::dry("paste", &detail) {
+        return Ok(outcome);
+    }
+    let _pause = pause_recording(Duration::from_secs(3));
+    let previous = {
+        use watcher::Pasteboard as _;
+        let pasteboard = macos::SystemPasteboard;
+        let plain_only = pasteboard
+            .types()
+            .iter()
+            .all(|ty| ty.starts_with("public.utf8") || ty == "NSStringPboardType" || ty.starts_with("public.utf16"));
+        if plain_only { pasteboard.text() } else { None }
+    };
+    macos::write_text(text)?;
+    if !will_autopaste(&crate::config::get().clipboard) {
+        return Ok(Outcome::Message(tr(
+            "已复制到剪贴板（没有辅助功能权限或关闭了自动粘贴，没有自动粘贴）",
+            "Copied to the clipboard (not pasted: Accessibility permission is missing or auto-paste is off)",
+        )
+        .into()));
+    }
+    // 等启动器面板隐藏、键盘焦点回到原来的 App。
+    std::thread::sleep(Duration::from_millis(80));
+    macos::send_paste()?;
+    if left > 0 {
+        macos::send_left_arrows(left)?;
+    }
+    if let Some(previous) = previous {
+        std::thread::sleep(Duration::from_millis(300));
+        macos::write_text(&previous)?;
+    }
+    Ok(Outcome::Done)
 }
 
 fn image_path(store: &Store, entry: &Entry) -> Option<PathBuf> {
@@ -631,6 +764,7 @@ struct Indexed {
     height: u32,
     source: Option<String>,
     copied_at_ms: i64,
+    pinned: bool,
 }
 
 impl Indexed {
@@ -667,6 +801,7 @@ impl Indexed {
             height: entry.height,
             source: entry.source.as_ref().map(|source| source.name.clone()),
             copied_at_ms: entry.copied_at_ms,
+            pinned: entry.pinned,
         };
         indexed.title_lower = indexed.title_in(Lang::Zh).to_lowercase();
         if entry.kind == Kind::Image {
@@ -752,10 +887,11 @@ fn ellipsize(text: &str, max_chars: usize) -> String {
 fn browse(index: &[Indexed], text: &str, kind: Option<Kind>) -> Vec<(usize, u32)> {
     let wanted = |indexed: &Indexed| kind.is_none_or(|kind| indexed.kind == kind);
     let positions: Vec<usize> = if text.is_empty() {
-        (0..index.len())
+        // 置顶的排最前（各自保持新的在前），其余按时间。
+        let (pinned, rest): (Vec<usize>, Vec<usize>) = (0..index.len())
             .filter(|&position| wanted(&index[position]))
-            .take(MAX_RESULTS)
-            .collect()
+            .partition(|&position| index[position].pinned);
+        pinned.into_iter().chain(rest).take(MAX_RESULTS).collect()
     } else {
         let mut hits: Vec<(usize, u32)> = matches(index, text, BODY_TIER)
             .into_iter()
@@ -1109,6 +1245,8 @@ mod tests {
             [
                 ("复制", Some("⌘C")),
                 ("粘贴为纯文本", Some("⌥↵")),
+                ("置顶", Some("⌘P")),
+                ("按复制顺序合并粘贴到最新", None),
                 ("删除", Some("⌘⌫"))
             ]
         );
@@ -1262,6 +1400,56 @@ mod tests {
     }
 
     #[test]
+    fn pinned_items_list_first_and_survive_retention() {
+        // 置顶是给常用内容的：浏览时要一眼看到（排在今天的新记录前面），过期清理也不能删它。
+        let dir = TempDir::new("pinned");
+        let provider = provider_with(&dir, &[]);
+        {
+            let mut guard = provider.inner.store.lock().unwrap();
+            let store = guard.as_mut().unwrap();
+            let old = now_ms() - 10 * 86_400_000;
+            let (entry, _) = store.add(NewClip::Text("ancient".into()), None, old).unwrap();
+            provider.inner.move_to_front(&entry, None);
+        }
+        provider.inner.record(NewClip::Text("fresh".into()), None).unwrap();
+        let ancient = provider
+            .query_scoped("", "全部")
+            .into_iter()
+            .find(|item| item.title == "ancient")
+            .unwrap();
+        let pin = ancient.actions.iter().find(|a| a.title == "置顶").unwrap();
+        pin.action.run().unwrap();
+        let items = provider.query_scoped("", "全部");
+        assert_eq!(titles(&items), ["ancient", "fresh"]);
+        assert_eq!(items[0].badge, "置顶");
+        assert!(items[0].actions.iter().any(|a| a.title == "取消置顶"));
+
+        let week = ClipboardConfig {
+            retention_days: Some(7),
+            ..ClipboardConfig::default()
+        };
+        assert_eq!(provider.inner.prune(&week).unwrap(), 0);
+        assert_eq!(titles(&provider.query_scoped("", "全部")), ["ancient", "fresh"]);
+    }
+
+    #[test]
+    fn sequence_paste_goes_oldest_first_and_skips_images_and_pins() {
+        // 合并粘贴模拟「依次粘贴刚才复制的几段」：顺序必须是复制的先后，图片没法拼进文字，置顶条目不属于这段时间。
+        let dir = TempDir::new("sequence");
+        let provider = provider_with(&dir, &["one", "two"]);
+        png(&provider, b"img", 1, 1, None);
+        provider.inner.record(NewClip::Text("three".into()), None).unwrap();
+        let index = provider.inner.index.read().unwrap().clone();
+        let id_of = |title: &str| index.iter().find(|i| i.title == title).unwrap().id;
+        assert_eq!(
+            sequence_ids(&index, id_of("one")).unwrap(),
+            [id_of("one"), id_of("two"), id_of("three")]
+        );
+        assert_eq!(sequence_ids(&index, id_of("three")).unwrap(), [id_of("three")]);
+        assert!(sequence_ids(&index, 9999).is_none());
+    }
+
+    #[test]
     fn clear_empties_store_and_index() {
         // 设置里的「清空全部历史」：面板上必须同时清空，不能等重启。
         let dir = TempDir::new("clearall");
@@ -1344,6 +1532,7 @@ mod tests {
                         source: None,
                         copied_at_ms: 0,
                         seq: i,
+                        pinned: false,
                     },
                     None,
                 ));
@@ -1389,6 +1578,7 @@ mod tests {
             source: None,
             copied_at_ms: 0,
             seq: 1,
+            pinned: false,
         };
         let title =
             |kind, content: &str| Indexed::new(&entry(kind, content), None).title_in(Lang::Zh);
@@ -1440,7 +1630,16 @@ mod tests {
             assert_eq!(titles(&found), ["会议改到周四下午三点"]);
             assert_eq!(found[0].badge, "Clipboard");
             let actions: Vec<&str> = found[0].actions.iter().map(|a| a.title.as_str()).collect();
-            assert_eq!(actions, ["Copy", "Paste as Plain Text", "Delete"]);
+            assert_eq!(
+                actions,
+                [
+                    "Copy",
+                    "Paste as Plain Text",
+                    "Pin",
+                    "Paste Through Latest in Copy Order",
+                    "Delete"
+                ]
+            );
             assert_eq!(
                 titles(&provider.query_scoped("image", "All")),
                 ["Image 640 × 220"]

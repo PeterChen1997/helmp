@@ -160,6 +160,7 @@ pub struct SettingsView {
     hotkey: Entity<HotkeyRecorder>,
     extensions: Vec<ExtensionRow>,
     models: AnyView,
+    snippets: AnyView,
     /// 扩展页脚本目录列表里选中的一项（用于「−」）。
     selected_script_dir: Option<String>,
     /// 剪贴板页忽略列表里选中的 bundle id。
@@ -251,6 +252,7 @@ impl SettingsView {
             InputState::new(window, cx).placeholder("https://example.com/search?q={query}")
         });
         let models = crate::models::settings_pane(window, cx);
+        let snippets = pages::snippets_pane(window, cx);
         Self::watch_hotkey_registry(cx);
 
         // 自检 / 截图用：HELMP_SETTINGS_PAGE=<页面名> 直接打开某一页（中文或英文页名都行）。
@@ -266,6 +268,7 @@ impl SettingsView {
             hotkey,
             extensions,
             models,
+            snippets,
             selected_script_dir: None,
             selected_ignored_app: None,
             error: None,
@@ -533,6 +536,7 @@ impl SettingsView {
             Page::Models => self.models.clone().into_any_element(),
             Page::Agents => self.render_agents(pal, cx),
             Page::Clipboard => self.render_clipboard(pal, window, cx),
+            Page::Snippets => self.snippets.clone().into_any_element(),
             Page::Screenshot => self.render_screenshot(pal, cx),
             Page::Appearance => self.render_appearance(pal, cx),
             Page::About => self.render_about(pal, cx),

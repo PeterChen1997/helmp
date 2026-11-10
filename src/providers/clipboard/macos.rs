@@ -170,6 +170,27 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
     })
 }
 
+/// 把一段纯文本写进系统剪贴板，打上 TransientType 标记（剪贴板历史不记录它）。片段粘贴用。
+pub fn write_text(text: &str) -> Result<()> {
+    autoreleasepool(|_| {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        ensure!(
+            pasteboard.setString_forType(&NSString::from_str(text), string_type()),
+            tr("写入系统剪贴板失败", "Couldn’t write to the clipboard")
+        );
+        ensure!(
+            pasteboard
+                .setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE)),
+            tr(
+                "给剪贴板内容打 TransientType 标记失败",
+                "Couldn’t mark the clipboard content as transient"
+            )
+        );
+        Ok(())
+    })
+}
+
 fn string_type() -> &'static NSPasteboardType {
     // SAFETY: AppKit 导出的常量，进程生命周期内有效。
     unsafe { NSPasteboardTypeString }
@@ -227,11 +248,26 @@ pub fn send_copy() -> Result<()> {
     send_command_key(KEYCODE_C)
 }
 
+/// 向前台 App 发送 `count` 次 ←（片段 `{cursor}` 把光标移回占位处）。同样需要辅助功能权限。
+pub fn send_left_arrows(count: usize) -> Result<()> {
+    const KEYCODE_LEFT: u16 = 123;
+    for _ in 0..count {
+        send_key(KEYCODE_LEFT, 0)?;
+    }
+    Ok(())
+}
+
+const FLAG_COMMAND: u64 = 0x0010_0000;
+
 /// 发送 ⌘ + 某个键（按下、抬起）。修饰键只带 ⌘：用户此刻可能还按着唤起快捷键的 ⌥⇧。
 fn send_command_key(keycode: u16) -> Result<()> {
+    send_key(keycode, FLAG_COMMAND)
+}
+
+/// 发送一个键（按下、抬起），修饰键固定为 `flags`（不继承用户此刻按着的修饰键）。
+fn send_key(keycode: u16, flags: u64) -> Result<()> {
     const COMBINED_SESSION_STATE: i32 = 0;
     const HID_EVENT_TAP: u32 = 0;
-    const FLAG_COMMAND: u64 = 0x0010_0000;
 
     // SAFETY: 标准 CoreGraphics 调用；每个 Create 得到的对象都在本函数内 CFRelease。
     unsafe {
@@ -249,7 +285,7 @@ fn send_command_key(keycode: u16) -> Result<()> {
                 )));
                 break;
             }
-            CGEventSetFlags(event, FLAG_COMMAND);
+            CGEventSetFlags(event, flags);
             CGEventPost(HID_EVENT_TAP, event);
             CFRelease(event);
         }

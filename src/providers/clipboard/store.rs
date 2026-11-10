@@ -4,6 +4,7 @@
 //! - 同内容（按 sha256 判重）再次复制时不新增行，而是把原行移到最前（`seq` 取新值），
 //!   这样 `clipboard:<行 id>` 在整个生命周期内保持稳定。
 //! - 图片落盘到 `clipboard-images/<hash>.<png|tiff>`，库里只存文件名。
+//! - `pinned = 1` 的条目是用户置顶的：浏览时排在最前，按保留天数清理时跳过。旧库打开时自动补这一列。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,8 @@ pub struct Entry {
     pub copied_at_ms: i64,
     /// 越大越新，决定历史顺序。
     pub seq: i64,
+    /// 用户置顶：浏览时排最前，不受保留天数清理。
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,8 +126,7 @@ pub struct Store {
     next_seq: i64,
 }
 
-const COLUMNS: &str =
-    "id, kind, content, length(content), width, height, source_name, source_bundle, copied_at, seq";
+const COLUMNS: &str = "id, kind, content, length(content), width, height, source_name, source_bundle, copied_at, seq, pinned";
 
 impl Store {
     /// 打开（必要时创建）`<dir>/clipboard.sqlite` 与图片目录。
@@ -165,6 +167,7 @@ impl Store {
             "初始化剪贴板数据库表",
             "Couldn’t set up the clipboard database tables",
         ))?;
+        add_pinned_column(&conn)?;
         let max_seq: i64 =
             conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM clips", [], |row| {
                 row.get(0)
@@ -287,6 +290,27 @@ impl Store {
         })
     }
 
+    /// 置顶 / 取消置顶。
+    pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<Entry> {
+        let changed = self.conn.execute(
+            "UPDATE clips SET pinned = ?1 WHERE id = ?2",
+            params![pinned, id],
+        )?;
+        anyhow::ensure!(
+            changed == 1,
+            trf!(
+                "剪贴板历史里没有第 {id} 条",
+                "Clipboard history has no item #{id}"
+            )
+        );
+        self.get(id)?.with_context(|| {
+            trf!(
+                "剪贴板第 {id} 条更新后读不回来",
+                "Clipboard item #{id} couldn’t be read back after updating"
+            )
+        })
+    }
+
     /// 完整内容。
     pub fn get(&self, id: i64) -> Result<Option<Entry>> {
         let sql = format!("SELECT {COLUMNS} FROM clips WHERE id = ?1");
@@ -299,7 +323,7 @@ impl Store {
     /// 全部历史，新的在前；`content` 截断到 `preview_chars` 个字符（内存索引只需要这么多）。
     pub fn load_all(&self, preview_chars: usize) -> Result<Vec<Entry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, kind, substr(content, 1, ?1), length(content), width, height, source_name, source_bundle, copied_at, seq
+            "SELECT id, kind, substr(content, 1, ?1), length(content), width, height, source_name, source_bundle, copied_at, seq, pinned
              FROM clips ORDER BY seq DESC",
         )?;
         let limit = i64::try_from(preview_chars).unwrap_or(i64::MAX);
@@ -323,12 +347,12 @@ impl Store {
         Ok(true)
     }
 
-    /// 删除最近一次复制早于 `cutoff_ms` 的条目（保留天数到期），返回被删的 id。
+    /// 删除最近一次复制早于 `cutoff_ms` 的条目（保留天数到期），返回被删的 id。置顶的不删。
     pub fn prune_before(&mut self, cutoff_ms: i64) -> Result<Vec<i64>> {
         let expired: Vec<(i64, Option<String>)> = {
             let mut stmt = self
                 .conn
-                .prepare("SELECT id, kind, content FROM clips WHERE copied_at < ?1")?;
+                .prepare("SELECT id, kind, content FROM clips WHERE copied_at < ?1 AND pinned = 0")?;
             let rows = stmt.query_map([cutoff_ms], |row| {
                 let kind: String = row.get(1)?;
                 let image = if kind == Kind::Image.as_str() {
@@ -341,7 +365,10 @@ impl Store {
             rows.collect::<rusqlite::Result<_>>()?
         };
         self.conn
-            .execute("DELETE FROM clips WHERE copied_at < ?1", [cutoff_ms])
+            .execute(
+                "DELETE FROM clips WHERE copied_at < ?1 AND pinned = 0",
+                [cutoff_ms],
+            )
             .context(tr(
                 "清理过期剪贴板历史",
                 "Couldn’t remove expired clipboard history",
@@ -421,6 +448,21 @@ impl Store {
     }
 }
 
+/// 旧版本的库没有 `pinned` 列：补上（默认不置顶）。
+fn add_pinned_column(conn: &Connection) -> Result<()> {
+    let has_column = conn
+        .prepare("SELECT 1 FROM pragma_table_info('clips') WHERE name = 'pinned'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute_batch("ALTER TABLE clips ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            .context(tr(
+                "给剪贴板数据库补置顶列",
+                "Couldn’t add the pinned column to the clipboard database",
+            ))?;
+    }
+    Ok(())
+}
+
 /// 删图片文件；文件已经不在（用户手动清过目录）不算错误，其他 IO 错误照常上报。
 fn remove_image(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
@@ -453,6 +495,7 @@ fn raw_entry(row: &Row<'_>) -> Result<Entry> {
         }),
         copied_at_ms: row.get(8)?,
         seq: row.get(9)?,
+        pinned: row.get(10)?,
     })
 }
 
@@ -611,6 +654,32 @@ pub(crate) mod tests {
         assert!(store.load_all(10).unwrap().is_empty());
         assert!(!store.image_path(&img).exists());
         assert_eq!(store.stats(&dir.0).unwrap().0, 0);
+    }
+
+    #[test]
+    fn pinned_entries_survive_retention_and_old_databases_migrate() {
+        // 置顶就是「这条我要一直留着」：保留天数到期也不能删；老版本的库没有置顶列，打开时要补上而不是报错。
+        let dir = TempDir::new("pin");
+        {
+            let conn = Connection::open(dir.0.join(DB_FILE)).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE clips (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+                 hash TEXT NOT NULL UNIQUE, width INTEGER NOT NULL DEFAULT 0, height INTEGER NOT NULL DEFAULT 0,
+                 source_name TEXT, source_bundle TEXT, copied_at INTEGER NOT NULL, seq INTEGER NOT NULL);
+                 INSERT INTO clips (kind, content, hash, copied_at, seq) VALUES ('text', 'legacy', 'h1', 1, 1);",
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&dir.0).unwrap();
+        let legacy = store.load_all(10).unwrap().remove(0);
+        assert!(!legacy.pinned);
+        let (old, _) = store.add(text("old"), None, 2).unwrap();
+        assert!(store.set_pinned(old.id, true).unwrap().pinned);
+        let removed = store.prune_before(1_000).unwrap();
+        assert_eq!(removed, vec![legacy.id]);
+        assert!(store.get(old.id).unwrap().is_some());
+        assert!(!store.set_pinned(old.id, false).unwrap().pinned);
+        assert!(store.set_pinned(9999, true).is_err());
     }
 
     #[test]

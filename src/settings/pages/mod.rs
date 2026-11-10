@@ -4,6 +4,9 @@ mod clipboard;
 mod extensions;
 mod general;
 mod misc;
+mod snippets;
+
+pub(super) use snippets::snippets_pane;
 
 use std::path::PathBuf;
 

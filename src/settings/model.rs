@@ -17,18 +17,20 @@ pub enum Page {
     Models,
     Agents,
     Clipboard,
+    Snippets,
     Screenshot,
     Appearance,
     About,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::General,
         Page::Extensions,
         Page::Models,
         Page::Agents,
         Page::Clipboard,
+        Page::Snippets,
         Page::Screenshot,
         Page::Appearance,
         Page::About,
@@ -48,6 +50,7 @@ impl Page {
             Page::Models => ("模型", "Models"),
             Page::Agents => ("Agent", "Agents"),
             Page::Clipboard => ("剪贴板", "Clipboard"),
+            Page::Snippets => ("片段", "Snippets"),
             Page::Screenshot => ("截图", "Screenshot"),
             Page::Appearance => ("外观", "Appearance"),
             Page::About => ("关于", "About"),
@@ -71,6 +74,7 @@ impl Page {
             Page::Models => ("cpu", Tint::Teal),
             Page::Agents => ("sparkles", Tint::Purple),
             Page::Clipboard => ("clipboard", Tint::Orange),
+            Page::Snippets => ("text-quote", Tint::Purple),
             Page::Screenshot => ("scan", Tint::Indigo),
             Page::Appearance => ("contrast", Tint::Graphite),
             Page::About => ("info", Tint::Gray),
@@ -143,6 +147,17 @@ impl Page {
                 "privacy",
                 "password",
                 "retention",
+            ],
+            Page::Snippets => &[
+                "文本片段",
+                "常用语",
+                "模板",
+                "导入",
+                "snippet",
+                "template",
+                "import",
+                "raycast",
+                "alfred",
             ],
             Page::Screenshot => &[
                 "ocr",
@@ -390,6 +405,27 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
             builtin,
             "calculator",
             Tint::Orange,
+            None,
+        ),
+        "processes" => (
+            tr("进程与端口", "Processes & Ports"),
+            builtin,
+            "activity",
+            Tint::Red,
+            None,
+        ),
+        "window" => (
+            tr("窗口管理", "Window Management"),
+            builtin,
+            "layout-grid",
+            Tint::Blue,
+            Some(tr("需要辅助功能权限", "Needs Accessibility permission")),
+        ),
+        "snippets" => (
+            tr("文本片段", "Snippets"),
+            builtin,
+            "text-quote",
+            Tint::Purple,
             None,
         ),
         "websearch" => (

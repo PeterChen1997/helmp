@@ -4,11 +4,14 @@ mod agents;
 mod apps;
 mod builtin;
 mod calculator;
+mod processes;
 pub mod clipboard;
 mod screenshot;
 mod scripts;
+pub mod snippets;
 mod system;
 mod translate;
+mod window;
 pub mod websearch;
 
 use std::sync::Arc;
@@ -26,6 +29,9 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(scripts::Scripts::new()),
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
+        Arc::new(processes::Processes::default()),
+        Arc::new(window::Window),
+        Arc::new(snippets::Snippets::default()),
         Arc::new(websearch::WebSearch::new()),
     ]
 }
