@@ -6,7 +6,7 @@
     "en": "Type a keyword, press Tab, then type what to search: gh, npm, crates, mdn, gt, zhihu, bili, xhs. Complements the web search engines in Settings › Extensions.",
     "zh-Hans": "输入关键词按 Tab，再输入要搜的内容：gh、npm、crates、mdn、gt、zhihu、bili、xhs。与「设置 › 扩展 › 网页搜索」互补。"
   },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Helmp",
   "icon": "search",
   "tint": "blue",
