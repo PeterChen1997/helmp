@@ -20,6 +20,8 @@ pub struct Permissions {
     pub clipboard_write: bool,
     pub keystrokes: bool,
     pub exec: bool,
+    /// 插件带的 MCP 服务器要运行的本地程序（`npx`、`./server.py`）。
+    pub processes: BTreeSet<String>,
 }
 
 impl Permissions {
@@ -28,6 +30,17 @@ impl Permissions {
             clipboard_read: manifest.reads_clipboard(),
             ..Self::default()
         };
+        for server in manifest.mcp_servers.values() {
+            if let Some(command) = &server.command {
+                permissions.processes.insert(command.clone());
+            }
+            // 地址在校验时已经要求是静态的。
+            if let Some(url) = &server.url
+                && let Ok(UrlSource::Static { host }) = http_url_source(url, manifest)
+            {
+                permissions.hosts.insert((host, None));
+            }
+        }
         for command in &manifest.commands {
             if let Some(action) = &command.action {
                 permissions.add(action, manifest);
@@ -115,6 +128,11 @@ impl Permissions {
         if self.exec {
             keys.push("exec".into());
         }
+        keys.extend(
+            self.processes
+                .iter()
+                .map(|command| format!("process:{command}")),
+        );
         keys.sort();
         keys.dedup();
         keys
@@ -177,6 +195,12 @@ impl Permissions {
                 )
                 .into(),
             );
+        }
+        for command in &self.processes {
+            lines.push(trf!(
+                "运行本地程序：{command}（MCP 服务器，以你的用户身份，不受沙盒限制）",
+                "Run a local program: {command} (MCP server, as you, not sandboxed)"
+            ));
         }
         lines
     }
@@ -243,6 +267,18 @@ mod tests {
             ]
         );
         assert_eq!(p.describe().len(), 5);
+    }
+
+    #[test]
+    fn bundled_mcp_servers_need_process_and_network_consent() {
+        // 插件带的 MCP 服务器会运行本地程序、访问网络：启用前必须列给用户看。
+        let text = r#"{"schemaVersion":1,"id":"com.example.p","name":"P","version":"1.0.0","author":"A",
+            "mcpServers":{"gh":{"command":"npx","args":["-y","x"]},"docs":{"url":"https://MCP.example.com/mcp"}}}"#;
+        let p = Permissions::derive(&parse(text, None).unwrap());
+        assert_eq!(p.keys(), ["network:mcp.example.com", "process:npx"]);
+        let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || p.describe());
+        assert!(lines.iter().any(|l| l.starts_with("运行本地程序：npx")), "{lines:?}");
+        assert!(lines.contains(&"访问网络：mcp.example.com".to_string()), "{lines:?}");
     }
 
     #[test]

@@ -38,6 +38,9 @@ pub struct Config {
     /// 清单插件（`plugin.json`）按插件 id 的启用状态、授权与非密钥偏好设置。密钥只在钥匙串。
     #[serde(default)]
     pub plugins: BTreeMap<String, PluginSettings>,
+    /// MCP 客户端：用户添加的 MCP 服务器（见 `providers::mcp`）。密钥只在钥匙串。
+    #[serde(default)]
+    pub mcp: crate::providers::mcp::servers::McpConfig,
     /// 首次启动的权限引导是否已完成或跳过。
     pub onboarding_done: bool,
 }
@@ -58,6 +61,7 @@ impl Default for Config {
             appearance: Appearance::System,
             script_dirs: Vec::new(),
             plugins: BTreeMap::new(),
+            mcp: Default::default(),
             onboarding_done: false,
         }
     }

@@ -7,6 +7,7 @@
 mod hotkey;
 mod model;
 mod pages;
+mod mcp_pane;
 mod plugins_pane;
 pub(crate) mod system;
 mod widgets;
@@ -195,6 +196,8 @@ pub struct SettingsView {
     snippets: AnyView,
     /// 「插件」页（清单插件的管理），整页由 `plugins_pane` 提供。
     plugins: AnyView,
+    /// 「MCP」页（MCP 服务器管理），整页由 `mcp_pane` 提供。
+    mcp: AnyView,
     /// 扩展页脚本目录列表里选中的一项（用于「−」）。
     selected_script_dir: Option<String>,
     /// 剪贴板页忽略列表里选中的 bundle id。
@@ -293,6 +296,7 @@ impl SettingsView {
         let models = crate::models::settings_pane(window, cx);
         let snippets = pages::snippets_pane(window, cx);
         let plugins = plugins_pane::new(window, cx);
+        let mcp = mcp_pane::new(window, cx);
         Self::watch_hotkey_registry(cx);
         let files = config::get().files.clone();
         let files_roots = Self::list_input(
@@ -327,6 +331,7 @@ impl SettingsView {
             models,
             snippets,
             plugins,
+            mcp,
             selected_script_dir: None,
             selected_ignored_app: None,
             error: None,
@@ -621,6 +626,7 @@ impl SettingsView {
             Page::General => self.render_general(pal, cx),
             Page::Extensions => self.render_extensions(pal, window, cx),
             Page::Plugins => self.plugins.clone().into_any_element(),
+            Page::Mcp => self.mcp.clone().into_any_element(),
             Page::Models => self.models.clone().into_any_element(),
             Page::Agents => self.render_agents(pal, cx),
             Page::Clipboard => self.render_clipboard(pal, window, cx),

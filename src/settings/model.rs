@@ -15,6 +15,7 @@ pub enum Page {
     General,
     Extensions,
     Plugins,
+    Mcp,
     Models,
     Agents,
     Clipboard,
@@ -25,10 +26,11 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 11] = [
         Page::General,
         Page::Extensions,
         Page::Plugins,
+        Page::Mcp,
         Page::Models,
         Page::Agents,
         Page::Clipboard,
@@ -50,6 +52,7 @@ impl Page {
             Page::General => ("通用", "General"),
             Page::Extensions => ("扩展", "Extensions"),
             Page::Plugins => ("插件", "Plugins"),
+            Page::Mcp => ("MCP", "MCP"),
             Page::Models => ("模型", "Models"),
             Page::Agents => ("Agent", "Agents"),
             Page::Clipboard => ("剪贴板", "Clipboard"),
@@ -75,6 +78,7 @@ impl Page {
             Page::General => ("settings", Tint::Gray),
             Page::Extensions => ("puzzle", Tint::Blue),
             Page::Plugins => ("blocks", Tint::Indigo),
+            Page::Mcp => ("plug", Tint::Teal),
             Page::Models => ("cpu", Tint::Teal),
             Page::Agents => ("sparkles", Tint::Purple),
             Page::Clipboard => ("clipboard", Tint::Orange),
@@ -136,6 +140,18 @@ impl Page {
                 "manifest",
                 "permission",
                 "webhook",
+            ],
+            Page::Mcp => &[
+                "mcp",
+                "服务器",
+                "工具",
+                "导入",
+                "server",
+                "tool",
+                "import",
+                "claude",
+                "cursor",
+                "codex",
             ],
             Page::Models => &[
                 "api",
@@ -442,6 +458,16 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
             "text-quote",
             Tint::Purple,
             None,
+        ),
+        "mcp" => (
+            tr("MCP 工具", "MCP Tools"),
+            tr("MCP", "MCP"),
+            "plug",
+            Tint::Teal,
+            Some(tr(
+                "把 MCP 服务器的工具变成命令，在「MCP」页添加服务器",
+                "Turns MCP server tools into commands; add servers on the MCP page",
+            )),
         ),
         "plugins" => (
             tr("清单插件", "Manifest Plugins"),
