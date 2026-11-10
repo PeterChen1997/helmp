@@ -117,3 +117,13 @@ fn unknown_cli_action_is_reported_not_guessed() {
     let err = h.cli_err(&["run", "calculator:result", "1+2", "--action", "Nope"]);
     assert!(err.contains("Copy Expression and Result"), "{err}");
 }
+
+#[test]
+fn many_plugins_do_not_push_the_obvious_app_down() {
+    // 插件越来越多，最常见的「拼音首字母找 App」不能被别的插件挤掉：
+    // jsq 时「取色」也能靠「拾色器」的冷僻读音命中，但第一条必须是计算器。
+    let h = Helmp::new();
+    let rows = h.query("jsq");
+    let first = rows.first().expect("有结果");
+    assert!(first.id.ends_with("/Calculator.app"), "{rows:#?}");
+}

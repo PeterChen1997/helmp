@@ -26,6 +26,9 @@ const SUBSTRING: u32 = 700;
 const PINYIN_INNER: u32 = 550;
 const SUBSEQUENCE: u32 = 400;
 const PINYIN_SUBSEQUENCE: u32 = 300;
+/// 拼音命中用到了多音字的非默认读音时扣的分。只用来在同一档里分先后（各档相差至少 50），
+/// 不降档：「音乐」的「乐」默认读 le，可大家都打 yue，不能因此掉到下一档。
+const ALTERNATE_READING_PENALTY: u32 = 10;
 
 pub fn score(query: &str, candidate: &str) -> Option<u32> {
     score_candidate(query, &Candidate::new(candidate))
@@ -226,6 +229,17 @@ impl Syllables {
             };
             // 多音字按用户实际打的读音展示：打 yinyue 命中「音乐」时不能告诉他「拼音 yinle」。
             let used = self.readings_used(query.as_bytes(), start, end);
+            // 用到了非默认读音（如「拾」读 jiè）：仍算命中，但排在同档的默认读音命中之后，
+            // 免得 jsq 时「拾色器」压过「计算器」。
+            let alternate = used
+                .iter()
+                .zip(&self.tokens[start..end])
+                .any(|(reading, token)| token.first().map(String::as_str) != Some(*reading));
+            let score = if alternate {
+                score.saturating_sub(ALTERNATE_READING_PENALTY)
+            } else {
+                score
+            };
             let full: String = used.concat();
             let initials: String = used.iter().filter_map(|r| r.chars().next()).collect();
             // 每个音节至少吃一个字符，长度相等说明每个音节恰好只打了首字母。
@@ -384,9 +398,10 @@ mod tests {
     #[test]
     fn mixed_latin_and_chinese_names() {
         // 「QQ音乐」这类中英混排名很常见：英文单词整体算一个音节，可以和拼音首字母连着打。
-        assert_eq!(score("qqyy", "QQ音乐"), Some(PINYIN_FULL));
-        assert_eq!(score("qqyinyue", "QQ音乐"), Some(PINYIN_FULL));
-        assert_eq!(score("yy", "QQ音乐"), Some(PINYIN_INNER));
+        // 「乐」按 yue 打用的是非默认读音，同档内略低，但仍是全拼这一档。
+        assert_eq!(score("qqyy", "QQ音乐"), Some(PINYIN_FULL - ALTERNATE_READING_PENALTY));
+        assert_eq!(score("qqyinyue", "QQ音乐"), Some(PINYIN_FULL - ALTERNATE_READING_PENALTY));
+        assert_eq!(score("yy", "QQ音乐"), Some(PINYIN_INNER - ALTERNATE_READING_PENALTY));
         // 中英混排名的英文部分仍走字面前缀。
         assert_eq!(score("safari", "Safari浏览器"), Some(PREFIX));
         assert_eq!(score("safarillq", "Safari浏览器"), Some(PINYIN_FULL));
@@ -397,6 +412,14 @@ mod tests {
         // 多音字只认默认读音会让一半用户搜不到（「重庆」有人打 cq，也有人按 zhong 打 zq）。
         assert!(score("cq", "重庆").is_some());
         assert!(score("zq", "重庆").is_some());
+    }
+
+    #[test]
+    fn default_reading_outranks_rare_heteronym_reading() {
+        // jsq 要先出「计算器」：「拾色器」只有按「拾」的冷僻读音 jiè 才命中，不能和它并列甚至排前面。
+        // 但非默认读音仍要能搜到（cq → 重庆）。
+        assert!(score("jsq", "计算器").unwrap() > score("jsq", "拾色器").unwrap());
+        assert!(score("cq", "重庆").is_some());
     }
 
     #[test]
