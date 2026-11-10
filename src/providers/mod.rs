@@ -10,12 +10,16 @@ pub mod clipboard;
 mod dictionary;
 mod files;
 pub mod plugins;
+mod color;
+mod devtools;
+mod emoji;
 mod screenshot;
 mod scripts;
 mod settings_panes;
 pub mod snippets;
 mod system;
 mod toggles;
+mod time;
 mod translate;
 mod window;
 pub mod websearch;
@@ -45,5 +49,9 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(toggles::Toggles::new()),
         Arc::new(bookmarks::Bookmarks::default()),
         Arc::new(dictionary::Dictionary::new()),
+        Arc::new(time::Time),
+        Arc::new(devtools::DevTools),
+        Arc::new(emoji::Emoji),
+        Arc::new(color::Color),
     ]
 }
