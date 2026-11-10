@@ -39,6 +39,8 @@
 
 在 API Key 输入框失焦、按回车或测试连接时写入，永远不会出现在 `config.json` 里。可以在「钥匙串访问」里搜 `dev.helmp.launcher` 删除，或者在设置里删掉对应的模型。
 
+钥匙串条目和保存它的 App 的签名绑定。自己构建的（ad-hoc 签名）Helmp 存下的 Key，签名发布版可能读不到；遇到这种情况 Helmp 会直接说明，在「设置 › 模型」里重新保存一次 Key，就会替换掉旧条目。
+
 ## 会读取但不保存的内容
 
 - **应用。** `/Applications`、`/System/Applications`、`~/Applications` 里各个 App 的 `Info.plist` 和本地化文件，用来在内存里建搜索索引。

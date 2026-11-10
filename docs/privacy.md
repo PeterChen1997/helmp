@@ -39,6 +39,8 @@ API keys for your models are stored in the macOS login Keychain as generic passw
 
 They are written when you leave the API Key field, press Return, or test the connection, and never appear in `config.json`. Remove them with Keychain Access (search for `dev.helmp.launcher`) or by deleting the model in Settings.
 
+Keychain items are tied to the signature of the app that saved them. A key saved by a self-built, ad-hoc signed Helmp may not be readable by the signed release; Helmp says so in that case, and saving the key again in Settings › Models replaces the old item.
+
 ## What Helmp reads but doesn't store
 
 - **Applications.** `Info.plist` and localization files of apps in `/Applications`, `/System/Applications` and `~/Applications`, to build the search index in memory.

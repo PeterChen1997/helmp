@@ -704,6 +704,11 @@ main {
   border-radius: var(--radius-lg);
 }
 
+/* 「下载」和「从源码构建」两块之间的小标题，离上一块远一点 */
+.install + .section-lede {
+  margin-top: 32px;
+}
+
 .steps {
   margin: 0;
   padding: 0;

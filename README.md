@@ -17,7 +17,7 @@
 
 Helmp (read it as "help me") is a Spotlight-style launcher for macOS. Press <kbd>⌥ Space</kbd>, type, hit <kbd>↵</kbd>. Besides launching apps, it lists your Claude Code and Codex sessions and jumps straight to the one that needs you, keeps an unlimited local clipboard history, reads text and QR codes out of screenshots, translates with a model you bring yourself, does quick math, runs system commands and your existing Raycast Script Commands. The interface is available in English and Simplified Chinese.
 
-> **Status: early.** Helmp is under active development and there are no prebuilt releases yet. You build it from source.
+> **Status: early.** Helmp is under active development. A signed and notarized build is on [GitHub Releases](https://github.com/PeterChen1997/helmp/releases/latest), or you can build it from source.
 
 <!-- Screenshots: the files below are placeholders. See docs/images/README.md for the list. -->
 <p align="center">
@@ -36,7 +36,7 @@ Helmp (read it as "help me") is a Spotlight-style launcher for macOS. Press <kbd
 - **Agent session switcher for Claude Code and Codex.** Sessions from the CLI and the desktop apps, grouped into *waiting for you*, *running* and *recently finished*, with the last message in the detail pane. <kbd>↵</kbd> jumps to the session: a deep link for the desktop apps, the exact tab in iTerm2 or Terminal.app, or the host app for other terminals. A live session is never resumed a second time. Helmp only reads `~/.claude` and `~/.codex`; it never writes there and installs no hooks.
 - **Clipboard history.** Text, images and files, stored locally in SQLite with no item limit, grouped by day and filterable by type. Content marked as concealed by password managers is skipped, and you can exclude apps (Passwords is excluded by default). <kbd>↵</kbd> pastes into the app you came from, <kbd>⌥↵</kbd> pastes as plain text.
 - **Screenshot OCR and QR codes.** Capture a region to the clipboard, save it, or recognize its text with Apple Vision. Line breaks and paragraphs are kept; <kbd>↵</kbd> copies everything, <kbd>⇧⌘C</kbd> copies it as one line, <kbd>⌥⌘C</kbd> copies it without line breaks, and <kbd>⌘T</kbd> sends it to Translate. QR codes and barcodes in the image are listed too, with an action to open a link. Recognition languages default to Simplified Chinese and English; Traditional Chinese, Japanese, Korean, French, German, Spanish, Italian, Portuguese and Russian can be added in Settings › Screenshot. Text can also be read from an image on the clipboard or from a file (`ocr /path/to/image.png`).
-- **Translate with your own model.** Anthropic, any OpenAI-compatible endpoint (OpenAI, DeepSeek, gateways) or a local Ollama; API keys live in the macOS Keychain. Translation starts as you type (after a short pause), the source language is detected, and the target defaults to "Chinese → English, everything else → Chinese"; you can pick another target or model for a single run. When you open it, Translate picks up the text selected in the front app. <kbd>↵</kbd> copies the translation, <kbd>⌘↵</kbd> replaces the selection with it, <kbd>⇧⌘C</kbd> copies the source text and <kbd>⌘R</kbd> reads the translation aloud with the system voice. <kbd>↑</kbd> in an empty input brings back recent source texts; repeating one shows the earlier result instead of calling the model again. This history is kept in memory only.
+- **Translate with your own model.** Anthropic, any OpenAI-compatible endpoint (OpenAI, DeepSeek, gateways) or a local Ollama; API keys live in the macOS Keychain. Translation starts as you type (after a short pause), the source language is detected, and the target defaults to "Chinese → English, everything else → Chinese"; you can pick another target or model for a single run. When you open it, Translate picks up the text selected in the front app and puts the cursor in the text box. <kbd>↵</kbd> copies the translation, <kbd>⌘↵</kbd> replaces the selection with it, <kbd>⇧⌘C</kbd> copies the source text and <kbd>⌘R</kbd> reads the translation aloud with the system voice. <kbd>↑</kbd> in an empty input brings back recent source texts; repeating one shows the earlier result instead of calling the model again. This history is kept in memory only.
 - **Calculator.** Type an expression and the answer is the first result: `+ - * / % ^ **`, parentheses, `sqrt`, `sin`, `ln`, `log`, `pow`, `min`, `max` and more, `pi` and `e`. Full-width symbols, Chinese brackets and `×` `÷` work too. <kbd>↵</kbd> copies the result. Plain search terms such as `wx` or `2026` don't produce a result.
 - **Web search fallback.** For any non-empty query, the bottom of the list offers "Search Google / Baidu / GitHub for …". <kbd>↵</kbd> opens the search in your default browser. Bing and Bing Translator are built in but off by default; turn engines on or off, reorder them and add your own URL templates (`{query}` is replaced) in Settings › Extensions.
 - **System commands.** Lock Screen, Sleep, Empty Trash, Show Desktop, Hide Other Apps, Toggle Dark Mode, Restart, Shut Down, Log Out, Open System Settings and Quit All Apps, found by English or Chinese name and pinyin. Commands that can't be undone (Empty Trash, Restart, Shut Down, Log Out, Quit All Apps) show a confirmation page first: <kbd>↵</kbd> goes ahead, <kbd>esc</kbd> cancels. The confirmation can be turned off in Settings › Extensions.
@@ -48,18 +48,30 @@ Helmp (read it as "help me") is a Spotlight-style launcher for macOS. Press <kbd
 
 Smaller things that make it pleasant to use daily:
 
-- The keyboard switches to the ABC layout while the panel is open and back to your input method when it hides, so pinyin abbreviations work without fighting the IME.
 - Reopen within 90 seconds and your last query is still there, selected; after that, or after you ran something, you start fresh.
 - A settings window (General, Extensions, Models, Agents, Clipboard, Screenshot, Appearance, About) and a first-run guide for permissions.
 - A headless CLI (`helmp query wx`) for scripting and debugging.
 
-## Requirements
+## Install
 
-- macOS 15 Sequoia or later.
+Helmp needs macOS 15 Sequoia or later.
+
+### Download
+
+1. Download `Helmp-<version>.dmg` from the [latest release](https://github.com/PeterChen1997/helmp/releases/latest). The build is signed with a Developer ID and notarized by Apple. A `.zip` of the same app and `SHA256SUMS.txt` are attached too.
+2. Open the dmg and drag Helmp into Applications.
+3. Launch Helmp from Applications. The first-run guide walks you through the permissions (see below).
+
+There are no automatic updates yet: to upgrade, download the new release and replace the app.
+
+If you ran a self-built (ad-hoc signed) Helmp before, the signed build may not be allowed to read the API keys it saved in the Keychain. Helmp tells you when that happens; enter the key again in Settings › Models and it works from then on. macOS may also ask for the permissions again, because it records them per signature.
+
+### Build from source
+
+You need:
+
 - Rust toolchain via [rustup](https://rustup.rs). The exact version is pinned in [`rust-toolchain.toml`](rust-toolchain.toml) and installed automatically.
 - Xcode. GPUI compiles its Metal shaders with `xcrun metal`; if that command is missing, run `xcodebuild -downloadComponent MetalToolchain`.
-
-## Build from source
 
 ```bash
 git clone https://github.com/PeterChen1997/helmp.git
@@ -76,7 +88,7 @@ bash script/bundle.sh release
 open target/release/Helmp.app
 ```
 
-`script/bundle.sh` signs the app with `HELMP_SIGN_IDENTITY` if set, otherwise with the first "Developer ID Application" or "Apple Development" certificate it finds, and falls back to ad-hoc signing. macOS remembers permissions per signature, so with ad-hoc signing you will have to grant permissions again after every rebuild. The `helmp://` URL scheme is registered by the packaged app only, so deep links need `Helmp.app`, not `cargo run`.
+`script/bundle.sh` signs the app with `HELMP_SIGN_IDENTITY` if set, otherwise with the first "Developer ID Application" or "Apple Development" certificate it finds, and falls back to ad-hoc signing. macOS remembers permissions per signature, so with ad-hoc signing you will have to grant permissions again after every rebuild. The `helmp://` URL scheme is registered by the packaged app only, so deep links need `Helmp.app`, not `cargo run`. Maintainers build the signed, notarized release with `script/release.sh`; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## First launch and permissions
 
@@ -92,7 +104,7 @@ The global hotkeys use Carbon `RegisterEventHotKey` and need no permission.
 
 ## Keyboard shortcuts
 
-Global (defaults, all configurable in Settings):
+Global (defaults; change the first in Settings › General, the others in Settings › Extensions):
 
 | Shortcut | Action |
 |---|---|
@@ -188,7 +200,7 @@ HELMP_TRACE=1 cargo run          # log UI events to stderr
 
 Ideas we want to get to. None of these exist yet, and the order may change.
 
-- Signed and notarized releases, a Homebrew cask, and automatic updates (the "Check for Updates" menu item and the update toggle in Settings have nothing to check against yet).
+- A Homebrew cask and automatic updates. Signed, notarized builds are already on GitHub Releases, but the "Check for Updates" menu item and the update toggle in Settings have nothing to check against yet.
 - Expose Helmp's capabilities (app search, clipboard, screenshot, OCR) to coding agents as an MCP server.
 - More built-in developer utilities: kill the process on a port, JSON / Base64 / URL / timestamp conversion.
 - File search.
