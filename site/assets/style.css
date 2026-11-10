@@ -1075,3 +1075,347 @@ main {
     transition: none;
   }
 }
+
+/* ---------- 插件中心（site/plugins/ 与首页预览，由 script/build-plugin-center.py 生成） ---------- */
+.nav a[aria-current="page"] {
+  color: var(--text);
+  background: var(--code-bg);
+}
+
+.pc-hero {
+  padding-bottom: 8px;
+}
+
+.pc-trust {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pc-trust li {
+  padding: 6px 14px;
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 560;
+}
+
+.pc-trust li::before {
+  content: "✓";
+  margin-right: 6px;
+  color: var(--done);
+  font-weight: 700;
+}
+
+.pc-section {
+  padding-top: 48px;
+}
+
+.pc-count {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.45em;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text-2);
+  font-size: 0.55em;
+  font-weight: 650;
+  line-height: 1.7;
+  vertical-align: middle;
+  letter-spacing: 0;
+}
+
+.pc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.pc-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  scroll-margin-top: 84px;
+}
+
+.pc-card:target {
+  border-color: var(--brand-blue);
+}
+
+.pc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.pc-icon,
+.pc-mini-icon {
+  flex: none;
+  border-radius: 22%;
+  box-shadow: 0 6px 14px -8px rgba(0, 0, 0, 0.4);
+}
+
+.pc-icon {
+  width: 56px;
+  height: 56px;
+}
+
+.pc-mini-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.pc-icon-fallback {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 22px;
+  background: var(--brand-gradient);
+}
+
+.pc-mini-icon.pc-icon-fallback {
+  font-size: 17px;
+}
+
+.pc-card-title {
+  min-width: 0;
+}
+
+.pc-card .pc-card-title h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pc-card .pc-meta {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.pc-card .pc-badge {
+  align-self: flex-start;
+  margin: 14px 0 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  color: var(--brand-blue);
+  background: var(--selected);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .pc-card .pc-badge {
+    color: #6ea2ff;
+  }
+}
+
+.pc-card .pc-desc {
+  margin: 12px 0 0;
+}
+
+.pc-perms {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.pc-perms h4 {
+  margin: 0 0 6px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pc-perms ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.pc-card .pc-perm-none {
+  font-size: 14px;
+}
+
+.pc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+.pc-btn {
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 18px;
+  font-size: 15px;
+}
+
+.pc-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.pc-submit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin-top: 32px;
+}
+
+.pc-submit .install {
+  margin: 0;
+  max-width: none;
+  padding-bottom: 20px;
+}
+
+.pc-submit-title {
+  margin: 18px 0 2px;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+/* 给右上角的「复制」按钮留位置；命令只有一行，窄屏时按空格折行，不被按钮压住也不用横滑 */
+.pc-submit .code pre {
+  padding-right: 84px;
+  white-space: pre-wrap;
+}
+
+.pc-submit-text {
+  margin: 12px 0 0;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 15px;
+}
+
+.pc-links a {
+  display: inline-block;
+  padding: 6px 0;
+}
+
+.pc-source-line {
+  flex-basis: 100%;
+  order: 3;
+}
+
+/* 中英两段只显示一段，别让 .footer p > * + * 的间距落到被显示的中文段上 */
+.footer .pc-source-line > [lang] {
+  margin-left: 0;
+}
+
+.pc-source-line code {
+  font-size: 0.92em;
+}
+
+/* 首页 #plugins 区块里的预览 */
+.pc-preview {
+  margin-top: 40px;
+  text-align: center;
+}
+
+.pc-preview-title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.pc-preview-lede {
+  margin: 6px auto 0;
+  max-width: 560px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.pc-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+  text-align: left;
+}
+
+.pc-mini {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  transition: transform 0.15s ease;
+}
+
+.pc-mini:hover {
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.pc-mini-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pc-mini-name {
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.pc-mini-desc {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.pc-preview .cta {
+  margin-top: 20px;
+}
+
+@media (max-width: 720px) {
+  .pc-grid,
+  .pc-mini-grid,
+  .pc-submit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pc-submit .install {
+    padding: 4px 16px 18px;
+  }
+
+  .pc-actions .pc-btn {
+    flex: 1 1 140px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-mini {
+    transition: none;
+  }
+}
