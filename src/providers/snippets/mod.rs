@@ -156,7 +156,7 @@ impl Provider for Snippets {
     fn scope(&self) -> Option<Scope> {
         let count = self.snippets().map(|s| s.len()).unwrap_or(0);
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: tr("片段", "Snippets").into(),
             tint: TINT,
             prefixes: PREFIXES.iter().map(|p| p.to_string()).collect(),

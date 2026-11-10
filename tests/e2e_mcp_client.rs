@@ -64,9 +64,12 @@ fn tools_show_up_in_search_and_run_with_the_form() {
     assert_eq!(row.title, "Echo Text");
     assert_eq!(row.subtitle, "Repeat the given text back");
 
-    let out = h.run(
+    // 有参数的工具和插件命令一样：搜索结果里只是入口，回车 / Tab 进入它的范围再填表单，免得误触发。
+    assert_eq!(h.run(&row.id, "echo", &[]).trim(), "enter scope mcp:demo/echo");
+    let out = h.run_in(
         &row.id,
-        "echo",
+        &row.id,
+        "",
         &["--form", "text=hi", "--form", "mood=sad", "--form", "loud=true", "--form", "times=2"],
     );
     assert!(out.contains("SAD: HI / SAD: HI"), "{out}");
@@ -79,7 +82,7 @@ fn tools_show_up_in_search_and_run_with_the_form() {
     assert!(out.contains("Actions: Copy Result / Run Again"), "{out}");
 
     // 表单填错：不调用，直接说哪里不对。
-    let bad = h.run(&row.id, "echo", &["--form", "text=hi", "--form", "times=two"]);
+    let bad = h.run_in(&row.id, &row.id, "", &["--form", "text=hi", "--form", "times=two"]);
     assert!(bad.contains("times: must be an integer"), "{bad}");
 
     // 服务器名 + 空格：列出这个服务器的全部工具。
@@ -105,15 +108,16 @@ fn destructive_tools_confirm_before_running() {
     // 标了 destructiveHint 的工具：先出确认页，确认后才真的调用。
     let (h, _) = with_demo();
     let row = h.find("delete note", |r| r.id == "mcp:demo/delete_note");
-    let first = h.run(&row.id, "delete note", &["--form", "name=groceries"]);
+    let first = h.run_in(&row.id, &row.id, "", &["--form", "name=groceries"]);
     assert!(first.contains("Run “Delete Note”?"), "{first}");
     assert!(first.contains("\"name\": \"groceries\""), "确认页要列出参数：{first}");
     assert!(first.contains("Actions: Run / Cancel"), "{first}");
     assert!(!first.contains("deleted groceries"), "确认前不能调用：{first}");
 
-    let confirmed = h.run(
+    let confirmed = h.run_in(
         &row.id,
-        "delete note",
+        &row.id,
+        "",
         &["--form", "name=groceries", "--then", "Run"],
     );
     assert!(confirmed.contains("deleted groceries"), "{confirmed}");
@@ -204,7 +208,7 @@ fn http_servers_get_headers_secrets_and_the_protocol_version() {
         "data/test-keychain.json",
         &json!({"web/header:Authorization": "Bearer sekrit"}).to_string(),
     );
-    let out = h.run("mcp:web/lookup", "look up", &["--form", "q=rust"]);
+    let out = h.run_in("mcp:web/lookup", "mcp:web/lookup", "", &["--form", "q=rust"]);
     assert!(out.contains("found rust"), "{out}");
     let requests = server.requests();
     let methods: Vec<String> = requests
@@ -354,7 +358,7 @@ fn plugin_bundled_servers_only_appear_after_enabling() {
     setup(&on);
     let row = on.find("echo", |r| r.id == "mcp:com.example.mcp/notes/echo");
     assert_eq!(row.title, "Echo Text");
-    let out = on.run(&row.id, "echo", &["--form", "text=from plugin"]);
+    let out = on.run_in(&row.id, &row.id, "", &["--form", "text=from plugin"]);
     assert!(out.contains("plain: from plugin"), "{out}");
     assert!(on.cli(&["mcp-client", "list"]).contains("\tcom.example.mcp/notes\tplugin:com.example.mcp\t"));
 }

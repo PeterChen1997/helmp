@@ -147,7 +147,7 @@ impl Provider for Dictionary {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: SCOPE,
+            id: SCOPE.into(),
             label: tr("词典", "Dictionary").into(),
             tint: Tint::Red,
             prefixes: ["define ", "dict ", "d ", "词典 ", "查 "]
@@ -180,7 +180,7 @@ fn send_to_translate(word: &str) -> NamedAction {
     NamedAction::new(
         tr("送去翻译", "Translate"),
         Some("⌘T"),
-        Action::new(move || Ok(Outcome::EnterScopeWith("translate", word.clone()))),
+        Action::new(move || Ok(Outcome::EnterScopeWith("translate".into(), word.clone()))),
     )
 }
 
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(titles, ["在词典中打开", "复制单词", "送去翻译"]);
         assert_eq!(
             item.actions[2].action.run().unwrap(),
-            Outcome::EnterScopeWith("translate", "apple".into())
+            Outcome::EnterScopeWith("translate".into(), "apple".into())
         );
     }
 

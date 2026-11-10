@@ -292,7 +292,7 @@ impl Provider for Emoji {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: tr("Emoji 与符号", "Emoji & Symbols").into(),
             tint: Tint::Orange,
             prefixes: vec!["emoji ".into(), "表情 ".into(), "符号 ".into()],

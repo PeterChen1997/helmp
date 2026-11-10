@@ -88,7 +88,7 @@ Helmp 每 3 秒检查一次插件文件夹，文件有变化就重新加载。�
 ]
 ```
 
-- `default: "{{query}}"`：输入 `flomo 读完了一本好书 #读书`，表单里就已经填好了 `读完了一本好书 #读书`。
+- `default: "{{query}}"`：进入命令范围时带着的文字（[深链接](#深链接)的 `q`，或在范围里的搜索框打的字）会预先填进表单。
 - `json` 是真正的 JSON，里面每个字符串都是模板；引号、换行由 Helmp 转义，不用操心。会自动加上 `Content-Type: application/json`。
 - `success`：状态码是 2xx，并且响应里如果有 `code` 字段，它要等于 `0`，才算成功。其他情况一律作为错误显示（带上服务端的 `message`），绝不会显示成「已记录」。
 
@@ -101,7 +101,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 #   - 访问网络：flomoapp.com（地址来自偏好设置 webhook）
 ```
 
-**5. 启用。** 「设置 › 插件 › 我的插件」：打开开关，看一遍权限，点「允许并启用」。点这一行展开，粘贴你的 webhook 地址。然后在 Helmp 里输入 `flomo` 就能用了。
+**5. 启用。** 「设置 › 插件 › 我的插件」：打开开关，看一遍权限，点「允许并启用」。点这一行展开，粘贴你的 webhook 地址。然后在 Helmp 里输入 `flomo`、按 <kbd>Tab</kbd>：搜索栏左侧出现「My flomo」标签，光标已经在表单里，写完按 <kbd>↵</kbd> 就记下了。
 
 ## 清单字段参考
 
@@ -148,12 +148,18 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `title`、`subtitle` | 文案。标题在任何界面语言下都能搜到，支持拼音和首字母（`ggfy` 能找到「谷歌翻译」） |
 | `keywords` | 额外的搜索词。第一个会作为提示里的「关键词」 |
 | `icon`、`tint` | 覆盖插件的图标 |
-| `argument` | `{ "placeholder": 文案, "required": 布尔 }`。输入关键词（或标题）加空格再输入文字，文字作为 `{{query}}` |
+| `argument` | `{ "placeholder": 文案, "required": 布尔 }`。进入命令范围后，搜索框里的文字就是 `{{query}}`；`placeholder` 显示在搜索框里作提示 |
 | `form` | 面板表单视图里的字段（`text`、`textarea`、`select`），每个有 `id`、`label`、`placeholder`、`required`、`default`（模板，只能用 `{{query}}`、日期和非密钥的偏好设置）、`options` |
 | `action` | 回车时做什么。`action` 和 `list` 只能写一个 |
 | `list` | 脚本驱动的列表，见[列表命令](#列表命令) |
 
-带 `argument`、`form` 或 `list` 的命令接受输入：`flomo 你好` 会把 `你好` 作为 `{{query}}`。
+带 `argument`、`form` 或 `list` 的命令接受输入。为了不让日常搜索误触发插件，全局搜索里不会把文字交给它：输入 `flomo`（或 `flomo 你好`、`gh rust`）只列出这个命令，右侧提示 <kbd>Tab</kbd>。在它上面按 <kbd>Tab</kbd>（或 <kbd>↵</kbd>）进入这个命令自己的范围：搜索栏左侧出现插件名的标签（多命令的插件写命令名），颜色同命令图标，然后：
+
+- **表单**命令（flomo）：光标直接进表单，<kbd>↵</kbd> 提交，<kbd>⇧↵</kbd> 换行；
+- **参数**命令（`gh`、`npm`）：搜索框里打的字就是 `{{query}}`，结果里显示将要打开的网址，<kbd>↵</kbd> 执行；
+- **列表**命令：按搜索框里的字运行列表脚本。
+
+按 <kbd>Esc</kbd>，或在搜索框（和表单）为空时按 <kbd>⌫</kbd>，回到全局搜索。不接受输入的命令（打开固定网址、复制一段文字）在全局搜索里照旧回车直接执行。
 
 ### 动作
 
@@ -175,7 +181,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 
 | 变量 | 值 |
 |---|---|
-| `{{query}}` | 关键词后面输入的文字 |
+| `{{query}}` | 命令范围里搜索框的文字（或深链接的 `q`） |
 | `{{form.<id>}}` | 表单字段 |
 | `{{pref.<id>}}` | 偏好设置（secret 只在用到时才读钥匙串） |
 | `{{item.title}}` `{{item.subtitle}}` `{{item.arg}}` `{{item.uid}}` `{{item.url}}` | 选中的列表项（只在 `list.action` 里可用） |
@@ -207,7 +213,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 
 ## 列表命令
 
-列表命令在你输入时（关键词加空格之后）运行脚本，把脚本输出的条目显示成结果。输出格式就是 [Alfred 的 Script Filter JSON](https://www.alfredapp.com/help/workflows/inputs/script-filter/json/)，很多现成脚本可以直接用：
+列表命令在它的范围里（选中命令按 <kbd>Tab</kbd>）随你输入运行脚本，把脚本输出的条目显示成结果。输出格式就是 [Alfred 的 Script Filter JSON](https://www.alfredapp.com/help/workflows/inputs/script-filter/json/)，很多现成脚本可以直接用：
 
 ```json
 {"items": [
@@ -253,10 +259,16 @@ helmp plugins validate path/to/plugin --json
 helmp plugins
 
 # 无副作用地运行：打开、复制、粘贴、发往真实主机的请求都只打印出来。
-HELMP_DRY_RUN=1 helmp query "npm react"
-HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm "npm react"
-HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo "flomo 你好" --form content="你好 #测试"
+# 全局搜索里接受输入的命令只是入口，对它回车只是进入它的范围。
+HELMP_DRY_RUN=1 helmp query "npm"
+HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm npm        # enter scope plugins:dev.helmp.quicklinks/npm
+# --scope <命令结果 id> 相当于选中这个命令按 Tab。
+HELMP_DRY_RUN=1 helmp query --scope plugins:dev.helmp.quicklinks/npm react
+HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm react --scope plugins:dev.helmp.quicklinks/npm
+HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo 你好 --scope plugins:com.example.flomo/memo --form content="你好 #测试"
 ```
+
+全局搜索里没有这个结果、而它的 id 本身是一个命令范围时，`helmp run` 会到这个范围里找，所以 `helmp run plugins:dev.helmp.quicklinks/npm react` 也可以。
 
 演练模式（`HELMP_DRY_RUN=1`）下 `{{clipboard}}` 变成 `[clipboard]`，不读你的剪贴板；发往真实主机的 http 请求只打印 `[dry-run] http POST <地址> <正文>`（密钥打码），不会发出去。脚本照常运行，和脚本命令一致。
 
@@ -283,7 +295,7 @@ Claude Code、Codex 这类 coding agent 可以通过 Helmp 的 MCP 服务（`hel
 
 ## 深链接
 
-`helmp://plugin/<插件 id>/<命令 id>?q=<文字>` 调用一个命令，相当于输入它的关键词、空格和 `<文字>`。只打开链接的命令会直接执行；带表单、发 http 请求、跑脚本或读写剪贴板的命令只在面板里显示出来，等你回车，所以网页里的链接没法替你提交任何内容。见 [deeplinks.md](deeplinks.md)。
+`helmp://plugin/<插件 id>/<命令 id>?q=<文字>` 调用一个命令。只打开链接（且必填内容都有）的命令直接执行；接受输入的命令打开面板并进入它的范围，`<文字>` 作为输入（flomo 表单已填好），等你回车；其余命令也只在面板里显示出来等你回车，所以网页里的链接没法替你提交任何内容。见 [deeplinks.md](deeplinks.md)。
 
 ```bash
 open "helmp://plugin/dev.helmp.quicklinks/npm?q=react"

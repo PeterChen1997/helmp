@@ -5,8 +5,12 @@
 //! - 发现、启用状态、热重载：`registry`（自带插件编译进来，用户插件在 `<data_dir>/plugins/`）。
 //! - 执行动作：`exec`；secret 偏好设置：`secrets`（只存钥匙串）。
 //! - 每个命令一个结果，id 为 `plugins:<插件 id>/<命令 id>`；列表命令的每一项为 `…#<uid>`。
-//! - 匹配：命令标题（中英、拼音、首字母都行）与 keywords；命令接受输入（argument / form / list）时，
-//!   「关键词 + 空格 + 文字」把文字作为 `{{query}}`。
+//! - 匹配：命令标题（中英、拼音、首字母都行）与 keywords；「关键词 + 空格 + 文字」也算命中这个命令。
+//! - 接受输入的命令（argument / form / list）在全局搜索里只是一个入口，不吃掉关键词后面的文字：
+//!   Tab（或回车）进入这个命令自己的范围（id 同结果 id，搜索栏左侧出现插件标签），在范围里再输入，
+//!   回车才执行。这样日常搜索打出「flomo 什么」也不会误把内容提交出去（二次确认）。
+//!   范围里：表单命令（flomo）焦点直接进表单、回车提交；参数命令（gh）搜索框的字就是 `{{query}}`；
+//!   列表命令按搜索框的字运行脚本。不接受输入的命令照旧在全局搜索里回车直接执行。
 //! - 另有「插件管理」命令，打开设置 › 插件。
 //!
 //! 开发者文档：docs/plugins.md。
@@ -31,7 +35,7 @@ use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::provider::{
     Accessory, Action, ActionInput, Block, Detail, Field, FieldKind, Form, Icon, Item, NamedAction,
-    Outcome, Provider, Tint,
+    Outcome, Provider, Scope, Tint,
 };
 use crate::settings::Page;
 use manifest::{ActionSpec, Command, FieldType, PrefKind};
@@ -95,23 +99,160 @@ impl Provider for Plugins {
                 continue;
             };
             for command in &plugin.manifest.commands {
-                let Some((score, rest)) = match_command(command, query) else {
+                let Some(score) = match_command(command, query) else {
                     continue;
                 };
-                match (&command.list, rest) {
-                    (Some(list), Some(rest)) if rest.chars().count() >= list.min_query_length => {
-                        items.extend(self.list_items(plugin, command, list, &rest));
-                    }
-                    (_, rest) => items.push(command_item(
-                        plugin,
-                        command,
-                        score,
-                        rest.as_deref().unwrap_or_default(),
-                    )),
-                }
+                items.push(if accepts_input(command) {
+                    entry_item(plugin, command, score)
+                } else {
+                    command_item(plugin, command, score, "")
+                });
             }
         }
         items
+    }
+
+    fn command_scope(&self, id: &str) -> Option<Scope> {
+        let (plugin, command_id) = scoped_command(id)?;
+        let command = plugin.manifest.command(&command_id)?;
+        Some(command_scope(&plugin, command))
+    }
+
+    fn query_command(&self, id: &str, query: &str) -> Vec<Item> {
+        let Some((plugin, command_id)) = scoped_command(id) else {
+            return Vec::new();
+        };
+        let Some(command) = plugin.manifest.command(&command_id) else {
+            return Vec::new();
+        };
+        match &command.list {
+            Some(list) if query.chars().count() >= list.min_query_length => {
+                self.list_items(&plugin, command, list, query)
+            }
+            _ => vec![command_item(&plugin, command, PREFIX_SCORE, query)],
+        }
+    }
+}
+
+/// 命令范围 id（就是入口结果的 id）→ 已启用的插件与命令 id。只认接受输入的命令。
+fn scoped_command(id: &str) -> Option<(Arc<Plugin>, String)> {
+    let rest = id.strip_prefix(PROVIDER_ID)?.strip_prefix(':')?;
+    let (plugin_id, command_id) = rest.split_once('/')?;
+    let plugin = enabled_plugin(plugin_id).ok()?;
+    let command = plugin.manifest.command(command_id)?;
+    accepts_input(command).then(|| (plugin, command_id.to_string()))
+}
+
+/// 已启用、加载成功的插件；否则返回给人看的原因（深链接打印到 stderr）。
+fn enabled_plugin(plugin_id: &str) -> Result<Arc<Plugin>, String> {
+    if !crate::config::extension_enabled(PROVIDER_ID) {
+        return Err(tr("插件扩展已停用", "The Plugins extension is turned off").into());
+    }
+    let entries = registry::current();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.id == plugin_id)
+        .ok_or_else(|| trf!("没有插件 {plugin_id}", "No plugin {plugin_id}"))?;
+    if entry.state(&crate::config::get()) != State::Enabled {
+        return Err(trf!(
+            "插件 {plugin_id} 未启用",
+            "Plugin {plugin_id} isn't enabled"
+        ));
+    }
+    entry
+        .plugin()
+        .cloned()
+        .ok_or_else(|| trf!("插件 {plugin_id} 出错", "Plugin {plugin_id} has errors"))
+}
+
+fn item_id(plugin: &Plugin, command: &Command) -> String {
+    format!("{PROVIDER_ID}:{}/{}", plugin.id(), command.id)
+}
+
+/// 命令范围：标签写插件名（只有一个命令的插件，如 flomo）或命令名（快捷搜索里的 GitHub、npm…），
+/// 颜色跟命令图标；占位文字说明在范围里要输入什么。
+fn command_scope(plugin: &Plugin, command: &Command) -> Scope {
+    let label = if plugin.manifest.commands.len() == 1 {
+        plugin.manifest.name.get().to_string()
+    } else {
+        command.title.get().to_string()
+    };
+    let tint = match command_icon(plugin, command) {
+        Icon::Symbol { tint, .. } => tint,
+        _ => command
+            .tint
+            .as_ref()
+            .or(plugin.manifest.tint.as_ref())
+            .and_then(|tint| manifest::parse_tint(tint))
+            .unwrap_or(Tint::Gray),
+    };
+    let placeholder = if command.form.is_empty() {
+        input_hint(command)
+    } else {
+        tr(
+            "在下面填写，回车提交 · Esc 返回",
+            "Fill in the form, then press Return · Esc to go back",
+        )
+        .to_string()
+    };
+    Scope {
+        id: item_id(plugin, command),
+        label,
+        tint,
+        prefixes: Vec::new(),
+        placeholder,
+        filters: Vec::new(),
+    }
+}
+
+/// 参数 / 列表命令在范围里要输入什么：清单里参数的 placeholder，没有就用通用说法。
+fn input_hint(command: &Command) -> String {
+    command
+        .argument
+        .as_ref()
+        .and_then(|argument| argument.placeholder.as_ref())
+        .map(|placeholder| placeholder.get().to_string())
+        .unwrap_or_else(|| {
+            if command.list.is_some() {
+                tr("输入要找的内容", "Type to search").to_string()
+            } else {
+                tr("输入内容", "Type here").to_string()
+            }
+        })
+}
+
+/// 全局搜索里接受输入的命令：只是一个入口，Tab 或回车进入它的范围（不带上搜索框里的文字）。
+fn entry_item(plugin: &Arc<Plugin>, command: &Command, score: u32) -> Item {
+    let id = item_id(plugin, command);
+    let subtitle = command
+        .subtitle
+        .as_ref()
+        .map(|text| text.get().to_string())
+        .unwrap_or_else(|| {
+            let what = input_hint(command);
+            trf!("按 Tab 进入后输入：{what}", "Press Tab, then type: {what}")
+        });
+    Item {
+        id: id.clone(),
+        title: command.title.get().to_string(),
+        subtitle,
+        badge: badge().into(),
+        score,
+        icon: command_icon(plugin, command),
+        accessories: vec![
+            Accessory::Text(plugin.manifest.name.get().to_string()),
+            Accessory::Keys(vec!["Tab".into()]),
+        ],
+        // 进入范围不隐藏面板：先收起再弹出会闪一下。
+        action: Action::enter_scope(id.clone()).keep_open(),
+        action_title: tr("进入", "Open").into(),
+        actions: vec![NamedAction::new(
+            tr("插件设置", "Plugin Settings"),
+            None,
+            open_settings(),
+        )],
+        opens_scope: Some(id),
+        ..Item::blank()
     }
 }
 
@@ -126,18 +267,19 @@ fn names(command: &Command) -> Vec<&str> {
 }
 
 /// 命令是否接受「关键词后面的文字」。
-fn accepts_input(command: &Command) -> bool {
+pub fn accepts_input(command: &Command) -> bool {
     command.argument.is_some() || !command.form.is_empty() || command.list.is_some()
 }
 
-/// (分数, 关键词后面的文字)。文字为 None 表示只是模糊命中了名字。
-fn match_command(command: &Command, query: &str) -> Option<(u32, Option<String>)> {
-    if accepts_input(command) {
-        for name in names(command) {
-            if let Some(rest) = strip_name(query, name) {
-                return Some((PREFIX_SCORE, Some(rest.to_string())));
-            }
-        }
+/// 命中分数。接受输入的命令，「关键词 + 空格 + 文字」也算完全命中（只用来排序，
+/// 后面的文字不会被当作输入：要 Tab 进入命令范围后再输入）。
+fn match_command(command: &Command, query: &str) -> Option<u32> {
+    if accepts_input(command)
+        && names(command)
+            .into_iter()
+            .any(|name| strip_name(query, name).is_some())
+    {
+        return Some(PREFIX_SCORE);
     }
     // 只认字面或拼音命中，不认「字母按顺序出现」的模糊匹配：插件命令名普遍较长，
     // 模糊匹配会让 uuid 这类查询冒出「Obsidian 快速记录」之类毫不相关的结果。
@@ -146,7 +288,6 @@ fn match_command(command: &Command, query: &str) -> Option<(u32, Option<String>)
         .filter_map(|name| matcher::score(query, name))
         .filter(|score| *score >= MIN_NAME_SCORE)
         .max()
-        .map(|score| (score, None))
 }
 
 /// 命令名匹配的最低分：拼音中段命中（550）及以上；字面/拼音模糊匹配（400 / 300）不算。
@@ -359,30 +500,9 @@ fn command_item(plugin: &Arc<Plugin>, command: &Command, score: u32, query: &str
         }
         _ => None,
     };
-    let hint = || {
-        let what = command
-            .argument
-            .as_ref()
-            .and_then(|argument| argument.placeholder.as_ref())
-            .map(|placeholder| placeholder.get().to_string())?;
-        let keyword = trigger(command);
-        Some(trf!(
-            "输入 {keyword} 加空格，再输入{what}",
-            "Type {keyword}, a space, then {what}"
-        ))
-    };
     let subtitle = preview
         .or_else(|| command.subtitle.as_ref().map(|text| text.get().to_string()))
-        .or_else(|| {
-            command.list.is_some().then(|| {
-                trf!(
-                    "输入 {} 加空格开始搜索",
-                    "Type {} and a space to search",
-                    trigger(command)
-                )
-            })
-        })
-        .or_else(hint)
+        .or_else(|| accepts_input(command).then(|| input_hint(command)))
         .unwrap_or_else(|| plugin.manifest.name.get().to_string());
     let action = {
         let (plugin, command_id, query, icon) = (
@@ -396,7 +516,7 @@ fn command_item(plugin: &Arc<Plugin>, command: &Command, score: u32, query: &str
         })
     };
     Item {
-        id: format!("{PROVIDER_ID}:{}/{}", plugin.id(), command.id),
+        id: item_id(plugin, command),
         title,
         subtitle,
         badge: badge().into(),
@@ -434,9 +554,8 @@ fn run_command(
     }
     if command.list.is_some() {
         return Ok(Outcome::Message(trf!(
-            "输入 {} 加空格，再输入要找的内容",
-            "Type {}, a space, then what you're looking for",
-            trigger(command)
+            "「{title}」：先在搜索框里输入要找的内容",
+            "“{title}”: type what you're looking for in the search bar first"
         )));
     }
     if command
@@ -452,9 +571,8 @@ fn run_command(
             .map(|placeholder| placeholder.get().to_string())
             .unwrap_or_else(|| tr("内容", "something").to_string());
         return Ok(Outcome::Message(trf!(
-            "「{title}」需要输入内容：输入 {} 加空格，再输入{what}",
-            "“{title}” needs input: type {}, a space, then {what}",
-            trigger(command)
+            "「{title}」需要输入内容：在搜索框里输入{what}",
+            "“{title}” needs input: type {what} in the search bar"
         )));
     }
     let form = effective_form(plugin, command, query, &input.form);
@@ -690,7 +808,9 @@ fn manage_item(query: &str) -> Option<Item> {
 /// 深链接 `helmp://plugin/<插件 id>/<命令 id>?q=` 的目标。
 pub struct LinkTarget {
     pub item: Item,
-    /// 在搜索框里显示的查询（关键词 + 空格 + q），让面板出现同一个结果。
+    /// 接受输入的命令：面板直接进入这个命令范围，q 作为范围里的输入（表单初值 / 参数 / 列表搜索词）。
+    pub scope: Option<String>,
+    /// 不接受输入的命令：在搜索框里显示的查询（命令关键词），让面板出现这个命令，等用户回车。
     pub query: String,
     /// 只打开链接、不需要表单的命令直接执行；会发请求、跑脚本、碰剪贴板的命令只显示出来，等用户回车
     /// （网页里的链接也能触发深链接，不能让它替用户提交内容）。
@@ -698,38 +818,17 @@ pub struct LinkTarget {
 }
 
 pub fn link_target(plugin_id: &str, command_id: &str, q: &str) -> Result<LinkTarget, String> {
-    if !crate::config::extension_enabled(PROVIDER_ID) {
-        return Err(tr("插件扩展已停用", "The Plugins extension is turned off").into());
-    }
-    let entries = registry::current();
-    let entry = entries
-        .iter()
-        .find(|entry| entry.id == plugin_id)
-        .ok_or_else(|| trf!("没有插件 {plugin_id}", "No plugin {plugin_id}"))?;
-    if entry.state(&crate::config::get()) != State::Enabled {
-        return Err(trf!(
-            "插件 {plugin_id} 未启用",
-            "Plugin {plugin_id} isn't enabled"
-        ));
-    }
-    let plugin = entry
-        .plugin()
-        .ok_or_else(|| trf!("插件 {plugin_id} 出错", "Plugin {plugin_id} has errors"))?;
+    let plugin = enabled_plugin(plugin_id)?;
     let command = plugin.manifest.command(command_id).ok_or_else(|| {
         trf!(
             "插件 {plugin_id} 没有命令 {command_id}",
             "Plugin {plugin_id} has no command {command_id}"
         )
     })?;
-    let keyword = trigger(command);
-    let query = if q.is_empty() {
-        keyword
-    } else {
-        format!("{keyword} {q}")
-    };
     Ok(LinkTarget {
-        item: command_item(plugin, command, PREFIX_SCORE, q),
-        query,
+        item: command_item(&plugin, command, PREFIX_SCORE, q),
+        scope: accepts_input(command).then(|| item_id(&plugin, command)),
+        query: trigger(command),
         run_now: link_runs_now(command, q),
     })
 }
@@ -761,25 +860,48 @@ mod tests {
     }
 
     #[test]
-    fn keyword_plus_space_passes_the_rest_as_query() {
-        // 「gh react」要把 react 当查询，而不是去模糊匹配整句。
+    fn root_search_only_offers_an_entry_and_never_consumes_the_text() {
+        // 用户日常搜索里打出「gh rust」「flomo 什么」不能就地变成可执行的网址 / 填好的表单（误触发），
+        // 只给一个命令入口：Tab 或回车进入命令自己的范围，在范围里输入后才执行。
         let plugin = bundled("dev.helmp.quicklinks");
         let gh = plugin.manifest.command("gh").unwrap();
-        assert_eq!(
-            match_command(gh, "gh react hooks"),
-            Some((PREFIX_SCORE, Some("react hooks".into())))
-        );
-        // `ghx` 不是 `gh` + 参数。
-        assert_ne!(
-            match_command(gh, "ghx").and_then(|(_, rest)| rest),
-            Some("x".into())
-        );
-        let item = command_item(&plugin, gh, PREFIX_SCORE, "a&b");
-        assert_eq!(
-            item.subtitle,
-            "https://github.com/search?q=a%26b&type=repositories"
-        );
-        assert_eq!(item.id, "plugins:dev.helmp.quicklinks/gh");
+        // 「关键词 + 空格 + 文字」仍算命中这个命令（排在前面，方便 Tab），但后面的文字不被拿走。
+        assert_eq!(match_command(gh, "gh react hooks"), Some(PREFIX_SCORE));
+        assert_eq!(match_command(gh, "gh"), Some(PREFIX_SCORE));
+        let entry = entry_item(&plugin, gh, PREFIX_SCORE);
+        let id = "plugins:dev.helmp.quicklinks/gh";
+        assert_eq!(entry.id, id);
+        assert_eq!(entry.opens_scope.as_deref(), Some(id));
+        assert!(entry.form.is_none(), "入口不能带表单");
+        assert!(!entry.subtitle.contains("github.com"), "入口不能给出可执行的网址：{}", entry.subtitle);
+        assert_eq!(entry.action.run().unwrap(), Outcome::EnterScope(id.into()));
+        assert!(entry.action.keeps_open(), "进入范围不该先收起面板");
+
+        // 范围里搜索框的字才是 {{query}}：给出编码正确的网址，回车打开。
+        let ready = command_item(&plugin, gh, PREFIX_SCORE, "a&b");
+        assert_eq!(ready.subtitle, "https://github.com/search?q=a%26b&type=repositories");
+        assert_eq!(ready.id, id);
+        assert!(ready.opens_scope.is_none(), "范围里的结果不能再进范围");
+    }
+
+    #[test]
+    fn command_scopes_name_the_plugin_and_explain_the_input() {
+        // 进入范围后搜索栏左侧的标签要让用户知道进了哪个插件：只有一个命令的插件写插件名（flomo），
+        // 快捷搜索这类多命令插件写命令名；颜色跟命令图标；占位文字说明要输入什么。
+        crate::i18n::with_lang(crate::i18n::Lang::Zh, || {
+            let flomo = bundled("dev.helmp.flomo");
+            let scope = command_scope(&flomo, flomo.manifest.command("memo").unwrap());
+            assert_eq!(scope.id, "plugins:dev.helmp.flomo/memo");
+            assert_eq!(scope.label, "flomo");
+            assert_eq!(scope.tint, Tint::Green);
+            assert!(scope.placeholder.contains("回车提交"), "{}", scope.placeholder);
+            assert!(scope.prefixes.is_empty(), "命令范围不能靠打字前缀进入（那就又是误触发）");
+            let quicklinks = bundled("dev.helmp.quicklinks");
+            let scope = command_scope(&quicklinks, quicklinks.manifest.command("gh").unwrap());
+            assert_eq!(scope.label, "GitHub 仓库");
+            assert_eq!(scope.placeholder, "仓库名");
+            assert_eq!(scope.tint, Tint::Graphite);
+        });
     }
 
     #[test]
@@ -796,7 +918,7 @@ mod tests {
 
     #[test]
     fn form_defaults_render_the_query() {
-        // 「flomo 今天学到了」直接把文字带进表单，少打一遍。
+        // flomo 范围里的文字（深链接的 q、范围里打的字）带进表单，少打一遍。
         let plugin = bundled("dev.helmp.flomo");
         let memo = plugin.manifest.command("memo").unwrap();
         let form = form_for(&plugin, memo, "今天学到了").unwrap();

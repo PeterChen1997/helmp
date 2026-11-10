@@ -142,7 +142,17 @@ fn describe(item: &Item) -> Value {
         "actions": item.actions.iter().map(|a| a.title.clone()).collect::<Vec<_>>(),
         "form": form,
         "needs_approval": !is_pure(&item.id, None),
+        // 要输入内容的命令（插件命令、带参数的 MCP 工具）：在面板里要 Tab 进入它的范围才能输入；
+        // agent 用同一个 scope 调 helmp_search / helmp_run，query 就是要输入的内容。
+        "scope": item.opens_scope,
     })
+}
+
+/// 可选的 `scope` 参数。
+fn scope_arg(args: &Value) -> Option<&str> {
+    args.get("scope")
+        .and_then(Value::as_str)
+        .filter(|scope| !scope.is_empty())
 }
 
 pub fn search(server: &Server, args: &Value) -> Result<ToolOutput> {
@@ -155,10 +165,16 @@ pub fn search(server: &Server, args: &Value) -> Result<ToolOutput> {
         .and_then(Value::as_u64)
         .unwrap_or(20)
         .clamp(1, 50) as usize;
+    let scope = scope_arg(args);
     server.ensure_started();
+    if let Some(scope) = scope
+        && server.engine.scope(scope).is_none()
+    {
+        bail!("No scope {scope}: use the `scope` of a result from helmp_search");
+    }
     let show_private = expose_private();
     let mut hidden = 0;
-    let results: Vec<Value> = crate::cli::lookup(&server.engine, query)
+    let results: Vec<Value> = crate::cli::lookup_in(&server.engine, scope, query)
         .iter()
         .filter(|item| {
             let keep = show_private || !is_private(&item.id);
@@ -171,7 +187,7 @@ pub fn search(server: &Server, args: &Value) -> Result<ToolOutput> {
     let mut text = String::new();
     for result in &results {
         text.push_str(&format!(
-            "{}\t{}\t{}\t[{}{}]\n",
+            "{}\t{}\t{}\t[{}{}]{}\n",
             result["id"].as_str().unwrap_or_default(),
             result["title"].as_str().unwrap_or_default(),
             result["subtitle"].as_str().unwrap_or_default(),
@@ -180,6 +196,10 @@ pub fn search(server: &Server, args: &Value) -> Result<ToolOutput> {
                 ", needs approval"
             } else {
                 ""
+            },
+            match result["scope"].as_str() {
+                Some(scope) => format!(" takes input: pass scope={scope:?} and the input as query"),
+                None => String::new(),
             },
         ));
     }
@@ -193,7 +213,7 @@ pub fn search(server: &Server, args: &Value) -> Result<ToolOutput> {
     }
     Ok(ToolOutput::ok(
         text,
-        json!({"query": query, "results": results, "hidden_private": hidden}),
+        json!({"query": query, "scope": scope, "results": results, "hidden_private": hidden}),
     ))
 }
 
@@ -211,15 +231,21 @@ pub fn run(server: &Server, args: &Value) -> Result<ToolOutput> {
         .and_then(Value::as_str)
         .filter(|a| !a.is_empty());
     let form = string_map(args.get("form"));
+    let scope = scope_arg(args);
     if is_private(id) && !expose_private() {
         bail!(
             "{id} is private (clipboard history, agent sessions or recently used items) and isn't available to agents"
         );
     }
     server.ensure_started();
-    let found = crate::cli::lookup(&server.engine, query)
-        .into_iter()
-        .find(|item| item.id == id);
+    let found = crate::cli::find(&server.engine, id, query, scope);
+    // 选中的是要输入内容的命令的入口：执行它只会在面板里进入范围，什么也没做。说清楚怎么在范围里运行。
+    if let Some(entry) = found.as_ref().and_then(|item| item.opens_scope.as_deref()) {
+        bail!(
+            "{id} takes input: call helmp_run again with scope={entry:?} and query set to the input \
+             (the text to save, the term to search for…); its form fields go in `form`."
+        );
+    }
     let pure = is_pure(id, named);
     let local = pure || std::env::var("HELMP_DRY_RUN").as_deref() == Ok("1");
     let not_found = || {
@@ -265,7 +291,7 @@ pub fn run(server: &Server, args: &Value) -> Result<ToolOutput> {
     };
     let request = json!({
         "v": 1, "type": "run", "agent": server.agent_name(),
-        "query": query, "id": id, "action": named, "form": form,
+        "query": query, "scope": scope, "id": id, "action": named, "form": form,
     });
     let reply = match ipc::request(&request, ipc::CONFIRM_TIMEOUT + Duration::from_secs(160)) {
         Ok(reply) => reply,

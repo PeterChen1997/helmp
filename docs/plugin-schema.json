@@ -144,7 +144,7 @@
         "icon": { "$ref": "#/$defs/icon" },
         "tint": { "$ref": "#/$defs/tint" },
         "argument": {
-          "description": "Text typed after the keyword becomes {{query}}.",
+          "description": "The command takes a line of input: select it and press Tab, and the text typed in the search bar becomes {{query}}.",
           "type": "object",
           "additionalProperties": false,
           "properties": { "placeholder": { "$ref": "#/$defs/text" }, "required": { "type": "boolean" } }

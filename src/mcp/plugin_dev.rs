@@ -588,12 +588,14 @@ pub fn test(server: &Server, args: &Value) -> Result<ToolOutput> {
             ids.join(", ")
         )
     })?;
-    let query = if input.is_empty() {
-        trigger(command)
-    } else {
-        format!("{} {input}", trigger(command))
-    };
     let base_id = format!("plugins:{id}/{command_id}");
+    // 要输入内容的命令：和面板里一样，在命令自己的范围里（选中后按 Tab）输入，input 就是范围里的文字。
+    // 不接受输入的命令在全局搜索里用触发词找到。
+    let (scope, query) = if crate::providers::plugins::accepts_input(command) {
+        (Some(base_id.clone()), input.to_string())
+    } else {
+        (None, trigger(command))
+    };
     let result_id = match item_uid {
         Some(uid) => format!("{base_id}#{uid}"),
         None => base_id.clone(),
@@ -603,7 +605,7 @@ pub fn test(server: &Server, args: &Value) -> Result<ToolOutput> {
         // 真跑：交给用户的 Helmp，经面板确认。插件必须已安装并启用。
         let request = json!({
             "v": 1, "type": "run", "agent": server.agent_name(),
-            "query": query, "id": result_id, "action": null, "form": form,
+            "query": query, "scope": scope, "id": result_id, "action": null, "form": form,
         });
         let reply = match ipc::request(&request, ipc::CONFIRM_TIMEOUT + Duration::from_secs(160)) {
             Ok(reply) => reply,
@@ -679,13 +681,17 @@ pub fn test(server: &Server, args: &Value) -> Result<ToolOutput> {
         .env_remove("HELMP_TRACE");
     let list_mode = command.list.is_some() && item_uid.is_none();
     if list_mode {
-        child.args(["query", &query]);
+        child.arg("query");
     } else {
-        child.args(["run", &result_id, &query]);
+        child.args(["run", &result_id]);
         for (key, value) in &form {
             child.args(["--form", &format!("{key}={value}")]);
         }
     }
+    if let Some(scope) = &scope {
+        child.args(["--scope", scope]);
+    }
+    child.arg(&query);
     let out = child.output().context("run helmp")?;
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();

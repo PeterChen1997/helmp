@@ -140,18 +140,20 @@ impl Helmp {
     }
 
     pub fn query(&self, text: &str) -> Vec<Row> {
-        self.cli(&["query", text])
-            .lines()
-            .filter_map(|line| {
-                let mut cols = line.split('\t');
-                Some(Row {
-                    badge: cols.next()?.to_string(),
-                    title: cols.next()?.to_string(),
-                    subtitle: cols.next()?.to_string(),
-                    id: cols.next()?.to_string(),
-                })
-            })
-            .collect()
+        rows(&self.cli(&["query", text]))
+    }
+
+    /// 在某个范围里查询（`helmp query --scope`）。命令范围 `plugins:<插件>/<命令>` 相当于在面板里
+    /// 选中这个命令、按 Tab 进入后再输入 `text`。
+    pub fn query_in(&self, scope: &str, text: &str) -> Vec<Row> {
+        rows(&self.cli(&["query", "--scope", scope, text]))
+    }
+
+    /// `helmp run <id> <query> --scope <scope> [extra...]`：在范围里输入 `query` 后执行 `id`。
+    pub fn run_in(&self, scope: &str, id: &str, query: &str, extra: &[&str]) -> String {
+        let mut args = vec!["run", id, query, "--scope", scope];
+        args.extend_from_slice(extra);
+        self.cli(&args)
     }
 
     /// 查询后找出第一条满足条件的结果，找不到时把全部结果打出来。
@@ -179,6 +181,21 @@ impl Drop for Helmp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
+}
+
+/// `helmp query` 的输出：每行 badge \t title \t subtitle \t id。
+fn rows(out: &str) -> Vec<Row> {
+    out.lines()
+        .filter_map(|line| {
+            let mut cols = line.split('\t');
+            Some(Row {
+                badge: cols.next()?.to_string(),
+                title: cols.next()?.to_string(),
+                subtitle: cols.next()?.to_string(),
+                id: cols.next()?.to_string(),
+            })
+        })
+        .collect()
 }
 
 pub fn repo_file(relative: &str) -> PathBuf {

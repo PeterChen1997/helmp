@@ -140,7 +140,7 @@ impl Provider for Agents {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: SCOPE_ID,
+            id: SCOPE_ID.into(),
             label: tr("Agent 会话", "Agent Sessions").into(),
             tint: Tint::Purple,
             prefixes: vec!["ag ".into(), "agent ".into()],

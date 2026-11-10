@@ -47,8 +47,12 @@ logic is needed. You build plugins with the `helmp_plugin_*` tools of this MCP s
 `helmp_search` finds launcher results (apps, calculator, conversions, time zones, developer tools, plugin
 commands…). `helmp_run` runs one: pure computations return their text directly; anything with a side effect
 (opening, copying, pasting, killing processes, window moves, toggles, plugin HTTP requests, scripts, system
-commands) is shown to the user in the Helmp panel and runs only if they press Return. Clipboard history and
-agent session transcripts are hidden from you unless the user opted in.
+commands) is shown to the user in the Helmp panel and runs only if they press Return. Commands that take
+input (plugin commands with an argument, form or list; MCP tools with arguments) only show up as an entry in
+the main search, with a `scope`: the user presses Tab on them and types inside that scope. Do the same: pass
+that `scope` to `helmp_search` / `helmp_run` with the input as `query` (`flomo` → scope
+`plugins:dev.helmp.flomo/memo`, query = the memo). Clipboard history and agent session transcripts are hidden
+from you unless the user opted in.
 
 ## Example: "send the selected text to a Feishu (Lark) bot"
 

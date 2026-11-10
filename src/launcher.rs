@@ -117,6 +117,15 @@ impl FormState {
         })
     }
 
+    /// 所有文本字段都是空的（连空格、换行也没有）：命令范围里再按 ⌫ 就退出范围。
+    fn is_blank(&self, cx: &App) -> bool {
+        self.states.iter().all(|state| match state {
+            FieldState::Line(input) => input.read(cx).value().is_empty(),
+            FieldState::Area(area) => area.read(cx).value().is_empty(),
+            FieldState::Select(_) => true,
+        })
+    }
+
     fn focused(&self, window: &Window, cx: &App) -> bool {
         self.states.iter().any(|state| match state {
             FieldState::Line(input) => input.read(cx).focus_handle(cx).is_focused(window),
@@ -272,8 +281,8 @@ impl Launcher {
         &self.query
     }
 
-    pub fn scope_id(&self) -> Option<&'static str> {
-        self.scope.as_ref().map(|active| active.scope.id)
+    pub fn scope_id(&self) -> Option<&str> {
+        self.scope.as_ref().map(|active| active.scope.id.as_str())
     }
 
     pub fn message(&self) -> Option<String> {
@@ -440,7 +449,7 @@ impl Launcher {
         }
         self.lang_generation = generation;
         if let Some(active) = self.scope.as_mut()
-            && let Some(scope) = self.engine.scope(active.scope.id)
+            && let Some(scope) = self.engine.scope(&active.scope.id)
         {
             active.scope = scope;
         }
@@ -484,7 +493,7 @@ impl Launcher {
             && let Some((scope, rest)) = self.engine.resolve_prefix(&value)
         {
             // 输入了范围前缀（如「cb 」）：进入范围，把前缀从输入框里拿掉。
-            self.engine.will_enter(scope.id, false);
+            self.engine.will_enter(&scope.id, false);
             self.enter_scope(scope, rest, window, cx);
             return;
         }
@@ -538,9 +547,21 @@ impl Launcher {
         self.refresh(cx);
     }
 
-    /// Tab：进入选中项所属插件的范围（如在首页选中「翻译」「剪贴板历史」，或某条剪贴板记录）。
+    /// Tab：选中的是要输入内容的命令（`opens_scope`，如 flomo）就进入它自己的范围；否则进入选中项
+    /// 所属插件的范围（如在首页选中「翻译」「剪贴板历史」，或某条剪贴板记录）。
     fn tab_scope(&self) -> Option<Scope> {
-        self.engine.scope(provider_of(&self.selected_item()?.id)?)
+        let item = self.selected_item()?;
+        match &item.opens_scope {
+            Some(id) => self.engine.scope(id),
+            None => self.engine.scope(provider_of(&item.id)?),
+        }
+    }
+
+    /// 当前是命令范围、选中的就是这个命令自己的表单（范围 id 就是结果 id），且表单全空。
+    fn own_form_is_blank(&self, cx: &App) -> bool {
+        self.form.as_ref().is_some_and(|form| {
+            self.scope_id() == Some(form.item_id.as_str()) && form.is_blank(cx)
+        })
     }
 
     /// 范围内 ↑（`older = true`）/ ↓ 翻历史输入。返回是否处理了这次按键。
@@ -593,13 +614,13 @@ impl Launcher {
         let scope = self
             .scope
             .as_ref()
-            .map(|active| (active.scope.id, active.filter_name().to_string()));
+            .map(|active| (active.scope.id.clone(), active.filter_name().to_string()));
         let window_handle = self.window_handle;
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let items = cx
                 .background_spawn(async move {
                     match scope {
-                        Some((scope, filter)) => engine.query_scoped(scope, &query, &filter),
+                        Some((scope, filter)) => engine.query_scoped(&scope, &query, &filter),
                         None => engine.query(&query),
                     }
                 })
@@ -754,14 +775,16 @@ impl Launcher {
         } else {
             Vec::new()
         };
+        let own_form = self.scope_id() == Some(item_id.as_str());
         self.form = Some(FormState {
             item_id,
             form,
             states,
             _subscriptions: subscriptions,
         });
-        // 输入即译的表单（翻译）：进入范围后文字直接打在表单的文本框里，不用再点一下。
-        if (std::mem::take(&mut self.focus_form) && auto_run) || had_focus {
+        // 输入即译的表单（翻译）、命令范围里这个命令自己的表单（flomo，范围 id 就是结果 id）：
+        // 进入范围后文字直接打在表单的文本框里，不用再点一下。
+        if (std::mem::take(&mut self.focus_form) && (auto_run || own_form)) || had_focus {
             self.focus_form_field(window, cx);
         }
         if auto_run {
@@ -922,9 +945,8 @@ impl Launcher {
         } else {
             action
         };
-        let scope_id = self.scope_id();
         if record && !item.id.starts_with("recent:") {
-            crate::history::record(&item, &self.query, scope_id);
+            crate::history::record(&item, &self.query, self.scope_id());
         }
 
         // 只有提交表单本身（回车运行）才在原地显示结果；结果上的操作（复制、替换）要先隐藏面板，
@@ -978,14 +1000,14 @@ impl Launcher {
                             return;
                         }
                         Ok(Outcome::EnterScope(scope)) => {
-                            this.open_scope(scope, window, cx);
+                            this.open_scope(&scope, window, cx);
                             return;
                         }
                         Ok(Outcome::EnterScopeWith(scope, text)) => {
-                            if this.scope_id() == Some(scope) {
+                            if this.scope_id() == Some(scope.as_str()) {
                                 this.exit_scope(window, cx);
                             }
-                            this.open_scope_with(scope, text, window, cx);
+                            this.open_scope_with(&scope, text, window, cx);
                             return;
                         }
                         Ok(Outcome::Dismiss) => {
@@ -1205,12 +1227,20 @@ impl Launcher {
             "enter" if !mods.platform && !mods.alt && !mods.control => {
                 self.execute_selected(window, cx)
             }
-            // 首页 / 全局搜索：Tab 进入选中项所属的扩展（如「翻译」「剪贴板历史」）。
-            "tab" if !mods.modified() && !form_focused && self.scope.is_none() => {
+            // 首页 / 全局搜索：Tab 进入选中项所属的扩展（如「翻译」「剪贴板历史」）或选中命令自己的范围
+            // （flomo、gh 这类要输入内容的插件命令）。范围里选中的也是命令入口（如 MCP 范围里的工具）时同样进入。
+            "tab"
+                if !mods.modified()
+                    && !form_focused
+                    && (self.scope.is_none()
+                        || self
+                            .selected_item()
+                            .is_some_and(|item| item.opens_scope.is_some())) =>
+            {
                 let Some(scope) = self.tab_scope() else {
                     return;
                 };
-                self.engine.will_enter(scope.id, false);
+                self.engine.will_enter(&scope.id, false);
                 self.enter_scope(scope, String::new(), window, cx);
             }
             "tab" if !mods.modified() && !form_focused => {
@@ -1238,7 +1268,13 @@ impl Launcher {
                     self.hide(window, cx);
                 }
             }
-            "backspace" if self.scope.is_some() && self.query.is_empty() && !form_focused => {
+            // 范围里删空了再按 ⌫ 退出范围。命令范围的焦点在命令自己的表单里（flomo）：表单也全空时同样退出
+            // （翻译的文本框不算：那里 ⌫ 只是删字）。
+            "backspace"
+                if self.scope.is_some()
+                    && self.query.is_empty()
+                    && (!form_focused || self.own_form_is_blank(cx)) =>
+            {
                 self.exit_scope(window, cx);
             }
             _ => return,

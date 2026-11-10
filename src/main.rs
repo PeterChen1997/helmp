@@ -124,6 +124,7 @@ fn run_gui(engine: Engine) {
 /// - `HELMP_SELF_TEST_EXEC`：可选，输入这个查询后回车执行第一条结果，并报告面板上的消息。
 /// - `HELMP_SELF_TEST_HOTKEY`：可选，执行某个扩展的全局快捷键命令（如 `translate`）。
 /// - `HELMP_SELF_TEST_KEYS`：可选，模拟按键序列，每步后报告焦点、表单与结果（见下）。
+/// - `HELMP_SELF_TEST_LINK`：可选，处理一个 `helmp://` 深链接（直接交给处理函数，不经系统）。
 /// - `HELMP_SELF_TEST_AGENT_CONFIRM`：可选，`<查询>|<结果 id>`，弹出 agent 请求执行的确认页。
 /// - `HELMP_SELF_TEST_SETTINGS`：可选，在屏幕外打开设置窗口的某一页（页面名中英文都行），
 ///   之后的按键、`click:` / `scroll:` 和 `snap:` 都作用于设置窗口。
@@ -212,6 +213,23 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         .expect("launcher window gone");
                 }
                 None => println!("self-test hotkey {provider}: 没有这个扩展的快捷键"),
+            }
+        }
+
+        // HELMP_SELF_TEST_LINK=<helmp:// 链接>：像系统送来的深链接一样处理（不经 `open`，不会叫起别的 Helmp）。
+        if let Ok(url) = std::env::var("HELMP_SELF_TEST_LINK") {
+            match deeplink::parse(&url) {
+                Some(link) => {
+                    cx.update(|cx| deeplink::open(link, cx));
+                    cx.background_executor().timer(settle).await;
+                    let launcher = launcher.clone();
+                    window
+                        .update(cx, move |_, window, cx| {
+                            println!("self-test link {url}: {}", launcher.read(cx).debug_state(window, cx));
+                        })
+                        .expect("launcher window gone");
+                }
+                None => println!("self-test link {url}: 不认识的链接"),
             }
         }
 

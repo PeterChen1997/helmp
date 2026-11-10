@@ -309,7 +309,7 @@ pub fn tools() -> Value {
             "inputSchema": schema(json!({
                 "plugin": {"type": "string", "description": "Plugin folder (absolute path) or the id of an installed plugin"},
                 "command": {"type": "string", "description": "Command id from plugin.json"},
-                "input": {"type": "string", "description": "Text typed after the command's keyword; becomes {{query}}"},
+                "input": {"type": "string", "description": "For commands that take input (argument, form or list): the text typed inside the command's scope, after selecting it and pressing Tab; becomes {{query}}"},
                 "form": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Form field values by field id"},
                 "prefs": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Dry run only: non-secret preference values by preference id"},
                 "secrets": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Dry run only: secret preference values by preference id (never stored)"},
@@ -338,9 +338,10 @@ pub fn tools() -> Value {
         {
             "name": "helmp_search",
             "title": "Search Helmp",
-            "description": "Searches Helmp like typing in its panel: apps, calculator and unit/currency conversions, time zones, developer tools (base64, hashes, UUIDs, JSON…), dictionary, system commands, windows, processes, files, plugin commands. Returns result ids, titles, subtitles, actions, form fields and whether running the result needs the user's approval. Clipboard history and agent session transcripts are excluded unless the user enabled sharing them.",
+            "description": "Searches Helmp like typing in its panel: apps, calculator and unit/currency conversions, time zones, developer tools (base64, hashes, UUIDs, JSON…), dictionary, system commands, windows, processes, files, plugin commands. Returns result ids, titles, subtitles, actions, form fields and whether running the result needs the user's approval. Commands that take input (plugin commands like flomo or gh, MCP tools with arguments) come back with a `scope`: in the panel the user presses Tab on them before typing, so search or run inside that scope with the input as `query`. Clipboard history and agent session transcripts are excluded unless the user enabled sharing them.",
             "inputSchema": schema(json!({
-                "query": {"type": "string", "description": "What you would type in the Helmp panel, e.g. `12*7`, `100 usd to cny`, `time tokyo`, `base64 hello`, `flomo idea`"},
+                "query": {"type": "string", "description": "What you would type in the Helmp panel, e.g. `12*7`, `100 usd to cny`, `time tokyo`, `base64 hello`, `flomo`; inside a scope, the input for that command (e.g. `rust` in scope plugins:dev.helmp.quicklinks/gh)"},
+                "scope": {"type": "string", "description": "Optional: search inside this scope (the `scope` of a result) instead of the main search"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
             }), &["query"]),
             "annotations": annotations("Search Helmp", true, false, true, false),
@@ -351,6 +352,7 @@ pub fn tools() -> Value {
             "description": "Runs a result found with helmp_search (same query). Pure computations (calculator, conversions, time, developer tools, dictionary, translation, OCR of an image path) return their text directly and nothing is copied. Anything with a side effect (open, copy, paste, kill, window moves, toggles, plugin HTTP requests, scripts, system commands) is shown to the user in the Helmp panel as \"<agent> wants to run …\" and runs only if they press Return within 60 seconds; Esc or no answer means denied. Requires the Helmp app to be running for side effects.",
             "inputSchema": schema(json!({
                 "query": {"type": "string", "description": "The same query you passed to helmp_search"},
+                "scope": {"type": "string", "description": "The same scope you passed to helmp_search, if any. Required to run a command that takes input (its result has a `scope`): pass that scope and the input as `query`"},
                 "id": {"type": "string", "description": "Result id from helmp_search"},
                 "action": {"type": "string", "description": "Title of a secondary action from the result's `actions` (default: the primary action)"},
                 "form": string_map

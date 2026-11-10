@@ -29,7 +29,7 @@ const MANIFEST: &str = r#"{
   ],
   "commands": [
     {
-      "$comment": "Type the keyword, a space and some text: the text becomes {{query}}. Use the |url filter inside URLs.",
+      "$comment": "Select the command (type its keyword) and press Tab, then type: the text becomes {{query}}. Use the |url filter inside URLs.",
       "id": "search",
       "title": { "en": "Search Wikipedia", "zh-Hans": "搜索维基百科" },
       "keywords": ["wiki"],

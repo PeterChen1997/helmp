@@ -170,7 +170,7 @@ impl Provider for Bookmarks {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: SCOPE,
+            id: SCOPE.into(),
             label: tr("书签", "Bookmarks").into(),
             tint: Tint::Orange,
             prefixes: vec!["bm ".into(), "书签 ".into()],

@@ -227,7 +227,8 @@ A plugin is a folder with a declarative `plugin.json`: forms, preferences (secre
 
 - **Settings › Plugins** turns plugins on and off, edits their preferences, and has buttons to open the plugins folder, reload, create a new plugin from a working template, and open the developer docs. A plugin that fails to load stays in the list with the reason.
 - **`helmp plugins`** lists plugins and their state; **`helmp plugins validate <folder>`** lists every problem in a plugin you're writing.
-- **`helmp://plugin/<plugin id>/<command id>?q=…`** runs a command from a link. Commands that only open a link run right away; commands with a form, a request, a script or clipboard access wait for you to press Return.
+- **Commands that take input** (flomo, `gh`, `npm`…) are listed in the main search but never take your typing there, so a search can't trigger a plugin by accident: press <kbd>Tab</kbd> on one to enter it (a tag with the plugin's name appears in the search bar), then type and press <kbd>↵</kbd>. <kbd>Esc</kbd> goes back.
+- **`helmp://plugin/<plugin id>/<command id>?q=…`** runs a command from a link. Commands that only open a link run right away; a command that takes input opens with `q` filled in, and commands with a form, a request, a script or clipboard access wait for you to press Return.
 
 Writing your own: the tutorial and manifest reference are in [docs/plugins.md](docs/plugins.md), and [docs/plugin-schema.json](docs/plugin-schema.json) is a JSON Schema for editor completion. The bundled plugins in [`resources/plugins/`](resources/plugins) double as examples.
 
@@ -237,7 +238,7 @@ Writing your own: the tutorial and manifest reference are in [docs/plugins.md](d
 
 ## MCP servers
 
-Settings › MCP manages [Model Context Protocol](https://modelcontextprotocol.io) servers; every tool they offer becomes a launcher command (type its name, fill in the form, press <kbd>↵</kbd>). Add servers by importing them read-only from Claude Code, Codex or Cursor, from the built-in featured list (Helmp shows the exact command first), by pasting the usual `{"mcpServers": {...}}` JSON, or by hand. Servers start on first use, stop after 10 idle minutes, restart with a backoff after a crash, and log to `mcp/logs/` in the data folder. Tokens and keys go to the Keychain. Tools marked destructive ask before they run. Plugins can bundle servers too. `helmp mcp-client list|add|remove|tools|import` does the same from a terminal. Details: [docs/mcp-client.md](docs/mcp-client.md).
+Settings › MCP manages [Model Context Protocol](https://modelcontextprotocol.io) servers; every tool they offer becomes a launcher command (type its name, press <kbd>Tab</kbd>, fill in the form, press <kbd>↵</kbd>). Add servers by importing them read-only from Claude Code, Codex or Cursor, from the built-in featured list (Helmp shows the exact command first), by pasting the usual `{"mcpServers": {...}}` JSON, or by hand. Servers start on first use, stop after 10 idle minutes, restart with a backoff after a crash, and log to `mcp/logs/` in the data folder. Tokens and keys go to the Keychain. Tools marked destructive ask before they run. Plugins can bundle servers too. `helmp mcp-client list|add|remove|tools|import` does the same from a terminal. Details: [docs/mcp-client.md](docs/mcp-client.md).
 
 ## Command line
 

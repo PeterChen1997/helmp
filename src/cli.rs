@@ -1,11 +1,16 @@
 //! 无头命令行：不开窗口，直接走 provider，用于测试和端到端验证。
 //!
 //! ```text
-//! helmp query <text>            打印结果：badge \t title \t subtitle \t id
-//! helmp run <id> [query] [--form k=v]... [--action <标题>] [--then <标题>]
+//! helmp query [--scope <范围 id>] <text>
+//!                               打印结果：badge \t title \t subtitle \t id。--scope 在某个范围里查，
+//!                               如 `clipboard`，或命令范围 `plugins:dev.helmp.quicklinks/gh`（相当于选中命令按 Tab）
+//! helmp run <id> [query] [--scope <范围 id>] [--form k=v]... [--action <标题>] [--then <标题>]
 //!                               执行某个结果（先用同一 query 查出来）。--form 填表单字段，
 //!                               --action 改为执行 ⌘K 里同名的次级操作，--then 再执行返回详情里的同名操作
-//!                               （如确认页的「确定」）。配合 HELMP_DRY_RUN=1 做端到端测试。
+//!                               （如确认页的「确定」）。全局搜索里没有这个结果、而 id 本身是一个命令范围时
+//!                               （要输入内容的插件命令、带参数的 MCP 工具），在它的范围里用 query 查：
+//!                               `helmp run plugins:dev.helmp.quicklinks/gh rust` 相当于 gh ⇥ rust ↵。
+//!                               配合 HELMP_DRY_RUN=1 做端到端测试。
 //! helmp providers               列出已注册的 provider
 //! helmp plugins                 列出清单插件：状态 \t id \t 版本 \t 来源 \t 名称（出错的附原因）
 //! helmp plugins validate <目录> [--json]
@@ -30,7 +35,7 @@ use crate::provider::{Block, Outcome};
 pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
     let command = args.first()?;
     let result = match command.as_str() {
-        "query" => query(engine, &args[1..].join(" ")),
+        "query" => query(engine, &args[1..]),
         "run" => run_item(engine, args.get(1).map(String::as_str), &args[2.min(args.len())..]),
         "plugins" => plugins(&args[1..]),
         "mcp" => crate::mcp::cli(engine, &args[1..]),
@@ -272,15 +277,75 @@ pub(crate) fn lookup(engine: &Engine, text: &str) -> Vec<crate::provider::Item> 
     match engine.resolve_prefix(text) {
         Some((scope, rest)) => {
             let filter = scope.filters.first().cloned().unwrap_or_default();
-            engine.query_scoped(scope.id, &rest, &filter)
+            engine.query_scoped(&scope.id, &rest, &filter)
         }
         None => engine.query(text),
     }
 }
 
-fn query(engine: &Engine, text: &str) -> Result<()> {
+/// 在某个范围里查（插件范围或命令范围，用默认筛选）；没给范围时同 [`lookup`]。
+pub(crate) fn lookup_in(
+    engine: &Engine,
+    scope: Option<&str>,
+    text: &str,
+) -> Vec<crate::provider::Item> {
+    let Some(scope) = scope else {
+        return lookup(engine, text);
+    };
+    let filter = engine
+        .scope(scope)
+        .and_then(|scope| scope.filters.first().cloned())
+        .unwrap_or_default();
+    engine.query_scoped(scope, text, &filter)
+}
+
+/// 找出要执行的结果（CLI `run`、MCP 服务的 `helmp_run`）：给了范围就在范围里找；否则在全局搜索里找，
+/// 找不到而 `id` 本身是一个命令范围（要输入内容的命令）时，在它的范围里用 `text` 找
+/// ——`helmp run plugins:…/gh rust` 相当于在面板里选中 gh、按 Tab、输入 rust、回车。
+pub(crate) fn find(
+    engine: &Engine,
+    id: &str,
+    text: &str,
+    scope: Option<&str>,
+) -> Option<crate::provider::Item> {
+    let matches = |item: &crate::provider::Item| item.id == id;
+    if scope.is_some() {
+        return lookup_in(engine, scope, text).into_iter().find(matches);
+    }
+    lookup(engine, text).into_iter().find(matches).or_else(|| {
+        engine.scope(id)?;
+        engine.query_scoped(id, text, "").into_iter().find(matches)
+    })
+}
+
+/// `query` 的参数：`--scope <id>` 加查询词。
+fn split_scope(args: &[String]) -> Result<(Option<String>, String)> {
+    let mut scope = None;
+    let mut words = Vec::new();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if arg == "--scope" {
+            scope = Some(
+                rest.next()
+                    .cloned()
+                    .context(tr("--scope 后面缺少范围 id", "--scope needs a scope id"))?,
+            );
+        } else {
+            words.push(arg.as_str());
+        }
+    }
+    Ok((scope, words.join(" ")))
+}
+
+fn query(engine: &Engine, args: &[String]) -> Result<()> {
+    let (scope, text) = split_scope(args)?;
     start(engine);
-    for item in lookup(engine, text) {
+    if let Some(scope) = &scope
+        && engine.scope(scope).is_none()
+    {
+        bail!(trf!("没有范围 {scope}", "No scope {scope}"));
+    }
+    for item in lookup_in(engine, scope.as_deref(), &text) {
         println!(
             "{}\t{}\t{}\t{}",
             item.badge, item.title, item.subtitle, item.id
@@ -293,6 +358,7 @@ fn query(engine: &Engine, text: &str) -> Result<()> {
 #[derive(Default)]
 struct RunArgs {
     query: Vec<String>,
+    scope: Option<String>,
     form: crate::provider::ActionInput,
     action: Option<String>,
     then: Option<String>,
@@ -316,6 +382,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs> {
                 parsed.form.form.insert(key.to_string(), val.to_string());
             }
             "--action" => parsed.action = Some(value("--action")?),
+            "--scope" => parsed.scope = Some(value("--scope")?),
             "--then" => parsed.then = Some(value("--then")?),
             _ => parsed.query.push(arg.clone()),
         }
@@ -328,7 +395,7 @@ fn run_item(engine: &Engine, id: Option<&str>, args: &[String]) -> Result<()> {
     let args = parse_run_args(args)?;
     let text = args.query.join(" ");
     start(engine);
-    let Some(item) = lookup(engine, &text).into_iter().find(|item| item.id == id) else {
+    let Some(item) = find(engine, id, &text, args.scope.as_deref()) else {
         bail!(trf!("查询 {text:?} 的结果里没有 {id}", "No result {id} for query {text:?}"));
     };
     let action = match &args.action {

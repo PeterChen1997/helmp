@@ -247,7 +247,7 @@ impl Provider for DevTools {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: badge().into(),
             tint: Tint::Graphite,
             prefixes: vec!["dev ".into(), "开发 ".into(), "开发工具 ".into()],
@@ -804,7 +804,7 @@ fn entry_item(tool: &'static Tool, score: u32) -> Item {
         badge: badge().into(),
         score,
         icon: icon(tool.icon),
-        action: Action::new(move || Ok(Outcome::EnterScopeWith(PROVIDER_ID, command.clone())))
+        action: Action::new(move || Ok(Outcome::EnterScopeWith(PROVIDER_ID.into(), command.clone())))
             .keep_open(),
         action_title: tr("使用", "Use").into(),
         ..Item::blank()

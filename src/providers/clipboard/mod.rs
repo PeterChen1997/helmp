@@ -321,7 +321,7 @@ impl Provider for Clipboard {
             .expect("clipboard index poisoned")
             .len();
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: tr("剪贴板", "Clipboard").into(),
             tint: Tint::Orange,
             prefixes: PREFIXES.iter().map(|prefix| prefix.to_string()).collect(),
@@ -1485,7 +1485,7 @@ mod tests {
         assert!(item.score < 800);
         // 键帽只显示真正生效的全局快捷键（冲突未生效、被清除时按不出来）；单测里没有注册任何热键。
         assert!(item.accessories.is_empty(), "{:?}", item.accessories);
-        assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("clipboard"));
+        assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("clipboard".into()));
     }
 
     #[test]

@@ -6,8 +6,9 @@
 //! - 每个工具一个结果，id 为 `mcp:<服务器键>/<工具名>`，分组「MCP」，右侧写服务器名；
 //!   按标题 / 名字（含拼音）和描述匹配，「服务器名 + 空格」列出这个服务器的全部工具；
 //!   也可以输入 `mcp ` 进入范围看全部工具。
-//! - 参数：输入 schema → 表单（`schema`）；标了破坏性的工具先出确认页；结果的文字、图片、
-//!   structuredContent 显示在详情里，⌘C 复制。
+//! - 参数：输入 schema → 表单（`schema`）。有参数的工具在搜索结果里只是入口：Tab（或回车）进入这个
+//!   工具自己的范围（id 同结果 id）再填表单、回车运行，和插件命令一样避免误触发；没参数的回车直接运行。
+//!   标了破坏性的工具先出确认页；结果的文字、图片、structuredContent 显示在详情里，⌘C 复制。
 //! - 演练模式下只有测试用的本地服务器真的运行，其余回报 `[dry-run] mcp-call <服务器> <工具> <参数>`。
 //!
 //! 文档：docs/mcp-client.md。
@@ -84,7 +85,7 @@ impl Provider for Mcp {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: "MCP".into(),
             tint: Tint::Teal,
             prefixes: vec!["mcp ".into()],
@@ -98,6 +99,28 @@ impl Provider for Mcp {
             return all_tool_items();
         }
         self.query(query)
+    }
+
+    fn command_scope(&self, id: &str) -> Option<Scope> {
+        let (_, tool) = scoped_tool(id)?;
+        Some(Scope {
+            id: id.to_string(),
+            label: tool.display_title().to_string(),
+            tint: Tint::Teal,
+            prefixes: Vec::new(),
+            placeholder: tr(
+                "在下面填写参数，回车运行 · Esc 返回",
+                "Fill in the arguments, then press Return · Esc to go back",
+            )
+            .into(),
+            filters: Vec::new(),
+        })
+    }
+
+    fn query_command(&self, id: &str, _query: &str) -> Vec<Item> {
+        scoped_tool(id)
+            .map(|(spec, tool)| vec![tool_item(&spec, &tool, PREFIX_SCORE)])
+            .unwrap_or_default()
     }
 
     /// 打开面板时确保常驻服务器在运行（不阻塞）。
@@ -179,14 +202,14 @@ fn tool_items(query: &str) -> Vec<Item> {
         if let Some(rest) = crate::providers::scripts::args::strip_name(query, &spec.name) {
             for tool in &tools {
                 if rest.is_empty() || tool_score(tool, rest).is_some() {
-                    items.push(tool_item(&spec, tool, PREFIX_SCORE));
+                    items.push(listed_tool_item(&spec, tool, PREFIX_SCORE));
                 }
             }
             continue;
         }
         for tool in &tools {
             if let Some(score) = tool_score(tool, query) {
-                items.push(tool_item(&spec, tool, score));
+                items.push(listed_tool_item(&spec, tool, score));
             }
         }
     }
@@ -199,10 +222,38 @@ fn all_tool_items() -> Vec<Item> {
         .flat_map(|(spec, tools)| {
             tools
                 .iter()
-                .map(|tool| tool_item(&spec, tool, 0))
+                .map(|tool| listed_tool_item(&spec, tool, 0))
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// 命令范围 id（就是工具入口结果的 id）→ 服务器与工具。只认有参数（有表单）的工具。
+fn scoped_tool(id: &str) -> Option<(Spec, Tool)> {
+    cached(&enabled_specs()).into_iter().find_map(|(spec, tools)| {
+        let tool = tools
+            .into_iter()
+            .find(|tool| item_id(&spec.key, &tool.name) == id)?;
+        schema::form_for(&tool.input_schema).is_some().then_some((spec, tool))
+    })
+}
+
+/// 搜索结果里的工具：有参数的只是入口（Tab / 回车进入它的范围填表单），没参数的回车直接运行。
+fn listed_tool_item(spec: &Spec, tool: &Tool, score: u32) -> Item {
+    let item = tool_item(spec, tool, score);
+    if item.form.is_none() {
+        return item;
+    }
+    let mut accessories = item.accessories;
+    accessories.push(Accessory::Keys(vec!["Tab".into()]));
+    Item {
+        accessories,
+        action: Action::enter_scope(item.id.clone()).keep_open(),
+        action_title: tr("进入", "Open").into(),
+        opens_scope: Some(item.id.clone()),
+        form: None,
+        ..item
+    }
 }
 
 pub fn item_id(spec_key: &str, tool: &str) -> String {

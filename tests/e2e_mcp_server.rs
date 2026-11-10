@@ -394,9 +394,22 @@ fn search_and_run_respect_privacy_and_side_effects() {
         .cloned()
         .unwrap_or_else(|| panic!("{found}"));
     assert_eq!(npm["needs_approval"], true);
+    // 要输入内容的插件命令：用户在面板里要 Tab 进入范围才能输入，agent 也一样——搜索结果带 scope，
+    // 直接按全局搜索的查询运行要明确报错并说清楚怎么做，而不是假装成功（那只是「进入范围」）。
+    let scope = "plugins:dev.helmp.quicklinks/npm";
+    assert_eq!(npm["scope"], scope, "{npm}");
+    let entry = mcp.call("helmp_run", json!({"query": "npm react", "id": scope}));
+    assert_eq!(entry["isError"], true, "{entry}");
+    assert!(text(&entry).contains(&format!("scope={scope:?}")), "{entry}");
+    // 在范围里搜、在范围里运行：query 就是要搜的内容。
+    let inside = mcp.call("helmp_search", json!({"query": "react", "scope": scope}));
+    let ready = &inside["structuredContent"]["results"][0];
+    assert_eq!(ready["id"], scope, "{inside}");
+    assert_eq!(ready["subtitle"], "https://www.npmjs.com/search?q=react", "{inside}");
+    assert!(ready["scope"].is_null(), "范围里的结果不再是入口：{inside}");
     let ran = mcp.call(
         "helmp_run",
-        json!({"query": "npm react", "id": "plugins:dev.helmp.quicklinks/npm"}),
+        json!({"query": "react", "scope": scope, "id": scope}),
     );
     assert!(
         text(&ran).contains("[dry-run] open https://www.npmjs.com/search?q=react"),
@@ -556,7 +569,8 @@ fn side_effects_are_sent_to_the_running_helmp_for_approval() {
     use std::os::unix::net::UnixListener;
     let h = Helmp::new().env("HELMP_DRY_RUN", "0");
     let mut mcp = Mcp::start(&h);
-    let args = json!({"query": "npm react", "id": "plugins:dev.helmp.quicklinks/npm"});
+    let npm = "plugins:dev.helmp.quicklinks/npm";
+    let args = json!({"query": "react", "scope": npm, "id": npm});
     let out = mcp.call("helmp_run", args.clone());
     assert_eq!(out["isError"], true, "{out}");
     assert!(text(&out).contains("isn't running"), "{out}");
@@ -586,8 +600,10 @@ fn side_effects_are_sent_to_the_running_helmp_for_approval() {
     let request = seen.recv().unwrap();
     assert_eq!(request["type"], "run");
     assert_eq!(request["agent"], "Claude Code");
-    assert_eq!(request["id"], "plugins:dev.helmp.quicklinks/npm");
-    assert_eq!(request["query"], "npm react");
+    assert_eq!(request["id"], npm);
+    // 界面要在同一个命令范围里重查（与 agent 看到的一致），否则「react」在全局搜索里找不到 npm。
+    assert_eq!(request["scope"], npm);
+    assert_eq!(request["query"], "react");
 
     let out = mcp.call("helmp_run", args);
     assert_eq!(out["isError"], false, "{out}");

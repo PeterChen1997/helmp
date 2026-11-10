@@ -46,6 +46,7 @@ Helmp 可以连接 [Model Context Protocol](https://modelcontextprotocol.io) 服
 
 - 启用的服务器的每个工具都是「MCP」分组里的一个结果，右侧写服务器名。按工具的标题和名字匹配（中文标题支持拼音和首字母，`_`、`-` 当空格），三个字以上的查询也匹配描述。
 - 输入服务器名加空格（`github `）列出这个服务器的全部工具；输入 `mcp ` 浏览全部工具。
+- 有参数的工具在搜索结果里只是入口（右侧提示 <kbd>Tab</kbd>），免得日常搜索误触发：在它上面按 <kbd>Tab</kbd>（或 <kbd>↵</kbd>）进入这个工具自己的范围（搜索栏左侧出现工具名标签），在那里填表单、按 <kbd>↵</kbd> 运行，<kbd>Esc</kbd> 返回。没有参数的工具回车直接运行。
 - 工具的输入 schema 变成表单：字符串是文本框（长文本多行），`enum` 是下拉，`boolean` 是「是 / 否」下拉，`number` / `integer` 提交时检查，必填项标出来并排在前面。数组、对象、`anyOf` 字段用 JSON 文本框；整个 schema 不是普通 object 时，所有参数用一个 JSON 文本框。
 - 标了 `destructiveHint: true`，或 `readOnlyHint: false` 且没标 `openWorldHint: false` / `destructiveHint: false` 的工具，先出确认页（列出参数）。没有标注的直接运行。
 - 结果：文字可选中复制；图片存到 `<数据目录>/mcp/images/`（保留 7 天）并显示；`structuredContent` 显示为格式化的 JSON（文字已经是同一份 JSON 时不重复）；内嵌资源显示为代码，资源链接显示为链接。`isError` 显示成错误，带上服务器给的原因。<kbd>⌘C</kbd> 复制结果，「重新运行」再跑一次。

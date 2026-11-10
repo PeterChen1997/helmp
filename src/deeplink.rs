@@ -6,8 +6,8 @@
 //! helmp://settings[/<页面>]      打开设置（general、extensions、models、agents、clipboard、screenshot、appearance、about）
 //! helmp://hide                   收起面板
 //! helmp://plugin/<插件 id>/<命令 id>[?q=文字]
-//!                                调用插件命令：只打开链接的命令直接执行；
-//!                                表单、http、脚本类命令只在面板里显示出来，等用户回车
+//!                                调用插件命令：只打开链接的命令直接执行；要输入内容的命令
+//!                                打开面板并进入这个命令的范围（q 作为输入），其余只显示出来，都等用户回车
 //! helmp://install-plugin?id=<插件 id>
 //!                                从插件中心安装（落地页的「在 Helmp 中安装」按钮）：下载并校验后打开
 //!                                设置 › 插件，定位到这个插件并显示权限确认卡片；从不自动启用
@@ -143,7 +143,7 @@ pub fn install(rx: mpsc::Receiver<Vec<String>>, cx: &mut App) {
     .detach();
 }
 
-fn open(link: Link, cx: &mut App) {
+pub fn open(link: Link, cx: &mut App) {
     match link {
         Link::Show { query } => LauncherHandle::update(cx, |launcher, window, cx| {
             launcher.show(window, cx);
@@ -170,6 +170,14 @@ fn open(link: Link, cx: &mut App) {
             let q = query.unwrap_or_default();
             match crate::providers::plugins::link_target(&plugin, &command, &q) {
                 Ok(target) if target.run_now => launcher.run_item(target.item, window, cx),
+                // 与在面板里选中命令按 Tab 一样进入它的范围，q 是范围里的输入（flomo 的正文、gh 的仓库名）。
+                Ok(crate::providers::plugins::LinkTarget {
+                    scope: Some(scope), ..
+                }) => {
+                    launcher.show(window, cx);
+                    launcher.reset_view(window, cx);
+                    launcher.open_scope_with(&scope, q, window, cx);
+                }
                 Ok(target) => {
                     launcher.show(window, cx);
                     launcher.reset_view(window, cx);

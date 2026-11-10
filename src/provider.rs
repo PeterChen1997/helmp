@@ -30,10 +30,10 @@ pub enum Outcome {
     Message(String),
     /// 完成，并在面板里展示一份详情（翻译结果、OCR 结果）。表单视图下面板不关，直接显示在右侧。
     Show(Detail),
-    /// 进入某个插件的范围（如从首页的「剪贴板历史」进入剪贴板）。
-    EnterScope(&'static str),
+    /// 进入某个插件的范围（如从首页的「剪贴板历史」进入剪贴板），或某个命令自己的范围（见 `Provider::command_scope`）。
+    EnterScope(String),
     /// 进入范围并带上初始输入（如把识别出的文字带进翻译）。
-    EnterScopeWith(&'static str, String),
+    EnterScopeWith(String, String),
     /// 打开设置窗口（动作在后台线程执行，不能直接开窗口，交给界面线程做）。
     OpenSettings,
     /// 打开设置窗口并直接翻到某一页（如翻译出错时的「打开模型设置」）。
@@ -108,8 +108,9 @@ impl Action {
     }
 
     /// 进入某个插件范围。
-    pub fn enter_scope(scope: &'static str) -> Self {
-        Self::new(move || Ok(Outcome::EnterScope(scope)))
+    pub fn enter_scope(scope: impl Into<String>) -> Self {
+        let scope = scope.into();
+        Self::new(move || Ok(Outcome::EnterScope(scope.clone())))
     }
 
     /// 关掉正在展示的详情、回到列表（确认页的「取消」）。不隐藏面板。
@@ -414,6 +415,10 @@ pub struct Item {
     /// 表单项：表单内容（搜索框输入、文本框、下拉框）变化后防抖自动执行主操作，结果原地显示
     /// （翻译的「输入即译」）。主操作必须可以安全地重复执行。
     pub auto_run: bool,
+    /// 这个结果是一个要输入内容的命令（插件命令、带参数的 MCP 工具）的入口：Tab（或回车）进入
+    /// 这个 id 的命令范围，在范围里再输入、再执行（见 `Provider::command_scope`）。
+    /// 全局搜索里不直接吃掉「关键词 + 空格」后面的文字，免得日常搜索误触发插件。
+    pub opens_scope: Option<String>,
 }
 
 impl Item {
@@ -433,14 +438,19 @@ impl Item {
             detail: None,
             form: None,
             auto_run: false,
+            opens_scope: None,
         }
     }
 }
 
 /// 插件的专属范围：进入后搜索栏左侧显示彩色标签，只查询这个插件。
+///
+/// 两种：插件自己的范围（`Provider::scope`，id 是插件 id，如 `clipboard`），
+/// 和某个命令自己的范围（`Provider::command_scope`，id 就是命令结果的 id，含冒号，如
+/// `plugins:dev.helmp.flomo/memo`）。后者随插件在运行时加载，所以 id 是 `String`。
 #[derive(Debug, Clone)]
 pub struct Scope {
-    pub id: &'static str,
+    pub id: String,
     pub label: String,
     pub tint: Tint,
     /// 输入这些前缀（含结尾空格）时自动进入，如 `"cb "`。
@@ -470,6 +480,17 @@ pub trait Provider: Send + Sync {
     /// 范围内的查询：`query` 已去掉前缀，`filter` 是选中的分段筛选（默认第一个）。
     fn query_scoped(&self, query: &str, _filter: &str) -> Vec<Item> {
         self.query(query)
+    }
+
+    /// 某个命令自己的范围：`id` 是这个插件返回的、带 `opens_scope` 的结果 id（`<插件 id>:…`）。
+    /// 不认识或命令已不存在时返回 None。范围没有前缀，只能从结果上 Tab / 回车进入（或深链接）。
+    fn command_scope(&self, _id: &str) -> Option<Scope> {
+        None
+    }
+
+    /// 命令范围里的查询：`query` 是范围里搜索框的文字（参数、列表搜索词、表单初值）。
+    fn query_command(&self, _id: &str, _query: &str) -> Vec<Item> {
+        Vec::new()
     }
 
     /// 首页（空查询）要展示的项，如「等你处理」的会话、「快捷命令」。

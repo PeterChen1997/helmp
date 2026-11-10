@@ -4,7 +4,7 @@
 //! 一次连接一问一答，各一行 JSON：
 //!
 //! ```text
-//! → {"v":1,"type":"run","agent":"Claude Code","query":"…","id":"…","action":null,"form":{}}
+//! → {"v":1,"type":"run","agent":"Claude Code","query":"…","scope":null,"id":"…","action":null,"form":{}}
 //! ← {"ok":true,"decision":"allowed","output":"…","failed":false} | {"ok":true,"decision":"denied"}
 //!   | {"ok":true,"decision":"timeout"} | {"ok":false,"error":"…"}
 //! → {"v":1,"type":"open_plugin","plugin":"com.example.x"}
@@ -249,10 +249,11 @@ fn handle_run(
     if super::operate::is_private(&id) && !crate::config::get().mcp_server.expose_private {
         return json!({"ok": false, "error": "this result is private (clipboard history, agent sessions or recently used items)"});
     }
-    let Some(item) = crate::cli::lookup(engine, &query)
-        .into_iter()
-        .find(|item| item.id == id)
-    else {
+    let scope = message
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|scope| !scope.is_empty());
+    let Some(item) = crate::cli::find(engine, &id, &query, scope) else {
         return json!({"ok": false, "error": format!("no result {id} for query {query:?} in Helmp")});
     };
     let (title, action) = match super::operate::pick_action(&item, action_title.as_deref()) {

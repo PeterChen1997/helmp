@@ -232,7 +232,7 @@ fn ocr_actions() -> Vec<NamedAction> {
         NamedAction::new(
             tr("翻译识别结果", "Translate Recognized Text"),
             Some("⌘T"),
-            Action::new(|| Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, last_text()?))),
+            Action::new(|| Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE.into(), last_text()?))),
         ),
     ]
 }
@@ -606,7 +606,7 @@ fn ocr_detail(
             Some("⌘T"),
             Action::new({
                 let text = text.to_string();
-                move || Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE, text.clone()))
+                move || Ok(Outcome::EnterScopeWith(TRANSLATE_SCOPE.into(), text.clone()))
             }),
         ));
         actions.push(NamedAction::new(
@@ -946,7 +946,7 @@ mod tests {
         assert_eq!(shortcuts, [None, Some("⌘T"), Some("⌘⇧C"), Some("⌘⌥C")]);
         assert_eq!(
             detail.actions[1].action.run().unwrap(),
-            Outcome::EnterScopeWith("translate", "你好 Huan 2026\nThe quick brown fox".into())
+            Outcome::EnterScopeWith("translate".into(), "你好 Huan 2026\nThe quick brown fox".into())
         );
         assert_eq!(
             caption_of(&detail),

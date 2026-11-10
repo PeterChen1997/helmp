@@ -88,7 +88,7 @@ Turning on one of your plugins first shows what it can do (its [permissions](#pe
 ]
 ```
 
-- `default: "{{query}}"`: typing `flomo read a great book #reading` pre-fills the form with `read a great book #reading`.
+- `default: "{{query}}"`: the text the command's scope starts with (the `q` of a [deep link](#deep-links), or what you type in the search bar inside the scope) pre-fills the form.
 - `json` is real JSON; every string inside is a template, and Helmp escapes quotes and line breaks for you. A `Content-Type: application/json` header is added automatically.
 - `success`: the request counts as successful when the status is 2xx and, if the response has a `code` field, it equals `0`. Anything else is shown as an error with the server's `message`, never as success.
 
@@ -101,7 +101,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 #   - Network access: flomoapp.com (URL comes from preference webhook)
 ```
 
-**5. Turn it on.** Settings › Plugins › My Plugins: click the switch, review the permissions, click **Allow and Turn On**. Click the row to open it and paste your webhook URL. Now type `flomo` in Helmp.
+**5. Turn it on.** Settings › Plugins › My Plugins: click the switch, review the permissions, click **Allow and Turn On**. Click the row to open it and paste your webhook URL. Now type `flomo` in Helmp and press <kbd>Tab</kbd>: the search bar shows a **My flomo** tag, the cursor is in the form, and <kbd>↵</kbd> sends the memo.
 
 ## Manifest reference
 
@@ -148,12 +148,18 @@ Shown in Settings › Plugins when you open the plugin.
 | `title`, `subtitle` | Text. The title is searchable in every language, including pinyin and initials (`ggfy` finds 谷歌翻译) |
 | `keywords` | Extra search words. The first one is the "trigger" shown in hints |
 | `icon`, `tint` | Override the plugin's |
-| `argument` | `{ "placeholder": text, "required": bool }`. Typing a keyword (or the title), a space and some text passes the text as `{{query}}` |
+| `argument` | `{ "placeholder": text, "required": bool }`. Inside the command's scope, the text in the search bar is `{{query}}`; `placeholder` is shown there as the hint |
 | `form` | Fields shown in the panel's form view (`text`, `textarea`, `select`), each with `id`, `label`, `placeholder`, `required`, `default` (template: `{{query}}`, dates, non-secret prefs), `options` |
 | `action` | What Return does. Exactly one of `action` / `list` |
 | `list` | A script-driven list, see [List commands](#list-commands) |
 
-A command with `argument`, `form` or `list` accepts input: `flomo hello` passes `hello` as `{{query}}`.
+A command with `argument`, `form` or `list` accepts input. So that everyday searching can't trigger a plugin by accident, the main search never takes input for it: typing `flomo` (or `flomo hello`, or `gh rust`) only lists the command, with a <kbd>Tab</kbd> hint. Press <kbd>Tab</kbd> (or <kbd>↵</kbd>) on it to enter the command's own scope: a tag with the plugin's name (or the command's title, for a plugin with several commands) appears left of the search bar, in the command's color, and then
+
+- **form** commands (flomo): the cursor goes straight into the form; <kbd>↵</kbd> submits, <kbd>⇧↵</kbd> adds a line;
+- **argument** commands (`gh`, `npm`): what you type in the search bar is `{{query}}`; the result shows the URL it will open, <kbd>↵</kbd> runs it;
+- **list** commands: the list script runs with what you type.
+
+<kbd>Esc</kbd>, or <kbd>⌫</kbd> when the search bar (and the form) is empty, goes back to the main search. Commands without input (open a fixed URL, copy something) still run directly with <kbd>↵</kbd> from the main search.
 
 ### Actions
 
@@ -175,7 +181,7 @@ Every string marked as a template can use `{{ … }}`:
 
 | Variable | Value |
 |---|---|
-| `{{query}}` | Text typed after the keyword |
+| `{{query}}` | Text typed in the search bar inside the command's scope (or the deep link's `q`) |
 | `{{form.<id>}}` | A form field |
 | `{{pref.<id>}}` | A preference (secrets are read from the Keychain only when used) |
 | `{{item.title}}` `{{item.subtitle}}` `{{item.arg}}` `{{item.uid}}` `{{item.url}}` | The chosen list item (`list.action` only) |
@@ -207,7 +213,7 @@ Bundled plugins are on by default. Your plugins are off until you turn them on; 
 
 ## List commands
 
-A list command runs a script while you type (after `keyword` + space) and shows the items it prints. The output format is [Alfred's Script Filter JSON](https://www.alfredapp.com/help/workflows/inputs/script-filter/json/), so many existing scripts work as they are:
+A list command runs a script while you type inside its scope (select the command and press <kbd>Tab</kbd>) and shows the items it prints. The output format is [Alfred's Script Filter JSON](https://www.alfredapp.com/help/workflows/inputs/script-filter/json/), so many existing scripts work as they are:
 
 ```json
 {"items": [
@@ -253,10 +259,16 @@ helmp plugins validate path/to/plugin --json
 helmp plugins
 
 # Run a command without side effects: opens, copies, pastes and requests to real hosts are only printed.
-HELMP_DRY_RUN=1 helmp query "npm react"
-HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm "npm react"
-HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo "flomo hi" --form content="hello #test"
+# The main search only lists a command that takes input; Return on it just enters its scope.
+HELMP_DRY_RUN=1 helmp query "npm"
+HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm npm        # enter scope plugins:dev.helmp.quicklinks/npm
+# --scope <command result id> is the same as selecting the command and pressing Tab.
+HELMP_DRY_RUN=1 helmp query --scope plugins:dev.helmp.quicklinks/npm react
+HELMP_DRY_RUN=1 helmp run plugins:dev.helmp.quicklinks/npm react --scope plugins:dev.helmp.quicklinks/npm
+HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo hi --scope plugins:com.example.flomo/memo --form content="hello #test"
 ```
+
+When the main search doesn't list the result and its id is a command scope, `helmp run` looks inside that scope, so `helmp run plugins:dev.helmp.quicklinks/npm react` also works.
 
 In dry-run mode `{{clipboard}}` becomes `[clipboard]` instead of reading your clipboard, and an http request to a real host prints `[dry-run] http POST <url> <body>` (secrets masked) instead of being sent. Scripts still run, like script commands do.
 
@@ -283,7 +295,7 @@ Coding agents (Claude Code, Codex) can build, validate and submit a plugin for y
 
 ## Deep links
 
-`helmp://plugin/<plugin id>/<command id>?q=<text>` invokes a command, as if you typed its keyword, a space and `<text>`. Commands that only open a link run immediately; commands with a form, an http request, a script or clipboard access are shown in the panel and wait for you to press Return, so a link on a web page can't submit anything for you. See [deeplinks.md](deeplinks.md).
+`helmp://plugin/<plugin id>/<command id>?q=<text>` invokes a command. Commands that only open a link (and have what they need) run immediately. A command that takes input opens the panel inside its scope with `<text>` as the input (the flomo form pre-filled) and waits for you to press Return; anything else is shown in the panel and waits too, so a link on a web page can't submit anything for you. See [deeplinks.md](deeplinks.md).
 
 ```bash
 open "helmp://plugin/dev.helmp.quicklinks/npm?q=react"

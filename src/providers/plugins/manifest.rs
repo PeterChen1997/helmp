@@ -179,7 +179,7 @@ pub struct Command {
     pub icon: Option<String>,
     #[serde(default)]
     pub tint: Option<String>,
-    /// 关键词后面的文字作为 `{{query}}`（`gh react`）。
+    /// 接受一段文字作为 `{{query}}`：Tab 进入命令范围后，搜索框里的字就是它（`gh` ⇥ `react`）。
     #[serde(default)]
     pub argument: Option<Argument>,
     #[serde(default)]

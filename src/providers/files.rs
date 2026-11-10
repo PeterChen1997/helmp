@@ -696,7 +696,7 @@ impl Provider for Files {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: SCOPE,
+            id: SCOPE.into(),
             label: tr("文件", "Files").into(),
             tint: Tint::Blue,
             prefixes: ["f ", "file ", "文件 "].map(str::to_string).to_vec(),

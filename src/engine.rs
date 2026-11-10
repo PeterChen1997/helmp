@@ -130,9 +130,12 @@ impl Engine {
         })
     }
 
-    /// 某个范围内的查询。
+    /// 某个范围内的查询。命令范围（id 含冒号，见 `Provider::command_scope`）交给 id 前缀那个插件。
     pub fn query_scoped(&self, scope: &str, query: &str, filter: &str) -> Vec<Item> {
         i18n::pinned(|| {
+            if let Some(provider) = self.command_provider(scope) {
+                return group(provider.query_command(scope, query));
+            }
             let items = self
                 .enabled()
                 .filter(|provider| provider.scope().is_some_and(|s| s.id == scope))
@@ -140,6 +143,12 @@ impl Engine {
                 .collect();
             group(items)
         })
+    }
+
+    /// 命令范围 id（`<插件 id>:<命令>`）所属的、已启用的插件。插件自己的范围 id 不含冒号。
+    fn command_provider(&self, scope: &str) -> Option<&Arc<dyn Provider>> {
+        let (provider, _) = scope.split_once(':')?;
+        self.enabled().find(|candidate| candidate.id() == provider)
     }
 
     /// 首页：各 provider 的推荐项（等你处理、快捷命令）加最近使用。
@@ -217,7 +226,11 @@ impl Engine {
             .collect()
     }
 
+    /// 插件自己的范围，或某个命令自己的范围（命令已不存在、插件被停用时为 None）。
     pub fn scope(&self, id: &str) -> Option<Scope> {
+        if let Some(provider) = self.command_provider(id) {
+            return i18n::pinned(|| provider.command_scope(id));
+        }
         self.scopes().into_iter().find(|scope| scope.id == id)
     }
 
@@ -446,6 +459,51 @@ mod tests {
         fn query(&self, _: &str) -> Vec<Item> {
             Vec::new()
         }
+    }
+
+    /// 一个带命令范围的插件：`cmd:greet` 要输入内容，`cmd:plain` 不要。
+    struct Commands;
+
+    impl Provider for Commands {
+        fn id(&self) -> &'static str {
+            "cmd"
+        }
+        fn query(&self, _: &str) -> Vec<Item> {
+            Vec::new()
+        }
+        fn command_scope(&self, id: &str) -> Option<Scope> {
+            (id == "cmd:greet").then(|| Scope {
+                id: id.to_string(),
+                label: "Greet".into(),
+                tint: Tint::Green,
+                prefixes: Vec::new(),
+                placeholder: "Name".into(),
+                filters: Vec::new(),
+            })
+        }
+        fn query_command(&self, id: &str, query: &str) -> Vec<Item> {
+            vec![Item {
+                id: id.to_string(),
+                title: format!("Hello {query}"),
+                ..Item::blank()
+            }]
+        }
+    }
+
+    #[test]
+    fn command_scopes_route_to_the_provider_named_by_the_id() {
+        // 插件命令的范围随插件在运行时加载，id 就是命令结果的 id（`<插件>:<命令>`）。引擎要按 id 前缀
+        // 找到插件去解析 / 查询，否则 Tab 进入 flomo、深链接、`helmp query --scope` 都会找不到范围。
+        let engine = Engine::new(vec![Arc::new(Commands), Arc::new(Slow)]);
+        let scope = engine.scope("cmd:greet").expect("命令范围");
+        assert_eq!(scope.label, "Greet");
+        let items = engine.query_scoped("cmd:greet", "Ada", "");
+        assert_eq!(items.first().map(|item| item.title.as_str()), Some("Hello Ada"));
+        // 插件不认识的 id、没有这个插件、插件自己的范围名都不能误当成命令范围。
+        assert!(engine.scope("cmd:plain").is_none());
+        assert!(engine.scope("nobody:greet").is_none());
+        assert!(engine.query_scoped("nobody:greet", "Ada", "").is_empty());
+        assert!(engine.scope("cmd").is_none());
     }
 
     #[test]

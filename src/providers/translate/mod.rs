@@ -84,7 +84,7 @@ impl Provider for Translate {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: SCOPE,
+            id: SCOPE.into(),
             label: tr("翻译", "Translate").into(),
             tint: Tint::Teal,
             prefixes: vec!["fy ".into(), "tr ".into(), "翻译 ".into()],
@@ -973,7 +973,7 @@ mod tests {
         assert_eq!(item.icon, ICON);
         // 键帽只显示真正生效的全局快捷键；单测里没有注册任何热键，就不能显示 ⌥⇧T。
         assert!(item.accessories.is_empty(), "{:?}", item.accessories);
-        assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("translate"));
+        assert_eq!(item.action.run().unwrap(), Outcome::EnterScope("translate".into()));
     }
 
     #[test]

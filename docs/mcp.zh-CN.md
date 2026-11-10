@@ -44,7 +44,7 @@ helmp mcp status            # 各 agent 是否已连接
 | `helmp_plugin_test` | 无界面运行一个命令。演练（默认）：在隔离的沙箱里运行，打开、复制、粘贴和发往真实主机的请求只以 `[dry-run] …` 回报；发往 `127.0.0.1` / `localhost` 的请求真的发，agent 可以对着本地假服务测；密钥只在这一次运行里使用。`dry_run: false` 真的运行已安装且启用的插件，要你在面板里确认 |
 | `helmp_plugin_list` | 自带与用户插件的状态（已启用、已停用、待确认权限、出错）、错误、权限和命令 |
 | `helmp_plugin_submit` | 把插件上传到公开的 Helmp 插件中心（`helmp plugins submit <目录> --yes`），返回 PR 链接。agent 必须先问你，你明确同意后才能带 `user_confirmed: true` 调用 |
-| `helmp_search` | 像面板一样搜索：应用、计算器与换算、时区、开发者工具、词典、系统命令、窗口、插件命令……每个结果都标明执行它要不要你确认 |
+| `helmp_search` | 像面板一样搜索：应用、计算器与换算、时区、开发者工具、词典、系统命令、窗口、插件命令……每个结果都标明执行它要不要你确认。接受输入的命令（flomo、`gh`、带参数的 MCP 工具）带一个 `scope`，相当于在面板里对它按 Tab：agent 在这个范围里搜索和执行，`query` 就是要输入的内容 |
 | `helmp_run` | 执行一个结果。纯计算直接返回文字，其余都先问你（见下） |
 
 资源：`helmp://docs/plugins` 与 `helmp://docs/plugins.zh-CN`（同一份指南，附英文或中文插件文档）。提示词：`create_helmp_plugin`，参数 `request`，带 agent 走完 设计 → 生成模板 → 写文件 → 校验 → 演练测试 → 安装 → 给你看 → 问你是否上传。

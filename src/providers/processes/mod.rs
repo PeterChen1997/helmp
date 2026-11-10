@@ -132,7 +132,7 @@ impl Provider for Processes {
                 ),
                 "plug",
                 score,
-                Action::new(|| Ok(Outcome::EnterScopeWith(PROVIDER_ID, ":".into()))),
+                Action::new(|| Ok(Outcome::EnterScopeWith(PROVIDER_ID.into(), ":".into()))),
             ));
         }
         items
@@ -140,7 +140,7 @@ impl Provider for Processes {
 
     fn scope(&self) -> Option<Scope> {
         Some(Scope {
-            id: PROVIDER_ID,
+            id: PROVIDER_ID.into(),
             label: tr("进程", "Processes").into(),
             tint: Tint::Red,
             prefixes: PREFIXES.iter().map(|p| p.to_string()).collect(),

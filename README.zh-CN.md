@@ -227,7 +227,8 @@ date "+%Y-%m-%d %H:%M:%S %Z"
 
 - **设置 › 插件**：启用 / 停用插件、填偏好设置，还有「打开插件文件夹」「重新加载」「新建插件」（生成一个能直接用的模板）和「开发者文档」几个按钮。加载失败的插件会留在列表里并写明原因。
 - **`helmp plugins`** 列出插件及其状态；**`helmp plugins validate <目录>`** 一次列出正在写的插件的全部问题。
-- **`helmp://plugin/<插件 id>/<命令 id>?q=…`** 从链接调用某个命令。只打开链接的命令直接执行；带表单、会发请求、运行脚本或读写剪贴板的命令，要等你按回车才执行。
+- **接受输入的命令**（flomo、`gh`、`npm`…）在全局搜索里只列出来，不接收你在那里打的字，日常搜索不会误触发插件：在它上面按 <kbd>Tab</kbd> 进入（搜索栏里出现插件名标签），再输入、回车；<kbd>Esc</kbd> 返回。
+- **`helmp://plugin/<插件 id>/<命令 id>?q=…`** 从链接调用某个命令。只打开链接的命令直接执行；接受输入的命令打开时已填好 `q`；带表单、会发请求、运行脚本或读写剪贴板的命令，要等你按回车才执行。
 
 自己写插件：教程与清单字段参考见 [docs/plugins.zh-CN.md](docs/plugins.zh-CN.md)，[docs/plugin-schema.json](docs/plugin-schema.json) 是给编辑器补全用的 JSON Schema。[`resources/plugins/`](resources/plugins) 里的自带插件也可以当例子看。
 
@@ -237,7 +238,7 @@ date "+%Y-%m-%d %H:%M:%S %Z"
 
 ## MCP 服务器
 
-「设置 › MCP」管理 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，它们提供的每个工具都变成启动器命令（输入工具名，填表单，回车）。添加方式：从 Claude Code、Codex、Cursor 只读导入；从内置的「精选」里添加（先给你看要运行的完整命令）；粘贴常见的 `{"mcpServers": {...}}` JSON；或者手动填写。服务器第一次用到才启动，空闲 10 分钟后停止，崩溃后退避重启，日志在数据目录的 `mcp/logs/` 里。令牌和 Key 存进钥匙串。标了破坏性的工具运行前会先确认。插件也可以自带服务器。终端里用 `helmp mcp-client list|add|remove|tools|import`。详见 [docs/mcp-client.zh-CN.md](docs/mcp-client.zh-CN.md)。
+「设置 › MCP」管理 [Model Context Protocol](https://modelcontextprotocol.io) 服务器，它们提供的每个工具都变成启动器命令（输入工具名，按 <kbd>Tab</kbd>，填表单，回车）。添加方式：从 Claude Code、Codex、Cursor 只读导入；从内置的「精选」里添加（先给你看要运行的完整命令）；粘贴常见的 `{"mcpServers": {...}}` JSON；或者手动填写。服务器第一次用到才启动，空闲 10 分钟后停止，崩溃后退避重启，日志在数据目录的 `mcp/logs/` 里。令牌和 Key 存进钥匙串。标了破坏性的工具运行前会先确认。插件也可以自带服务器。终端里用 `helmp mcp-client list|add|remove|tools|import`。详见 [docs/mcp-client.zh-CN.md](docs/mcp-client.zh-CN.md)。
 
 ## 命令行
 
