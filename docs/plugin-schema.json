@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/PeterChen1997/helmp/HEAD/docs/plugin-schema.json",
+  "title": "Helmp plugin manifest (plugin.json), schemaVersion 1",
+  "description": "For editor completion. `helmp plugins validate <folder>` is the source of truth: it also checks template variables, hosts and file paths. See docs/plugins.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "version", "author", "commands"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "description": "Free-form note for humans; ignored." },
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "description": "Reverse-DNS id, unique across plugins: lowercase letters, digits and -, at least two dot-separated parts.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+      "maxLength": 100
+    },
+    "name": { "$ref": "#/$defs/text" },
+    "description": { "$ref": "#/$defs/text" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "author": { "type": "string", "minLength": 1 },
+    "homepage": { "type": "string" },
+    "icon": { "$ref": "#/$defs/icon" },
+    "tint": { "$ref": "#/$defs/tint" },
+    "permissions": {
+      "description": "Only clipboard.read can be declared. Network, open, clipboard-write, keystroke and script permissions are derived from the manifest.",
+      "type": "array",
+      "items": { "enum": ["clipboard.read"] },
+      "uniqueItems": true
+    },
+    "preferences": { "type": "array", "items": { "$ref": "#/$defs/preference" } },
+    "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/command" } }
+  },
+  "$defs": {
+    "text": {
+      "description": "Plain string, or localized strings. Localized text needs \"en\" (the fallback).",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "required": ["en"],
+          "additionalProperties": false,
+          "properties": {
+            "en": { "type": "string", "minLength": 1 },
+            "zh-Hans": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "key": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "icon": {
+      "description": "A Lucide icon name bundled with Helmp (e.g. notebook-pen), or a .png path relative to the plugin folder.",
+      "type": "string"
+    },
+    "tint": { "enum": ["blue", "indigo", "purple", "orange", "teal", "green", "red", "gray", "graphite"] },
+    "template": {
+      "description": "Template string: {{query}}, {{form.<id>}}, {{pref.<id>}}, {{item.<key>}}, {{response.<path>}}, {{clipboard}}, {{date}}, {{time}}, {{date:<strftime>}}, with filters |url |json |trim |upper |lower.",
+      "type": "string"
+    },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "value"],
+      "properties": { "title": { "$ref": "#/$defs/text" }, "value": { "type": "string" } }
+    },
+    "preference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title"],
+      "properties": {
+        "$comment": {},
+        "id": { "$ref": "#/$defs/key" },
+        "type": { "enum": ["text", "secret", "select", "checkbox"] },
+        "title": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "placeholder": { "$ref": "#/$defs/text" },
+        "required": { "type": "boolean" },
+        "default": { "type": "string", "description": "Not allowed for secrets. Checkbox: \"true\" or \"false\". Select: one of the option values." },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/choice" } },
+        "allowedHosts": {
+          "description": "Required when the whole http URL comes from this preference ({{pref.<id>}}...): the only hosts it may point to.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z0-9.-]+$" }
+        }
+      }
+    },
+    "formField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "label"],
+      "properties": {
+        "$comment": {},
+        "id": { "$ref": "#/$defs/key" },
+        "type": { "enum": ["text", "textarea", "select"] },
+        "label": { "$ref": "#/$defs/text" },
+        "placeholder": { "$ref": "#/$defs/text" },
+        "required": { "type": "boolean" },
+        "default": { "$ref": "#/$defs/template", "description": "Only {{query}}, dates and non-secret {{pref.*}}." },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/choice" } }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "oneOf": [{ "required": ["action"] }, { "required": ["list"] }],
+      "properties": {
+        "$comment": {},
+        "id": { "$ref": "#/$defs/key" },
+        "title": { "$ref": "#/$defs/text" },
+        "subtitle": { "$ref": "#/$defs/text" },
+        "keywords": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "icon": { "$ref": "#/$defs/icon" },
+        "tint": { "$ref": "#/$defs/tint" },
+        "argument": {
+          "description": "Text typed after the keyword becomes {{query}}.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "placeholder": { "$ref": "#/$defs/text" }, "required": { "type": "boolean" } }
+        },
+        "form": { "type": "array", "items": { "$ref": "#/$defs/formField" } },
+        "action": { "$ref": "#/$defs/action" },
+        "list": { "$ref": "#/$defs/list" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": { "type": { "const": "open" }, "url": { "$ref": "#/$defs/template" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["type", "text"],
+          "properties": { "type": { "enum": ["copy", "paste"] }, "text": { "$ref": "#/$defs/template" } }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["type", "method", "url"],
+          "properties": {
+            "type": { "const": "http" },
+            "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            "url": { "$ref": "#/$defs/template", "description": "https://host/... with a literal host, or {{pref.<id>}} for a preference that declares allowedHosts." },
+            "headers": { "type": "object", "additionalProperties": { "$ref": "#/$defs/template" } },
+            "json": { "description": "JSON body; every string inside is a template." },
+            "body": { "$ref": "#/$defs/template" },
+            "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 },
+            "success": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "status": { "type": "array", "items": { "type": "integer", "minimum": 100, "maximum": 599 } },
+                "jsonPath": { "type": "string" },
+                "equals": {},
+                "optional": { "type": "boolean" }
+              }
+            },
+            "message": { "$ref": "#/$defs/text" },
+            "errorPath": { "type": "string" }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["type", "path"],
+          "properties": {
+            "type": { "const": "script" },
+            "path": { "type": "string", "description": "Relative to the plugin folder; may not leave it." },
+            "args": { "type": "array", "items": { "$ref": "#/$defs/template" } },
+            "env": { "type": "object", "additionalProperties": { "$ref": "#/$defs/template" } },
+            "stdin": { "$ref": "#/$defs/template" },
+            "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 120000 },
+            "output": { "enum": ["message", "silent", "copy", "paste"] }
+          }
+        }
+      ]
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script"],
+      "properties": {
+        "script": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "type": "string" },
+            "args": { "type": "array", "items": { "$ref": "#/$defs/template" } },
+            "env": { "type": "object", "additionalProperties": { "$ref": "#/$defs/template" } },
+            "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3000 }
+          }
+        },
+        "action": { "$ref": "#/$defs/action", "description": "Runs for the chosen item; {{item.title|subtitle|arg|uid|url}} available. Default: open {{item.arg}}." },
+        "minQueryLength": { "type": "integer", "minimum": 0 },
+        "cacheSeconds": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

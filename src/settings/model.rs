@@ -14,6 +14,7 @@ use crate::provider::Tint;
 pub enum Page {
     General,
     Extensions,
+    Plugins,
     Models,
     Agents,
     Clipboard,
@@ -24,9 +25,10 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 9] = [
+    pub const ALL: [Page; 10] = [
         Page::General,
         Page::Extensions,
+        Page::Plugins,
         Page::Models,
         Page::Agents,
         Page::Clipboard,
@@ -47,6 +49,7 @@ impl Page {
         match self {
             Page::General => ("通用", "General"),
             Page::Extensions => ("扩展", "Extensions"),
+            Page::Plugins => ("插件", "Plugins"),
             Page::Models => ("模型", "Models"),
             Page::Agents => ("Agent", "Agents"),
             Page::Clipboard => ("剪贴板", "Clipboard"),
@@ -71,6 +74,7 @@ impl Page {
         match self {
             Page::General => ("settings", Tint::Gray),
             Page::Extensions => ("puzzle", Tint::Blue),
+            Page::Plugins => ("blocks", Tint::Indigo),
             Page::Models => ("cpu", Tint::Teal),
             Page::Agents => ("sparkles", Tint::Purple),
             Page::Clipboard => ("clipboard", Tint::Orange),
@@ -121,6 +125,17 @@ impl Page {
                 "alias",
                 "script",
                 "enable",
+            ],
+            Page::Plugins => &[
+                "插件",
+                "清单",
+                "权限",
+                "flomo",
+                "obsidian",
+                "plugin",
+                "manifest",
+                "permission",
+                "webhook",
             ],
             Page::Models => &[
                 "api",
@@ -427,6 +442,16 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
             "text-quote",
             Tint::Purple,
             None,
+        ),
+        "plugins" => (
+            tr("清单插件", "Manifest Plugins"),
+            tr("插件", "Plugin"),
+            "blocks",
+            Tint::Indigo,
+            Some(tr(
+                "flomo、Obsidian、快捷搜索和你装的插件，在「插件」页管理",
+                "flomo, Obsidian, Quick Search and your own plugins; manage them on the Plugins page",
+            )),
         ),
         "websearch" => (
             tr("网页搜索", "Web Search"),

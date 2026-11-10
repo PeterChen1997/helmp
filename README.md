@@ -188,12 +188,18 @@ Arguments become a form:
 
 More examples are in [`examples/scripts`](examples/scripts). The full field reference is in [docs/scripts.md](docs/scripts.md).
 
+## Plugins
+
+A plugin is a folder with a declarative `plugin.json`: forms, preferences (secrets go to the Keychain), HTTP requests, URL schemes and script-driven lists, no code required. flomo, Obsidian quick capture and a Quick Search pack (`gh`, `npm`, `crates`, `mdn`, `gt`, `zhihu`, `bili`, `xhs`) are bundled. Manage plugins in Settings › Plugins; your own plugins go in `~/Library/Application Support/Helmp/plugins/` and stay off until you review their permissions. See [docs/plugins.md](docs/plugins.md) for the tutorial and reference.
+
 ## Command line
 
 ```bash
 cargo run -- query wx            # print results: section, title, subtitle, id
 cargo run -- run <id> [query]    # run one result
 cargo run -- providers           # list registered providers
+cargo run -- plugins             # list plugins and their state
+cargo run -- plugins validate <folder>   # check a plugin you're writing
 HELMP_DRY_RUN=1 cargo run -- run <id> agent   # print the agent jump instead of doing it
 HELMP_TRACE=1 cargo run          # log UI events to stderr
 ```

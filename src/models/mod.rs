@@ -8,7 +8,7 @@
 //! - `settings_pane`：设置窗口「模型」页。
 
 pub(crate) mod client;
-mod keychain;
+pub(crate) mod keychain;
 mod pane;
 mod selection;
 

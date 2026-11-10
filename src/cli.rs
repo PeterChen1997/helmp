@@ -7,6 +7,8 @@
 //!                               --action 改为执行 ⌘K 里同名的次级操作，--then 再执行返回详情里的同名操作
 //!                               （如确认页的「确定」）。配合 HELMP_DRY_RUN=1 做端到端测试。
 //! helmp providers               列出已注册的 provider
+//! helmp plugins                 列出清单插件：状态 \t id \t 版本 \t 来源 \t 名称（出错的附原因）
+//! helmp plugins validate <目录>  校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出
 //! ```
 
 use anyhow::{Context as _, Result, bail};
@@ -21,6 +23,7 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
     let result = match command.as_str() {
         "query" => query(engine, &args[1..].join(" ")),
         "run" => run_item(engine, args.get(1).map(String::as_str), &args[2.min(args.len())..]),
+        "plugins" => plugins(&args[1..]),
         "providers" => {
             for id in engine.provider_ids() {
                 println!("{id}");
@@ -30,6 +33,84 @@ pub fn run(engine: &Engine, args: &[String]) -> Option<Result<()>> {
         _ => return None,
     };
     Some(result)
+}
+
+/// `helmp plugins [validate <目录>]`。
+fn plugins(args: &[String]) -> Result<()> {
+    use crate::providers::plugins::registry::{self, Source, State};
+    match args.first().map(String::as_str) {
+        None => {
+            let config = crate::config::get();
+            for entry in registry::load_all() {
+                let state = match entry.state(&config) {
+                    State::Enabled => "enabled",
+                    State::Disabled => "disabled",
+                    State::NeedsConsent => "needs-consent",
+                    State::Broken => "error",
+                };
+                let source = match entry.source {
+                    Source::Bundled => "bundled",
+                    Source::User => "user",
+                };
+                match &entry.loaded {
+                    Ok(plugin) => println!(
+                        "{state}\t{}\t{}\t{source}\t{}",
+                        entry.id,
+                        plugin.manifest.version,
+                        plugin.manifest.name.get()
+                    ),
+                    Err(errors) => {
+                        println!("{state}\t{}\t-\t{source}\t-", entry.id);
+                        for error in errors {
+                            println!("  - {error}");
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        Some("validate") => {
+            let dir = args.get(1).context(tr(
+                "用法：helmp plugins validate <插件目录>",
+                "Usage: helmp plugins validate <plugin folder>",
+            ))?;
+            let entry = registry::load_dir(std::path::Path::new(dir), Source::User);
+            match &entry.loaded {
+                Ok(plugin) => {
+                    println!(
+                        "OK {} {} ({})",
+                        plugin.id(),
+                        plugin.manifest.version,
+                        trf!("{} 个命令", "{} commands", plugin.manifest.commands.len())
+                    );
+                    let permissions = plugin.permissions.describe();
+                    if permissions.is_empty() {
+                        println!("{}", tr("权限：无", "Permissions: none"));
+                    } else {
+                        println!("{}", tr("权限：", "Permissions:"));
+                        for line in permissions {
+                            println!("  - {line}");
+                        }
+                    }
+                    Ok(())
+                }
+                Err(errors) => {
+                    for error in errors {
+                        eprintln!("  - {error}");
+                    }
+                    bail!(trf!(
+                        "插件校验失败：{} 个问题",
+                        "Plugin validation failed: {} problem(s)",
+                        errors.len()
+                    ))
+                }
+            }
+        }
+        Some(other) => bail!(trf!(
+            "不认识的子命令 {other:?}（可用：helmp plugins、helmp plugins validate <目录>）",
+            "Unknown subcommand {other:?} (use: helmp plugins, helmp plugins validate <folder>)"
+        )),
+    }
 }
 
 fn start(engine: &Engine) {

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "id": "dev.helmp.quicklinks",
+  "name": { "en": "Quick Search", "zh-Hans": "快捷搜索" },
+  "description": {
+    "en": "Type a keyword, a space, then what to search: gh, npm, crates, mdn, gt, zhihu, bili, xhs. Complements the web search engines in Settings › Extensions.",
+    "zh-Hans": "输入关键词加空格，再输入要搜的内容：gh、npm、crates、mdn、gt、zhihu、bili、xhs。与「设置 › 扩展 › 网页搜索」互补。"
+  },
+  "version": "1.0.0",
+  "author": "Helmp",
+  "icon": "search",
+  "tint": "blue",
+  "preferences": [
+    {
+      "id": "translateTo",
+      "type": "select",
+      "title": { "en": "Google Translate target", "zh-Hans": "谷歌翻译目标语言" },
+      "options": [
+        { "title": { "en": "Simplified Chinese", "zh-Hans": "简体中文" }, "value": "zh-CN" },
+        { "title": { "en": "English", "zh-Hans": "英语" }, "value": "en" },
+        { "title": { "en": "Japanese", "zh-Hans": "日语" }, "value": "ja" },
+        { "title": { "en": "Korean", "zh-Hans": "韩语" }, "value": "ko" },
+        { "title": { "en": "French", "zh-Hans": "法语" }, "value": "fr" },
+        { "title": { "en": "German", "zh-Hans": "德语" }, "value": "de" }
+      ],
+      "default": "zh-CN"
+    }
+  ],
+  "commands": [
+    {
+      "id": "gh",
+      "title": { "en": "GitHub Repositories", "zh-Hans": "GitHub 仓库" },
+      "keywords": ["gh", "github repo"],
+      "icon": "github",
+      "tint": "graphite",
+      "argument": { "placeholder": { "en": "Repository", "zh-Hans": "仓库名" }, "required": true },
+      "action": { "type": "open", "url": "https://github.com/search?q={{query|url}}&type=repositories" }
+    },
+    {
+      "id": "npm",
+      "title": "npm",
+      "keywords": ["npm"],
+      "icon": "package",
+      "tint": "red",
+      "argument": { "placeholder": { "en": "Package", "zh-Hans": "包名" }, "required": true },
+      "action": { "type": "open", "url": "https://www.npmjs.com/search?q={{query|url}}" }
+    },
+    {
+      "id": "crates",
+      "title": "crates.io",
+      "keywords": ["crates", "crate", "cargo"],
+      "icon": "box",
+      "tint": "orange",
+      "argument": { "placeholder": { "en": "Crate", "zh-Hans": "crate 名" }, "required": true },
+      "action": { "type": "open", "url": "https://crates.io/search?q={{query|url}}" }
+    },
+    {
+      "id": "mdn",
+      "title": "MDN Web Docs",
+      "keywords": ["mdn"],
+      "icon": "book-open",
+      "tint": "graphite",
+      "argument": { "placeholder": { "en": "Search terms", "zh-Hans": "搜索内容" }, "required": true },
+      "action": { "type": "open", "url": "https://developer.mozilla.org/en-US/search?q={{query|url}}" }
+    },
+    {
+      "id": "gt",
+      "title": { "en": "Google Translate", "zh-Hans": "谷歌翻译" },
+      "keywords": ["gt", "google translate", "谷歌翻译"],
+      "icon": "languages",
+      "tint": "blue",
+      "argument": { "placeholder": { "en": "Text", "zh-Hans": "要翻译的文字" }, "required": true },
+      "action": {
+        "type": "open",
+        "url": "https://translate.google.com/?sl=auto&tl={{pref.translateTo|url}}&text={{query|url}}&op=translate"
+      }
+    },
+    {
+      "id": "zhihu",
+      "title": { "en": "Zhihu", "zh-Hans": "知乎" },
+      "keywords": ["zhihu", "知乎"],
+      "icon": "message-circle",
+      "tint": "blue",
+      "argument": { "placeholder": { "en": "Search terms", "zh-Hans": "搜索内容" }, "required": true },
+      "action": { "type": "open", "url": "https://www.zhihu.com/search?type=content&q={{query|url}}" }
+    },
+    {
+      "id": "bili",
+      "title": { "en": "Bilibili", "zh-Hans": "B 站" },
+      "keywords": ["bili", "bilibili", "b站", "哔哩哔哩"],
+      "icon": "tv",
+      "tint": "blue",
+      "argument": { "placeholder": { "en": "Search terms", "zh-Hans": "搜索内容" }, "required": true },
+      "action": { "type": "open", "url": "https://search.bilibili.com/all?keyword={{query|url}}" }
+    },
+    {
+      "id": "xhs",
+      "title": { "en": "Xiaohongshu (RED)", "zh-Hans": "小红书" },
+      "keywords": ["xhs", "xiaohongshu", "rednote", "小红书"],
+      "icon": "book-heart",
+      "tint": "red",
+      "argument": { "placeholder": { "en": "Search terms", "zh-Hans": "搜索内容" }, "required": true },
+      "action": { "type": "open", "url": "https://www.xiaohongshu.com/search_result?keyword={{query|url}}" }
+    }
+  ]
+}

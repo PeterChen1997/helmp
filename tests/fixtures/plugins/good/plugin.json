@@ -1,0 +1,30 @@
+{
+  "$comment": "端到端测试夹具：一个合法的插件，覆盖 http、script、list 和 secret 偏好设置。",
+  "schemaVersion": 1,
+  "id": "com.example.good",
+  "name": { "en": "Good Plugin", "zh-Hans": "合格插件" },
+  "version": "1.2.3",
+  "author": "Helmp tests",
+  "icon": "puzzle",
+  "preferences": [
+    { "id": "token", "type": "secret", "title": "Token" }
+  ],
+  "commands": [
+    {
+      "id": "ping",
+      "title": "Ping",
+      "action": {
+        "type": "http",
+        "method": "GET",
+        "url": "https://api.example.com/ping",
+        "headers": { "Authorization": "Bearer {{pref.token}}" }
+      }
+    },
+    {
+      "id": "echo",
+      "title": "Echo",
+      "argument": {},
+      "action": { "type": "script", "path": "bin/echo.sh", "args": ["{{query}}"] }
+    }
+  ]
+}

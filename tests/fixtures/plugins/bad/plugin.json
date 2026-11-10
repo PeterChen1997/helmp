@@ -1,0 +1,20 @@
+{
+  "$comment": "端到端测试夹具：故意写错的插件（id 不是反向域名、主机名是模板、用了未声明的剪贴板、脚本不存在）。",
+  "schemaVersion": 1,
+  "id": "BadPlugin",
+  "name": "Bad",
+  "version": "1.0.0",
+  "author": "Helmp tests",
+  "commands": [
+    {
+      "id": "post",
+      "title": "Post",
+      "action": { "type": "http", "method": "POST", "url": "https://{{query}}.example.com/", "body": "{{clipboard}}" }
+    },
+    {
+      "id": "run",
+      "title": "Run",
+      "action": { "type": "script", "path": "bin/missing.sh" }
+    }
+  ]
+}

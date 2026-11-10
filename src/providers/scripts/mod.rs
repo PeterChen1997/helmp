@@ -11,7 +11,7 @@
 
 pub(super) mod args;
 mod header;
-mod runner;
+pub(super) mod runner;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;

@@ -9,6 +9,7 @@ mod processes;
 pub mod clipboard;
 mod dictionary;
 mod files;
+pub mod plugins;
 mod screenshot;
 mod scripts;
 mod settings_panes;
@@ -32,6 +33,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(screenshot::Screenshot),
         Arc::new(clipboard::Clipboard::new()),
         Arc::new(scripts::Scripts::new()),
+        Arc::new(plugins::Plugins::new()),
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
         Arc::new(processes::Processes::default()),

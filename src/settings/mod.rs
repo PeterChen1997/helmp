@@ -7,6 +7,7 @@
 mod hotkey;
 mod model;
 mod pages;
+mod plugins_pane;
 pub(crate) mod system;
 mod widgets;
 
@@ -161,6 +162,8 @@ pub struct SettingsView {
     extensions: Vec<ExtensionRow>,
     models: AnyView,
     snippets: AnyView,
+    /// 「插件」页（清单插件的管理），整页由 `plugins_pane` 提供。
+    plugins: AnyView,
     /// 扩展页脚本目录列表里选中的一项（用于「−」）。
     selected_script_dir: Option<String>,
     /// 剪贴板页忽略列表里选中的 bundle id。
@@ -256,6 +259,7 @@ impl SettingsView {
         });
         let models = crate::models::settings_pane(window, cx);
         let snippets = pages::snippets_pane(window, cx);
+        let plugins = plugins_pane::new(window, cx);
         Self::watch_hotkey_registry(cx);
         let files = config::get().files.clone();
         let files_roots = Self::list_input(
@@ -289,6 +293,7 @@ impl SettingsView {
             extensions,
             models,
             snippets,
+            plugins,
             selected_script_dir: None,
             selected_ignored_app: None,
             error: None,
@@ -582,6 +587,7 @@ impl SettingsView {
         match self.page {
             Page::General => self.render_general(pal, cx),
             Page::Extensions => self.render_extensions(pal, window, cx),
+            Page::Plugins => self.plugins.clone().into_any_element(),
             Page::Models => self.models.clone().into_any_element(),
             Page::Agents => self.render_agents(pal, cx),
             Page::Clipboard => self.render_clipboard(pal, window, cx),

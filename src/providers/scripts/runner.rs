@@ -100,11 +100,28 @@ pub fn working_dir(configured: Option<&str>, script: &Path) -> Result<PathBuf> {
 
 /// 运行脚本直到退出且输出管道关闭，超过 `timeout` 杀掉整个进程组并报错。
 pub fn execute(path: &Path, args: &[String], cwd: &Path, timeout: Duration) -> Result<RunOutput> {
+    execute_with(path, args, cwd, timeout, &[], None)
+}
+
+/// 同 [`execute`]，另外传入环境变量和 stdin（清单插件的 `script` 动作用：参数按 argv 传，从不拼 shell 字符串）。
+pub fn execute_with(
+    path: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    env: &[(String, String)],
+    stdin: Option<&str>,
+) -> Result<RunOutput> {
     let mut command = command_for(path)?;
     command
         .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // 新进程组，组号 = 子进程 pid，超时时整组一起杀。
@@ -114,6 +131,15 @@ pub fn execute(path: &Path, args: &[String], cwd: &Path, timeout: Duration) -> R
         .with_context(|| trf!("启动脚本 {}", "Couldn't start script {}", path.display()))?;
     let pgid = i32::try_from(child.id())
         .with_context(|| tr("pid 超出 i32", "The process ID doesn’t fit in i32"))?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        // 单独线程写：输入很大而脚本不读时，主线程不能卡在写管道上（超时照样生效）。
+        let text = text.to_string();
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            // 脚本不读 stdin 就退出时写入会 EPIPE，不算错误。
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
 
     let (sender, receiver) = mpsc::channel();
     spawn_reader(

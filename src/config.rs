@@ -33,6 +33,9 @@ pub struct Config {
     pub appearance: Appearance,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
+    /// 清单插件（`plugin.json`）按插件 id 的启用状态、授权与非密钥偏好设置。密钥只在钥匙串。
+    #[serde(default)]
+    pub plugins: BTreeMap<String, PluginSettings>,
     /// 首次启动的权限引导是否已完成或跳过。
     pub onboarding_done: bool,
 }
@@ -51,6 +54,7 @@ impl Default for Config {
             files: FilesConfig::default(),
             appearance: Appearance::System,
             script_dirs: Vec::new(),
+            plugins: BTreeMap::new(),
             onboarding_done: false,
         }
     }
@@ -120,6 +124,18 @@ impl Default for ExtensionConfig {
             hotkey: None,
         }
     }
+}
+
+/// 一个清单插件的用户设置（见 `providers::plugins`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PluginSettings {
+    /// None = 按来源的默认值：自带插件默认启用，用户插件默认停用（要先确认权限）。
+    pub enabled: Option<bool>,
+    /// 用户启用时确认过的权限（`Permissions::keys`）。清单的权限变了就要重新确认。
+    pub consent: Vec<String>,
+    /// 非密钥偏好设置的值（text / select / checkbox）。secret 类型永远不进这里。
+    pub prefs: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
