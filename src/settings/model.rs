@@ -402,6 +402,43 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
                 "Shown first when nothing local matches; set engines below",
             )),
         ),
+        "time" => (
+            tr("时间与时区", "Time & Time Zones"),
+            builtin,
+            "clock",
+            Tint::Blue,
+            Some(tr(
+                "时间戳、时区换算、相对时间",
+                "Timestamps, time zone conversion, relative dates",
+            )),
+        ),
+        "devtools" => (
+            tr("开发工具", "Dev Tools"),
+            builtin,
+            "wrench",
+            Tint::Graphite,
+            Some(tr(
+                "UUID、密码、哈希、编码、JSON、JWT、IP",
+                "UUID, passwords, hashes, encoding, JSON, JWT, IP",
+            )),
+        ),
+        "emoji" => (
+            tr("Emoji 与符号", "Emoji & Symbols"),
+            builtin,
+            "face-grinning",
+            Tint::Orange,
+            None,
+        ),
+        "color" => (
+            tr("取色器", "Color Picker"),
+            builtin,
+            "pipette",
+            Tint::Purple,
+            Some(tr(
+                "取屏幕颜色，转换 HEX / RGB / HSL",
+                "Pick screen colors; convert HEX / RGB / HSL",
+            )),
+        ),
         // 新插件还没登记显示名：显示 id，至少能开关。
         _ => ("", builtin, "puzzle", Tint::Gray, None),
     };
@@ -1004,6 +1041,10 @@ mod tests {
             "system",
             "calculator",
             "websearch",
+            "time",
+            "devtools",
+            "emoji",
+            "color",
         ] {
             assert!(!extension_meta(id).name.is_empty(), "{id}");
         }

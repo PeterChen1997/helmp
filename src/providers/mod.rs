@@ -5,9 +5,13 @@ mod apps;
 mod builtin;
 mod calculator;
 pub mod clipboard;
+mod color;
+mod devtools;
+mod emoji;
 mod screenshot;
 mod scripts;
 mod system;
+mod time;
 mod translate;
 pub mod websearch;
 
@@ -27,5 +31,9 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(agents::Agents::default()),
         Arc::new(translate::Translate::default()),
         Arc::new(websearch::WebSearch::new()),
+        Arc::new(time::Time),
+        Arc::new(devtools::DevTools),
+        Arc::new(emoji::Emoji),
+        Arc::new(color::Color),
     ]
 }

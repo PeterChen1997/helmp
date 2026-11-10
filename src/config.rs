@@ -27,6 +27,8 @@ pub struct Config {
     pub web_search: WebSearchConfig,
     #[serde(default)]
     pub system_commands: SystemCommandsConfig,
+    #[serde(default)]
+    pub devtools: DevToolsConfig,
     pub appearance: Appearance,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
@@ -45,6 +47,7 @@ impl Default for Config {
             screenshot: ScreenshotConfig::default(),
             web_search: WebSearchConfig::default(),
             system_commands: SystemCommandsConfig::default(),
+            devtools: DevToolsConfig::default(),
             appearance: Appearance::System,
             script_dirs: Vec::new(),
             onboarding_done: false,
@@ -357,6 +360,14 @@ impl Default for SystemCommandsConfig {
             confirm_dangerous: true,
         }
     }
+}
+
+/// 开发者小工具。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DevToolsConfig {
+    /// 「公网 IP」只在回车时请求这个地址（返回纯文本 IP）。空 = https://api.ipify.org。
+    pub public_ip_url: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

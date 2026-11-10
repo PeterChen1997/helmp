@@ -13,7 +13,7 @@ gpui-kit = "=0.9.0"
 global-hotkey = "0.9.0"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDateFormatter", "NSDictionary", "NSError", "NSFormatter", "NSGeometry", "NSLocale", "NSString", "NSURL", "block2", "NSBundle", "NSValue"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAppearance", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSGraphics", "NSImage", "NSImageRep", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSAlert", "NSButton", "NSControl", "NSEvent", "NSFont", "NSImageView", "NSMenu", "NSMenuItem", "NSMenuItemBadge", "NSScreen", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSText", "NSTextField", "NSDragging", "NSDraggingItem", "NSDraggingSession"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAppearance", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSGraphics", "NSImage", "NSImageRep", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSAlert", "NSButton", "NSControl", "NSEvent", "NSFont", "NSImageView", "NSMenu", "NSMenuItem", "NSMenuItemBadge", "NSScreen", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSText", "NSTextField", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSColorSampler", "NSColorSpace"] }
 raw-window-handle = "0.6.2"
 block2 = "0.6.2"
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow"] }
@@ -31,6 +31,15 @@ security-framework = "3.7.0"
 # 只为 readme-shots 打开 GPUI 的离屏渲染（与 gpui-kit 用的是同一版本）。
 gpui-pre = { version = "=0.3.11", optional = true }
 gpui-pre-macos = { version = "=0.3.11", optional = true }
+# 实用工具（时间 / 开发者工具 / 取色）：时区换算、哈希、编码、UUID、色块图片、回主线程取色。
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+md-5 = "0.10"
+sha1 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "v7"] }
+png = "0.18"
+dispatch2 = "0.3"
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
 [features]

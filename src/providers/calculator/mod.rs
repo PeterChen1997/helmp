@@ -4,12 +4,18 @@
 //!   全角符号、中文括号、`×÷` 先规范化成半角（见 `parser::normalize`）。
 //! - 只有输入「像算式」时才出结果或错误行（见 `parser::evaluate`）：`wx`、`微信`、`2026` 这类搜索词什么都不出。
 //! - 错误细分：除以零、表达式不完整、超出范围、超出定义域、未知函数、参数个数不对、写法有误，写在副标题里。
+//! - 不是算式时再看是不是单位或货币换算（`10 km to mi`、`3斤`、`100 usd to cny`，见 `units`），
+//!   汇率来自 ECB 并缓存在本地（见 `currency`）；输入「汇率」列出常用币对。
 
+mod currency;
 mod parser;
+mod units;
 
 use crate::i18n::{tr, trf};
+use crate::matcher;
 use crate::provider::{Action, Icon, Item, NamedAction, Outcome, Provider, Tint};
 use parser::CalcError;
+use units::{Category, Unit};
 
 const ICON: Icon = Icon::Symbol {
     name: "calculator",
@@ -19,6 +25,16 @@ const ERROR_ICON: Icon = Icon::Symbol {
     name: "calculator",
     tint: Tint::Red,
 };
+const UNIT_ICON: Icon = Icon::Symbol {
+    name: "ruler",
+    tint: Tint::Orange,
+};
+const FX_ICON: Icon = Icon::Symbol {
+    name: "banknote",
+    tint: Tint::Green,
+};
+/// 单位换算结果的有效数字（`6.21371 mi`）：再多就是噪音。
+const UNIT_SIGNIFICANT: i32 = 6;
 /// 高于任何文字匹配（完全相等 1000）：输入是算式时，答案就是用户要的第一条。
 const SCORE: u32 = 1100;
 /// 有效数字位数：15 位以内 f64 是精确的，0.1+0.2 的残差在第 17 位，这样能显示成 0.3。
@@ -38,15 +54,29 @@ impl Provider for Calculator {
         "calculator"
     }
 
+    fn start(&self) -> anyhow::Result<()> {
+        currency::start();
+        Ok(())
+    }
+
     fn query(&self, query: &str) -> Vec<Item> {
         let expression = expression(query);
-        let Some(result) = parser::evaluate(&expression) else {
-            return Vec::new();
-        };
-        vec![match result {
-            Ok(value) => result_item(&expression, &format_number(value)),
-            Err(err) => error_item(&expression, &describe(&err)),
-        }]
+        if let Some(result) = parser::evaluate(&expression) {
+            // `rgb(255, 136, 0)`、`hsl(…)` 是颜色写法（颜色插件会转换），不是写错的函数。
+            if let Err(CalcError::UnknownFunction(name)) = &result
+                && ["rgb", "rgba", "hsl", "hsla"].contains(&name.as_str())
+            {
+                return Vec::new();
+            }
+            return vec![match result {
+                Ok(value) => result_item(&expression, &format_number(value)),
+                Err(err) => error_item(&expression, &describe(&err)),
+            }];
+        }
+        if let Some(request) = units::parse(&expression) {
+            return conversion_items(&request);
+        }
+        exchange_rate_items(query)
     }
 }
 
@@ -94,6 +124,277 @@ fn error_item(expression: &str, message: &str) -> Item {
     }
 }
 
+/// 单位换算：每个目标单位一行，第一条分数最高。数据单位写了目标时另给一行 1024 进制。
+fn conversion_items(request: &units::Request) -> Vec<Item> {
+    if request.from.category == Category::Currency {
+        return currency_items(request);
+    }
+    let mut items = Vec::new();
+    for to in request.targets() {
+        let Some(value) = units::convert(request.amount, request.from, to) else {
+            continue;
+        };
+        let rank = items.len() as u32;
+        items.push(unit_item(request, to, value, None, rank));
+        if request.to.is_some()
+            && let Some(binary) = units::convert_binary(request.amount, request.from, to)
+            && binary != value
+        {
+            let note = tr("按 1024 进制", "binary, 1024-based");
+            items.push(unit_item(request, to, binary, Some(note), rank + 1));
+        }
+    }
+    items
+}
+
+fn unit_item(
+    request: &units::Request,
+    to: &Unit,
+    value: f64,
+    note: Option<&str>,
+    rank: u32,
+) -> Item {
+    let number = format_significant(value, UNIT_SIGNIFICANT);
+    let with_unit = format!("{number} {}", to.symbol);
+    let source = format!("{} {}", format_number(request.amount), request.from.symbol);
+    let subtitle = match note {
+        Some(note) => format!("{source} = · {note}"),
+        None => format!("{source} ="),
+    };
+    let id = match note {
+        Some(_) => format!("calculator:unit:{}-1024", to.key),
+        None => format!("calculator:unit:{}", to.key),
+    };
+    Item {
+        id,
+        title: with_unit.clone(),
+        subtitle,
+        badge: tr("单位换算", "Units").into(),
+        score: SCORE.saturating_sub(rank),
+        icon: UNIT_ICON,
+        action: Action::copy(number),
+        action_title: tr("复制数值", "Copy Value").into(),
+        actions: vec![
+            NamedAction::new(
+                tr("复制带单位的结果", "Copy with Unit"),
+                Some("⌘↵"),
+                Action::copy(with_unit.clone()),
+            ),
+            NamedAction::new(
+                tr("复制换算式", "Copy Conversion"),
+                Some("⌘⇧C"),
+                Action::copy(format!("{source} = {with_unit}")),
+            ),
+        ],
+        ..Item::blank()
+    }
+}
+
+/// 货币换算：有汇率就逐个列出，副标题写汇率日期；没有汇率就给一条说明原因的行，回车立即联网更新。
+fn currency_items(request: &units::Request) -> Vec<Item> {
+    let source = format!("{} {}", format_number(request.amount), request.from.symbol);
+    let Some(rates) = currency::snapshot() else {
+        let targets: Vec<_> = request.targets().iter().map(|u| u.symbol).collect();
+        return vec![no_rates_item(&format!(
+            "{source} → {}",
+            targets.join(" / ")
+        ))];
+    };
+    let stamp = rates_stamp(&rates);
+    let mut items = Vec::new();
+    for to in request.targets() {
+        let rank = items.len() as u32;
+        let Some(value) = rates.convert(request.amount, request.from.key, to.key) else {
+            let missing = [request.from.key, to.key]
+                .into_iter()
+                .find(|code| !rates.rates.contains_key(*code))
+                .unwrap_or(to.key);
+            let message = trf!(
+                "汇率表里没有 {missing}（{}）",
+                "No rate for {missing} ({})",
+                rates.source
+            );
+            let shown = message.clone();
+            items.push(Item {
+                id: format!("calculator:fx:{}", to.key),
+                title: format!("{source} → {}", to.symbol),
+                subtitle: message,
+                badge: tr("汇率", "Currency").into(),
+                score: SCORE.saturating_sub(rank),
+                icon: FX_ICON,
+                action: Action::new(move || Ok(Outcome::Message(shown.clone()))).keep_open(),
+                action_title: tr("无法换算", "Can’t Convert").into(),
+                ..Item::blank()
+            });
+            continue;
+        };
+        let number = format_money(value);
+        let with_code = format!("{number} {}", to.symbol);
+        items.push(Item {
+            id: format!("calculator:fx:{}", to.key),
+            title: with_code.clone(),
+            subtitle: format!("{source} = · {stamp}"),
+            badge: tr("汇率", "Currency").into(),
+            score: SCORE.saturating_sub(rank),
+            icon: FX_ICON,
+            action: Action::copy(number),
+            action_title: tr("复制数值", "Copy Value").into(),
+            actions: vec![
+                NamedAction::new(
+                    tr("复制带币种的结果", "Copy with Currency"),
+                    Some("⌘↵"),
+                    Action::copy(with_code.clone()),
+                ),
+                NamedAction::new(
+                    tr("复制换算式", "Copy Conversion"),
+                    Some("⌘⇧C"),
+                    Action::copy(format!("{source} = {with_code}")),
+                ),
+                NamedAction::new(
+                    tr("更新汇率", "Update Exchange Rates"),
+                    None,
+                    update_rates_action(),
+                ),
+            ],
+            ..Item::blank()
+        });
+    }
+    items
+}
+
+/// 「汇率更新于 2026-11-09（ECB）」，上次更新失败时注明正在用缓存。
+fn rates_stamp(rates: &currency::Rates) -> String {
+    let stamp = trf!(
+        "汇率更新于 {}（{}）",
+        "Rates as of {} ({})",
+        rates.date,
+        rates.source
+    );
+    match currency::last_error() {
+        Some(_) => format!(
+            "{stamp} · {}",
+            tr("更新失败，使用缓存", "update failed, using cache")
+        ),
+        None => stamp,
+    }
+}
+
+fn no_rates_item(title: &str) -> Item {
+    let subtitle = match currency::last_error() {
+        Some(err) => trf!(
+            "没有汇率数据，联网后自动获取（{err}）",
+            "No exchange-rate data yet; it’s fetched once you’re online ({err})"
+        ),
+        None => tr(
+            "没有汇率数据，联网后自动获取",
+            "No exchange-rate data yet; it’s fetched once you’re online",
+        )
+        .into(),
+    };
+    Item {
+        id: "calculator:fx-unavailable".into(),
+        title: title.to_string(),
+        subtitle,
+        badge: tr("汇率", "Currency").into(),
+        score: SCORE,
+        icon: FX_ICON,
+        action: update_rates_action(),
+        action_title: tr("更新汇率", "Update Exchange Rates").into(),
+        ..Item::blank()
+    }
+}
+
+/// 立即联网更新汇率，结果用一句话告诉用户（成功写日期，失败写原因）。
+fn update_rates_action() -> Action {
+    Action::new(|| {
+        Ok(Outcome::Message(match currency::refresh() {
+            Ok(rates) => trf!(
+                "汇率已更新：{}（{}）",
+                "Exchange rates updated: {} ({})",
+                rates.date,
+                rates.source
+            ),
+            Err(err) => trf!(
+                "汇率更新失败：{err:#}",
+                "Couldn’t update exchange rates: {err:#}"
+            ),
+        }))
+    })
+}
+
+/// 「汇率」命令：列出常用外币对人民币的汇率和「更新汇率」。
+fn exchange_rate_items(query: &str) -> Vec<Item> {
+    const KEYWORDS: &[&str] = &["汇率", "货币换算", "exchange rate", "currency", "fx"];
+    // 至少两个字：只打一个 `f`、`h` 不该冒出整组汇率。
+    if query.trim().chars().count() < 2 {
+        return Vec::new();
+    }
+    let Some(score) = KEYWORDS
+        .iter()
+        .filter_map(|keyword| matcher::score(query, keyword))
+        .max()
+        .filter(|score| *score >= 700)
+    else {
+        return Vec::new();
+    };
+    let Some(rates) = currency::snapshot() else {
+        return vec![Item {
+            score,
+            ..no_rates_item(tr("汇率", "Exchange Rates"))
+        }];
+    };
+    let stamp = rates_stamp(&rates);
+    let mut items: Vec<Item> = [
+        ("USD", 1.0),
+        ("EUR", 1.0),
+        ("JPY", 100.0),
+        ("HKD", 1.0),
+        ("GBP", 1.0),
+    ]
+    .into_iter()
+    .filter_map(|(code, amount)| {
+        let value = rates.convert(amount, code, "CNY")?;
+        let text = format!(
+            "{} {code} = {} CNY",
+            format_number(amount),
+            format_money(value)
+        );
+        Some(Item {
+            id: format!("calculator:fx-pair:{code}"),
+            title: text.clone(),
+            subtitle: stamp.clone(),
+            badge: tr("汇率", "Currency").into(),
+            score,
+            icon: FX_ICON,
+            action: Action::copy(text),
+            action_title: tr("复制", "Copy").into(),
+            ..Item::blank()
+        })
+    })
+    .collect();
+    items.push(Item {
+        id: "calculator:fx-update".into(),
+        title: tr("更新汇率", "Update Exchange Rates").into(),
+        subtitle: stamp,
+        badge: tr("汇率", "Currency").into(),
+        score: score.saturating_sub(1),
+        icon: FX_ICON,
+        action: update_rates_action(),
+        action_title: tr("更新", "Update").into(),
+        ..Item::blank()
+    });
+    items
+}
+
+/// 金额：一元以上保留两位小数，零点几的保留四位有效数字。
+fn format_money(value: f64) -> String {
+    if value.abs() >= 1.0 {
+        format!("{value:.2}")
+    } else {
+        format_significant(value, 4)
+    }
+}
+
 fn describe(err: &CalcError) -> String {
     match err {
         CalcError::DivisionByZero => tr("除数不能为零", "Can’t divide by zero").into(),
@@ -123,17 +424,22 @@ fn describe(err: &CalcError) -> String {
 /// 结果的显示：不加千分位；按 15 位有效数字取整去掉浮点残差（0.1+0.2 → 0.3）；
 /// 特别大或特别小用科学计数（`1.5e20`，可以直接复制回来再算）。
 fn format_number(value: f64) -> String {
+    format_significant(value, SIGNIFICANT)
+}
+
+/// 按 `significant` 位有效数字显示（规则同 `format_number`）。
+fn format_significant(value: f64, significant: i32) -> String {
     if value == 0.0 {
         return "0".into();
     }
     let magnitude = value.abs();
     if !(TINY..HUGE).contains(&magnitude) {
-        let text = format!("{:.*e}", (SIGNIFICANT - 4) as usize, value);
+        let text = format!("{:.*e}", (significant - 4).max(1) as usize, value);
         let (mantissa, exponent) = text.split_once('e').unwrap_or((&text, "0"));
         return format!("{}e{exponent}", trim_zeros(mantissa));
     }
     let integer_digits = magnitude.log10().floor() as i32 + 1;
-    let decimals = (SIGNIFICANT - integer_digits).max(0) as usize;
+    let decimals = (significant - integer_digits).max(0) as usize;
     // 走到这里绝对值不小于 TINY，15 位有效数字之内不会被取整成「-0」。
     trim_zeros(&format!("{value:.decimals$}")).to_string()
 }
@@ -248,7 +554,7 @@ mod tests {
     fn symbol_icons_exist_in_bundled_assets() {
         // 图标名拼错时界面只会画一个空白方块，不会报错。
         use gpui_kit::AssetSource as _;
-        for icon in [ICON, ERROR_ICON] {
+        for icon in [ICON, ERROR_ICON, UNIT_ICON, FX_ICON] {
             let Icon::Symbol { name, .. } = icon else {
                 unreachable!()
             };

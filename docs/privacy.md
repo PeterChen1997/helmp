@@ -20,6 +20,9 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 | `ocr/` | The last few screenshots shown next to OCR results; older ones are deleted automatically | Delete the folder |
 | `scripts/` | Your script commands | Yours to manage |
 | `icon-cache/` | PNG renderings of app and file icons | Safe to delete at any time |
+| `fx.json` | The last ECB exchange rates (date and rate table) used for currency conversion | Safe to delete; downloaded again when online |
+| `emoji-recent.json` | Up to 24 emoji you pasted or copied most recently | Delete the file |
+| `colors/` | Small PNG swatches for colors you converted or picked | Safe to delete at any time |
 
 If you used an earlier build called "huan", Helmp moves `~/Library/Application Support/huan/` to the new folder once on first launch.
 
@@ -60,6 +63,8 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 
 - **Translate** sends the text you translate, plus a short instruction, to the endpoint you configured: Anthropic, an OpenAI-compatible URL, or Ollama (`http://localhost:11434` by default). Translation starts automatically when you pause typing, so a request goes out for each pause, not only when you press Return; an identical request is answered from the in-memory history instead. "Test connection" in Settings sends a small request to the same endpoint. Each request has a 30-second timeout. Helmp doesn't route these requests through any server of its own; there isn't one.
 - **Settings › Models** checks whether each Ollama endpoint you added is running (`GET <endpoint>/api/tags`, 2-second timeout).
+- **Currency conversion** downloads the European Central Bank's daily reference rates (`GET https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`, 8-second timeout) at launch when the cached copy is older than a day, then checks hourly and downloads at most once a day. The request carries nothing about you or what you typed.
+- **Dev Tools › Public IP** asks `https://api.ipify.org` (or the address in `devtools.public_ip_url`) for your public IP, only when you press Return on that row.
 - Nothing else. There is no analytics, telemetry, crash reporting or update check. "Check for Updates" in the menu currently just shows the installed version, and the "Automatically check for updates" switch in Settings has no effect yet.
 
 Things that may reach the network because *you* asked for them: web search results (<kbd>↵</kbd> opens the search URL in your default browser; Helmp itself sends nothing, and the subtitle shows the exact URL), opening a link from the clipboard history or from a QR code, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
