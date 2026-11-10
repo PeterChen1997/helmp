@@ -6,7 +6,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
-Planned as 0.2.0.
+## [0.2.0] - 2026-11-10
 
 ### Added
 
@@ -114,5 +114,6 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/PeterChen1997/helmp/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/PeterChen1997/helmp/releases/tag/v0.1.0
