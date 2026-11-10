@@ -786,6 +786,56 @@ main {
   background: rgba(255, 255, 255, 0.18);
 }
 
+/* ---------- 插件 ---------- */
+.plugins {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 32px;
+}
+
+.plugins-copy {
+  padding: 4px 22px;
+  border-radius: var(--radius-lg);
+}
+
+.plugin-points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plugin-points li {
+  padding: 16px 0;
+  color: var(--text-2);
+  font-size: 15px;
+}
+
+.plugin-points li + li {
+  border-top: 1px solid var(--line);
+}
+
+.plugin-points strong {
+  color: var(--text);
+}
+
+.plugins-code {
+  margin: 0;
+}
+
+.plugins-code pre {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.plugins-code figcaption {
+  margin-top: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+
 /* ---------- 快捷键 ---------- */
 .shortcut-cols {
   display: grid;
@@ -938,6 +988,13 @@ main {
 @media (max-width: 900px) {
   .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plugins {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   .shortcut-cols {

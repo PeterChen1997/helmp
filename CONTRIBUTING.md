@@ -33,6 +33,41 @@ cargo clippy --release --all-targets -- -D warnings
 
 CI runs the same two commands on macOS. Tests that depend on your own machine (real agent sessions, real terminals) are marked `#[ignore]`; run them with `-- --ignored` when you touch that code.
 
+### End-to-end tests
+
+Every user-visible feature has end-to-end tests in `tests/e2e_*.rs`. They run the real `helmp` binary through "query → run", so they catch what unit tests can't: wiring, ranking against other providers, and the exact action a result performs. When you add or change a feature, add or update a test there: use the file for that area, or start `tests/e2e_<area>.rs` with `mod support;`.
+
+The harness is in [`tests/support/mod.rs`](tests/support/mod.rs):
+
+- `Helmp::new()` builds an isolated environment for one test: a temporary data folder and `HOME`, its own `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, clipboard recording off, English UI, and `HELMP_DRY_RUN=1`. Adjust it with `.config(|c| …)` (merged into `config.json`), `.env(key, value)`, `.lang("zh")`, and write fixtures with `.write(path, content)`. Everything is deleted when the value is dropped.
+- `h.query(text)` returns the rows (badge, title, subtitle, id); `h.find(text, |row| …)` returns the first matching row and prints all rows if none matches; `h.run(id, query, &["--action", "…"])` runs a result and returns its output; `h.cli(&[…])` / `h.cli_err(&[…])` run any other command and expect success / failure.
+- `MockServer::start(|request| (status, body))` is a local HTTP server that records every request (`server.requests()`). Point the feature at it through its URL override (for example `HELMP_FX_URL`, `HELMP_PUBLIC_IP_URL`, or a model endpoint in the config) and assert on what was sent.
+
+```rust
+mod support;
+use support::{Helmp, MockServer};
+
+#[test]
+fn currency_converts_with_ecb_rates() {
+    // Say why this matters, so the test fails when the intent breaks:
+    // rates come from the ECB, are cached, and the result names their date.
+    let server = MockServer::start(|_| (200, ECB_XML.to_string()));
+    let h = Helmp::new().env("HELMP_FX_URL", format!("{}/eurofxref-daily.xml", server.url));
+    let row = h.find("100 usd to cny", |r| r.id == "calculator:fx:CNY");
+    assert_eq!(row.title, "700.00 CNY");
+    assert_eq!(server.requests().len(), 1);
+}
+```
+
+Rules:
+
+- **Every new side effect goes through `crate::effects::dry` first.** Anything that changes the user's environment (copy, paste, open a URL or file, run a command, quit a process, move a window, change a system setting, send a request to a real host) must start with
+  `if let Some(outcome) = crate::effects::dry("<kind>", &detail) { return Ok(outcome); }`.
+  In dry-run mode the action then only reports `[dry-run] <kind> <detail>`, and the test asserts on that exact line, e.g. `assert_eq!(h.run("calculator:unit:mi", "10 km to mi", &[]).trim(), "[dry-run] copy 6.21371");`.
+- Tests must never touch the user's clipboard, Keychain, `~/.claude`, `~/.codex`, windows, processes or the real network. Secrets come from `HELMP_TEST_SECRETS` (honored only with an isolated data folder and dry-run), HTTP goes to a `MockServer`, and offline cases use a closed local port.
+- When a feature depends on the machine (time, time zone, screens, Spotlight, a color picker), add a narrow test seam: an environment variable read only by that module and documented in its module comment, like `HELMP_NOW`, `HELMP_WINDOW_FIXTURE`, `HELMP_COLOR_FIXTURE` or `HELMP_FILES_ROOTS`. Set `TZ` when output depends on the time zone.
+- A test that can't be made reliable everywhere gets `#[ignore = "<why, and the command to run it>"]` instead of being flaky.
+
 ### Code style
 
 - Comments and doc comments are written in Chinese, like the rest of the code base. Explain *why*, not *what*.
@@ -96,6 +131,41 @@ cargo clippy --release --all-targets -- -D warnings
 ```
 
 CI 在 macOS 上跑的就是这两条。依赖本机环境的测试（真实的 agent 会话、真实的终端进程）标了 `#[ignore]`，改到相关代码时用 `-- --ignored` 跑一下。
+
+### 端到端测试
+
+每个用户能看到的功能，在 `tests/e2e_*.rs` 里都有端到端测试。它们用真实的 `helmp` 可执行文件走「查询 → 执行」，能发现单元测试发现不了的问题：模块有没有接上、和其他 provider 一起排序时排在哪、一条结果实际执行了什么。新增或修改功能时，要在这里加上或更新用例：放进对应领域的文件，或者新建 `tests/e2e_<领域>.rs`，开头写 `mod support;`。
+
+测试框架在 [`tests/support/mod.rs`](tests/support/mod.rs)：
+
+- `Helmp::new()` 为一个用例建一个隔离环境：临时数据目录和 `HOME`、单独的 `CLAUDE_CONFIG_DIR` 和 `CODEX_HOME`、关闭剪贴板记录、英文界面、`HELMP_DRY_RUN=1`。用 `.config(|c| …)`（合并进 `config.json`）、`.env(key, value)`、`.lang("zh")` 调整，用 `.write(路径, 内容)` 写夹具。值被 drop 时全部删除。
+- `h.query(text)` 返回结果行（badge、标题、副标题、id）；`h.find(text, |row| …)` 返回第一条符合条件的行，找不到时把全部结果打出来；`h.run(id, query, &["--action", "…"])` 执行一条结果并返回输出；`h.cli(&[…])` / `h.cli_err(&[…])` 运行其他命令，分别要求成功 / 失败。
+- `MockServer::start(|request| (状态码, 正文))` 是本机的假 HTTP 服务，记录每个请求（`server.requests()`）。通过功能自己的地址覆盖项（比如 `HELMP_FX_URL`、`HELMP_PUBLIC_IP_URL`，或配置里的模型地址）把请求指向它，再断言发出去的内容。
+
+```rust
+mod support;
+use support::{Helmp, MockServer};
+
+#[test]
+fn currency_converts_with_ecb_rates() {
+    // 写清楚这个行为为什么重要，意图被破坏时测试才会失败：
+    // 汇率来自 ECB、会缓存，结果里写明汇率日期。
+    let server = MockServer::start(|_| (200, ECB_XML.to_string()));
+    let h = Helmp::new().env("HELMP_FX_URL", format!("{}/eurofxref-daily.xml", server.url));
+    let row = h.find("100 usd to cny", |r| r.id == "calculator:fx:CNY");
+    assert_eq!(row.title, "700.00 CNY");
+    assert_eq!(server.requests().len(), 1);
+}
+```
+
+规则：
+
+- **新的副作用一律先过 `crate::effects::dry`。** 凡是会改动用户环境的动作（复制、粘贴、打开网址或文件、运行命令、结束进程、移动窗口、改系统设置、向真实主机发请求），开头都要写
+  `if let Some(outcome) = crate::effects::dry("<动作>", &detail) { return Ok(outcome); }`。
+  这样演练模式下它只回报 `[dry-run] <动作> <内容>`，测试直接断言这一行，例如 `assert_eq!(h.run("calculator:unit:mi", "10 km to mi", &[]).trim(), "[dry-run] copy 6.21371");`。
+- 测试绝不能碰用户的剪贴板、钥匙串、`~/.claude`、`~/.codex`、窗口、进程和真实网络。密钥走 `HELMP_TEST_SECRETS`（只在隔离数据目录 + 演练模式下生效），HTTP 发往 `MockServer`，离线场景用一个没人监听的本机端口。
+- 功能依赖本机环境（时间、时区、屏幕、Spotlight、取色器）时，加一个范围很窄的测试接缝：只在该模块里读取、并写进模块注释的环境变量，比如 `HELMP_NOW`、`HELMP_WINDOW_FIXTURE`、`HELMP_COLOR_FIXTURE`、`HELMP_FILES_ROOTS`。输出和时区有关时设好 `TZ`。
+- 没法在所有机器上稳定通过的用例，标 `#[ignore = "<原因，以及怎么手动运行>"]`，不要留一个时好时坏的测试。
 
 ### 代码风格
 

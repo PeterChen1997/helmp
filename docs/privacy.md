@@ -21,6 +21,9 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 | `scripts/` | Your script commands | Yours to manage |
 | `icon-cache/` | PNG renderings of app and file icons | Safe to delete at any time |
 | `fx.json` | The last ECB exchange rates (date and rate table) used for currency conversion | Safe to delete; downloaded again when online |
+| `snippets.json` | Your text snippets (name, keyword, content, tags) | Settings › Snippets, or delete the file |
+| `plugins/` | Plugins you installed or created (each folder has a `plugin.json`). Plugin secrets are not here; they are in the Keychain | Settings › Plugins, or delete the folder |
+| `emoji-recent.json`, `colors/` | Recently used emoji, and swatch images for colors you converted or picked | Safe to delete |
 | `emoji-recent.json` | Up to 24 emoji you pasted or copied most recently | Delete the file |
 | `colors/` | Small PNG swatches for colors you converted or picked | Safe to delete at any time |
 
