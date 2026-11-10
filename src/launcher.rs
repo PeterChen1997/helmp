@@ -210,7 +210,7 @@ impl Launcher {
                     window.is_window_active()
                 ));
                 if this.visible && !window.is_window_active() {
-                    // 不立刻收起：从「已在运行」卡片、设置等别的窗口唤起面板时，焦点会在窗口之间
+                    // 不立刻收起：从设置、欢迎页等别的窗口唤起面板时，焦点会在窗口之间
                     // 短暂跳一下（失去又马上回来），立刻收起会让面板闪一下就没了。150 ms 后仍不在前台才收。
                     cx.spawn_in(window, async move |this, cx| {
                         cx.background_executor()

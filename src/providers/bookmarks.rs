@@ -256,7 +256,12 @@ fn search<'a>(marks: &'a [Mark], query: &str) -> Vec<(&'a Mark, u32)> {
     let mut hits: Vec<(&Mark, u32)> = marks
         .iter()
         .filter_map(|mark| {
-            let title = matcher::score_candidate(query, &mark.title_candidate);
+            // 「字母按顺序出现」的模糊匹配（< 550 分）只留给短标题、单个词的查询（gthb → GitHub 首页）：
+            // 长标题里几乎什么字母组合都凑得出来，device hub 会命中毫不相关的「…/Css.md at master」。
+            let loose_ok = !query.trim().contains(char::is_whitespace)
+                && mark.title.chars().count() <= 40;
+            let title = matcher::score_candidate(query, &mark.title_candidate)
+                .filter(|score| *score >= 550 || loose_ok);
             let url = mark.url_lower.contains(&lower).then_some(600);
             Some((mark, title.max(url)?))
         })
@@ -706,6 +711,20 @@ mod tests {
         assert_eq!(titles("fswd"), ["飞书文档"]);
         assert_eq!(titles("feishu.cn"), ["飞书文档"]);
         assert!(titles("zzzz").is_empty());
+    }
+
+    #[test]
+    fn long_titles_do_not_fuzzy_match_unrelated_queries() {
+        // 实际遇到过：搜 device hub（想找 Xcode 里的 DeviceHub）先冒出一个 GitHub 上 Css.md 的书签。
+        let marks = [Mark::new(
+            chrome(),
+            None,
+            "Front-End-Interview-Notebook/Css.md at master · CavsZhouyou/Front-End-Interview-Notebook".into(),
+            "https://github.com/CavsZhouyou/Front-End-Interview-Notebook/blob/master/Css/Css.md".into(),
+            String::new(),
+        )];
+        assert!(search(&marks, "device hub").is_empty());
+        assert!(search(&marks, "instruments").is_empty());
     }
 
     #[test]

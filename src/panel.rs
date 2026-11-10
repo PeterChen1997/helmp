@@ -210,7 +210,7 @@ fn input_context_state(ns_window: &NSWindow) -> String {
 /// 豆包、系统拼音等输入法却只会把字母原样上屏，打不出中文（实测：同一面板里的原生
 /// NSTextField 也一样，去掉这个样式后组字恢复正常）。Alfred、Raycast 这类启动器也是唤起时
 /// 激活自己、收起时把焦点还给原来的 App——见 [`remember_previous_app`] / [`restore_previous_app`]。
-/// 在面板创建后调用一次；授权浮窗、「已在运行」卡片不需要打字，仍保持非激活。
+/// 在面板创建后调用一次；授权浮窗不需要打字，仍保持非激活。
 pub fn make_activating(window: &Window) {
     let Some(ns_window) = ns_window(window) else {
         eprintln!("helmp: 无法取得 NSWindow，面板保持非激活（中文输入法可能无法组字）");

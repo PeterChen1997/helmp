@@ -141,6 +141,23 @@ fn literal_match(query: &str, candidate: &str) -> Option<(u32, MatchKind)> {
     if initials(candidate).starts_with(query) {
         return Some((INITIALS, MatchKind::WordInitials));
     }
+    // 空格、连字符写法不同也算同一个名字：`device hub` ↔ DeviceHub、`app store` ↔ AppStore。
+    if query.contains([' ', '-', '_']) || candidate.contains([' ', '-', '_']) {
+        let compact = |s: &str| -> String {
+            s.chars()
+                .filter(|c| !c.is_whitespace() && *c != '-' && *c != '_')
+                .collect()
+        };
+        let (query, candidate) = (compact(query), compact(candidate));
+        if !query.is_empty() {
+            if candidate == query {
+                return Some((EXACT, MatchKind::Exact));
+            }
+            if candidate.starts_with(&query) {
+                return Some((PREFIX, MatchKind::Prefix));
+            }
+        }
+    }
     if candidate.contains(query) {
         return Some((SUBSTRING, MatchKind::Substring));
     }
@@ -420,6 +437,15 @@ mod tests {
         // 但非默认读音仍要能搜到（cq → 重庆）。
         assert!(score("jsq", "计算器").unwrap() > score("jsq", "拾色器").unwrap());
         assert!(score("cq", "重庆").is_some());
+    }
+
+    #[test]
+    fn spaces_and_hyphens_do_not_change_the_name() {
+        // 用户按读法打「device hub」，App 叫 DeviceHub；反过来 devicehub 也要能找到「Device Hub」。
+        assert_eq!(score("device hub", "DeviceHub"), Some(EXACT));
+        assert_eq!(score("devicehub", "Device Hub"), Some(EXACT));
+        assert_eq!(score("device h", "DeviceHub"), Some(PREFIX));
+        assert_eq!(score("visual-studio", "Visual Studio Code"), Some(PREFIX));
     }
 
     #[test]

@@ -228,7 +228,33 @@ fn roots(home: Option<&Path>) -> Vec<PathBuf> {
     if let Some(home) = home {
         roots.push(home.join("Applications"));
     }
+    roots.extend(xcode_tool_dirs(Path::new("/Applications")));
     roots
+}
+
+/// Xcode 把 Device Hub、Instruments、Accessibility Inspector、FileMerge、Simulator 等开发工具
+/// 装在自己的包里（`Xcode.app/Contents/Applications`、`Contents/Developer/Applications`），
+/// 不在「应用程序」文件夹，扫描时不会进到别的 App 包里面。Spotlight、Alfred、Raycast 都能搜到它们，
+/// 所以把每个 Xcode*.app（含 Xcode-beta）的这两个目录也当作扫描根目录。
+fn xcode_tool_dirs(applications: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(applications) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("Xcode") && name.ends_with(".app")) {
+            continue;
+        }
+        for sub in ["Contents/Applications", "Contents/Developer/Applications"] {
+            let dir = entry.path().join(sub);
+            if dir.is_dir() {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs.sort();
+    dirs
 }
 
 fn rebuild(
@@ -675,4 +701,24 @@ mod tests {
             apps.len()
         );
     }
+
+    #[test]
+    fn xcode_bundled_tools_are_scanned() {
+        // Device Hub、Instruments 这类工具装在 Xcode 包里；不把这些目录列进来就搜不到（用户实际遇到过）。
+        let dir = std::env::temp_dir().join(format!("helmp-xcode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Xcode.app/Contents/Applications/DeviceHub.app")).unwrap();
+        std::fs::create_dir_all(dir.join("Xcode-beta.app/Contents/Developer/Applications/Simulator.app")).unwrap();
+        std::fs::create_dir_all(dir.join("Other.app/Contents/Applications")).unwrap();
+        let found = super::xcode_tool_dirs(&dir);
+        assert_eq!(
+            found,
+            vec![
+                dir.join("Xcode-beta.app/Contents/Developer/Applications"),
+                dir.join("Xcode.app/Contents/Applications"),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

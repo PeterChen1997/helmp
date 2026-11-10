@@ -13,6 +13,11 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 ### Fixed
 
 - Chinese and other input methods compose again in the panel, and ABC keeps working. The panel was a non-activating panel; macOS doesn't start an input-method session for those, so Doubao, Apple Pinyin and others typed raw letters. The panel now activates Helmp when it opens (like Alfred and Raycast) and hands focus back to the previous app when it closes; paste-style actions wait for that before sending ⌘V. Verified with real key events for Apple Pinyin, Doubao and ABC, in the search box and the flomo form; `script/ime-check.sh` repeats the check.
+- Opening Helmp yourself (or opening it again while it runs) now shows the panel directly instead of a "Helmp is running" card; first launch still shows onboarding.
+- Opening the panel from another Helmp window no longer makes it flash and disappear: a momentary focus hop between windows is ignored (the panel hides only if it is still in the background 150 ms later).
+- Apps bundled inside Xcode (Device Hub, Instruments, Accessibility Inspector, FileMerge, Simulator…) are found, like in Spotlight.
+- Spaces and hyphens no longer matter in names: `device hub` finds DeviceHub, `devicehub` finds "Device Hub".
+- Long bookmark titles no longer match unrelated queries through loose letter-order matching.
 
 ### 简体中文
 
@@ -23,6 +28,11 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 #### 修复
 
 - 面板里中文等输入法恢复组字，ABC 也照常可用。原因是面板是「非激活面板」，macOS 不为它建立输入法会话，豆包、系统拼音等只会原样上屏字母。现在唤起时激活 Helmp（与 Alfred、Raycast 一致），收起时把焦点还给原来的 App，粘贴类动作发 ⌘V 前会等焦点回去。已用真实按键验证系统拼音、豆包、ABC，覆盖搜索框和 flomo 表单；`script/ime-check.sh` 可重复这项检查。
+- 手动打开 Helmp（或在运行中再次打开）直接唤起面板，不再弹「Helmp 已在运行」卡片；首次启动仍走引导。
+- 从 Helmp 的其他窗口唤起面板不再一闪就消失：忽略窗口之间瞬时的焦点跳动（150 ms 后仍在后台才收起）。
+- 能搜到 Xcode 里自带的工具（Device Hub、Instruments、Accessibility Inspector、FileMerge、Simulator 等），和 Spotlight 一致。
+- 名字里的空格、连字符不再影响匹配：`device hub` 能找到 DeviceHub，`devicehub` 也能找到「Device Hub」。
+- 很长的书签标题不再靠「字母按顺序出现」的模糊匹配命中无关查询。
 
 ## [0.3.0] - 2026-11-10
 

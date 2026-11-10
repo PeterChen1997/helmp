@@ -58,7 +58,7 @@ fn run_gui(engine: Engine) {
     let app = gpui_kit::application().with_assets(AllAssets);
     // 系统在 App 启动前就可能送来 URL（用 helmp:// 链接冷启动），必须在 run 之前注册。
     let links = deeplink::listen(&app);
-    // Helmp 已在运行时再次打开它（双击 App、`open -a Helmp`）：显示欢迎页，告诉用户怎么唤起。
+    // Helmp 已在运行时再次打开它（双击 App、`open -a Helmp`）：直接唤起面板（引导没做完则回到引导）。
     app.on_reopen(onboarding::reopen);
     app.run(move |cx| {
             // 菜单栏工具型 App：不进 Dock、不参与 ⌘Tab。
