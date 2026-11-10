@@ -54,7 +54,7 @@ pub fn install_glass(window: &Window) {
     content.setFrame(effect.bounds());
     content.setAutoresizingMask(fill);
     effect.addSubview(&content);
-    ns_window.makeFirstResponder(Some(&content));
+    ensure_text_input(&ns_window);
 
     ns_window.setOpaque(false);
     ns_window.setBackgroundColor(Some(&NSColor::clearColor()));
@@ -97,16 +97,19 @@ pub fn show(window: &mut Window, cx: &mut App) {
         view.setNeedsDisplay(true);
     }
     position(&ns_window);
+    ensure_text_input(&ns_window);
     if std::env::var_os("HELMP_SELF_TEST").is_some() {
         // 图形自检不能抢用户的键盘：摆在屏幕外，也不成为 key window（按键由自检直接注入）。
         ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
         ns_window.orderFrontRegardless();
+        crate::trace::log(format!("panel.show 自检：{}", input_context_state(&ns_window)));
         return;
     }
     ns_window.makeKeyAndOrderFront(None);
     crate::trace::log(format!(
-        "panel.show 非激活方式后：is_key={}",
-        ns_window.isKeyWindow()
+        "panel.show 非激活方式后：is_key={} {}",
+        ns_window.isKeyWindow(),
+        input_context_state(&ns_window)
     ));
     if ns_window.isKeyWindow() {
         return;
@@ -120,6 +123,56 @@ pub fn show(window: &mut Window, cx: &mut App) {
         "panel.show 激活 App 后：is_key={}",
         ns_window.isKeyWindow()
     ));
+}
+
+/// GPUI 的窗口内容视图是一层普通 NSView 容器，真正接收文字输入的 `GPUIView` 在它里面。
+/// 第一响应者若停在容器上，按键仍会被窗口转发给 GPUI，但 AppKit 不给容器建输入上下文，
+/// ABC 等键盘布局下字插不进去（豆包这类输入法另有办法送字，所以还能打）。
+/// 每次显示前把第一响应者校正到 `GPUIView`。
+pub fn ensure_text_input(ns_window: &NSWindow) {
+    let Some(root) = ns_window.contentView() else {
+        return;
+    };
+    let Some(target) = find_gpui_view(&root) else {
+        eprintln!("helmp: 面板里找不到 GPUIView，文字输入可能不可用");
+        return;
+    };
+    let already = ns_window
+        .firstResponder()
+        .is_some_and(|current| std::ptr::eq(Retained::as_ptr(&current).cast::<()>(), Retained::as_ptr(&target).cast::<()>()));
+    if !already {
+        let ok = ns_window.makeFirstResponder(Some(&target));
+        crate::trace::log(format!("第一响应者改为 GPUIView：{ok}"));
+    }
+}
+
+/// 深度优先找类名（或父类名）为 GPUIView 的视图（AccessKit 可能把它换成动态子类）。
+fn find_gpui_view(view: &objc2_app_kit::NSView) -> Option<Retained<objc2_app_kit::NSView>> {
+    let mut class = Some(view.class());
+    while let Some(c) = class {
+        if c.name().to_bytes() == b"GPUIView" {
+            return Some(objc2::Message::retain(view));
+        }
+        class = c.superclass();
+    }
+    view.subviews().iter().find_map(|child| find_gpui_view(&child))
+}
+
+/// 诊断：第一响应者的输入上下文是否存在、App 是否激活（ABC 等键盘布局靠输入上下文插字）。
+fn input_context_state(ns_window: &NSWindow) -> String {
+    let responder = ns_window.firstResponder();
+    let class = responder
+        .as_ref()
+        .map(|r| r.class().name().to_string_lossy().into_owned());
+    let context = responder
+        .and_then(|r| r.downcast::<objc2_app_kit::NSView>().ok())
+        .and_then(|view| view.inputContext());
+    let active = MainThreadMarker::new()
+        .map(|mtm| objc2_app_kit::NSApplication::sharedApplication(mtm).isActive());
+    format!(
+        "first_responder={class:?} input_context={} app_active={active:?}",
+        context.is_some()
+    )
 }
 
 static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);

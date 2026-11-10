@@ -380,7 +380,9 @@ impl HotkeyRecorder {
             return self.reject(Rejection::Unsupported, cx);
         };
         match self.check(hotkey, &self.system) {
-            Ok(()) => {
+            // 被其他应用（如 HapiGo）占着：用户就是想把这个键换给 Helmp，照样保存；
+            // 注册失败会显示成「未生效」并说明原因，对方让出后自动接管。
+            Ok(()) | Err(Conflict::OtherApp) => {
                 let unchanged = (self.read)().and_then(|value| crate::hotkey::parse(&value).ok())
                     == Some(hotkey);
                 if !unchanged {
@@ -420,7 +422,7 @@ impl HotkeyRecorder {
         };
         let system = conflict::load_system_shortcuts();
         match self.check(hotkey, &system) {
-            Ok(()) => {
+            Ok(()) | Err(Conflict::OtherApp) => {
                 cx.emit(HotkeyEvent::Reset);
                 self.finish(window, cx);
             }

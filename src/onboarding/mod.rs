@@ -154,9 +154,13 @@ struct OnboardingWindow(AnyWindowHandle);
 
 impl Global for OnboardingWindow {}
 
-/// 配置里 `onboarding_done` 为 false 时显示引导窗口。
+/// 启动时显示欢迎页：首次使用一定显示；之后手动打开 Helmp 也显示（不然菜单栏工具启动后
+/// 什么都看不到，用户以为没打开）。登录时自动启动、图形自检时不显示。
 pub fn maybe_show(cx: &mut App) {
-    if crate::config::get().onboarding_done {
+    let first_run = !crate::config::get().onboarding_done;
+    if std::env::var_os("HELMP_SELF_TEST").is_some()
+        || (!first_run && launched_as_login_item())
+    {
         return;
     }
     show(cx);
@@ -181,6 +185,43 @@ pub fn maybe_show(cx: &mut App) {
             }
         });
     }
+}
+
+/// 这次启动是不是「登录时自动打开」：此时启动事件的 keyAEPropData 为 keyAELaunchedAsLogInItem。
+/// 要在启动阶段（run 回调里）读，之后 currentAppleEvent 就不是启动事件了。
+fn launched_as_login_item() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    const KEY_AE_PROP_DATA: u32 = u32::from_be_bytes(*b"prdt");
+    const KEY_AE_LAUNCHED_AS_LOGIN_ITEM: u32 = u32::from_be_bytes(*b"lgit");
+    let Some(class) = AnyClass::get(c"NSAppleEventManager") else {
+        return false;
+    };
+    // SAFETY: 都是 Foundation 的公开方法，返回值可能为 nil，逐个判空。
+    unsafe {
+        let manager: *mut AnyObject = msg_send![class, sharedAppleEventManager];
+        if manager.is_null() {
+            return false;
+        }
+        let event: *mut AnyObject = msg_send![manager, currentAppleEvent];
+        if event.is_null() {
+            return false;
+        }
+        let param: *mut AnyObject = msg_send![event, paramDescriptorForKeyword: KEY_AE_PROP_DATA];
+        if param.is_null() {
+            return false;
+        }
+        let code: u32 = msg_send![param, enumCodeValue];
+        code == KEY_AE_LAUNCHED_AS_LOGIN_ITEM
+    }
+}
+
+/// 当前「唤起 Helmp」的快捷键符号（如 ⌥Space）；没有绑定时为 None。
+fn toggle_glyphs() -> Option<String> {
+    let config = crate::config::get();
+    crate::hotkey::assigned_spec(&config, crate::hotkey::Command::Toggle)
+        .and_then(|spec| crate::hotkey::parse(&spec).ok())
+        .map(|hotkey| crate::hotkey::glyphs(&hotkey))
 }
 
 /// 显示（或前置）引导窗口。
@@ -476,7 +517,7 @@ impl Render for Onboarding {
                     .on_click(
                         cx.listener(|this, _: &ClickEvent, window, cx| this.finish(window, cx)),
                     )
-                    .child(tr("跳过", "Skip")),
+                    .child(tr("关闭", "Close")),
             )
             .child(
                 div()
@@ -491,10 +532,16 @@ impl Render for Onboarding {
                     .text_color(pal.selection_fg)
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|el| el.opacity(0.9))
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, window, cx| this.finish(window, cx)),
-                    )
-                    .child(tr("继续", "Continue")),
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.finish(window, cx);
+                        // 欢迎页关掉后直接唤起面板，让用户马上看到 Helmp 长什么样。
+                        cx.defer(|cx| {
+                            crate::launcher::LauncherHandle::update(cx, |launcher, window, cx| {
+                                launcher.show(window, cx)
+                            })
+                        });
+                    }))
+                    .child(tr("打开 Helmp", "Open Helmp")),
             );
 
         div()
@@ -520,7 +567,7 @@ impl Render for Onboarding {
                             .mt(px(6.))
                             .text_size(px(22.))
                             .font_weight(FontWeight::BOLD)
-                            .child(tr("授予权限", "Grant Permissions")),
+                            .child(tr("欢迎使用 Helmp", "Welcome to Helmp")),
                     )
                     .child(
                         div()
@@ -529,13 +576,21 @@ impl Render for Onboarding {
                             .text_size(px(13.))
                             .line_height(px(20.))
                             .text_color(pal.muted)
-                            .child(tr(
-                                "Helmp 只在需要时请求权限。不授权也能搜索应用、查看 Agent 会话和剪贴板历史，\
-                                 下面三项用于更完整的体验。",
-                                "Helmp only asks for what it needs. Without these, you can still \
-                                 search apps, view Agent sessions, and browse clipboard history; \
-                                 the three below round out the experience.",
-                            )),
+                            .child(match toggle_glyphs() {
+                                Some(keys) => trf!(
+                                    "按 {keys} 随时唤起 Helmp。下面的权限按需授予：不授权也能搜索应用、\
+                                     查看 Agent 会话和剪贴板历史。",
+                                    "Press {keys} to open Helmp anytime. Grant the permissions below as you \
+                                     need them; without them you can still search apps, view Agent sessions \
+                                     and browse clipboard history."
+                                ),
+                                None => tr(
+                                    "还没有设置唤起快捷键，可以在 设置 › 通用 里录一个。下面的权限按需授予。",
+                                    "No shortcut is set to open Helmp yet; record one in Settings › General. \
+                                     Grant the permissions below as you need them.",
+                                )
+                                .to_string(),
+                            }),
                     ),
             )
             .child(div().px(px(32.)).child(group))

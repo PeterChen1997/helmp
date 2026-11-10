@@ -1,6 +1,6 @@
 //! 启动器面板：统一的 Spotlight 式结构（设计稿「统一的面板结构」）。
 //!
-//! 880 × 540：顶部 60 搜索栏，底部 40 状态栏，中间三种视图之一——
+//! 760 × 480：顶部 60 搜索栏，底部 40 状态栏，中间三种视图之一——
 //! 列表 / 列表 + 详情 / 表单 + 详情。插件只给数据（`provider.rs`），这里负责全部渲染与按键。
 //!
 //! 按键：↑↓ 选择，↵ 主操作，⌘K 操作菜单，次级操作自带快捷键，⇥ 进入选中项的扩展 / 切换范围内的筛选，
@@ -25,8 +25,8 @@ use crate::provider::{
 };
 use crate::style::{self, Palette};
 
-pub const PANEL_SIZE: Size<Pixels> = size(px(880.), px(540.));
-const SIDE_WIDTH: Pixels = px(380.);
+pub const PANEL_SIZE: Size<Pixels> = size(px(760.), px(480.));
+const SIDE_WIDTH: Pixels = px(330.);
 
 /// 面板可见时定期重查，让 agent 状态、剪贴板等后台变化与新生成的图标反映到界面。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -1590,18 +1590,29 @@ fn render_detail(
         });
     }
     if !detail.metadata.is_empty() {
+        // 标签列固定宽、值列占满：两列平分时标签列太宽，「Last Activity」反被挤成两行。
         let mut grid = div()
-            .grid()
-            .grid_cols(2)
-            .gap_y(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
             .pt(px(14.))
             .border_t_1()
             .border_color(pal.separator)
             .text_size(px(12.5));
         for (key, value) in &detail.metadata {
-            grid = grid
-                .child(div().w(px(72.)).text_color(pal.muted).child(key.clone()))
-                .child(div().text_color(pal.fg).child(value.clone()));
+            grid = grid.child(
+                div()
+                    .flex()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .w(px(96.))
+                            .flex_none()
+                            .text_color(pal.muted)
+                            .child(key.clone()),
+                    )
+                    .child(div().flex_1().min_w_0().text_color(pal.fg).child(value.clone())),
+            );
         }
         pane = pane.child(div().mt_auto().child(grid));
     }
@@ -1702,11 +1713,33 @@ impl Launcher {
                     }),
             )
             .child(accessories)
-            .on_click(cx.listener(move |this, _, window, cx| {
+            // 单击只选中（右侧看详情），双击才执行；剪贴板条目双击是「复制」而不是粘贴到前台 App。
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.selected = ix;
-                this.execute_selected(window, cx);
+                this.result = None;
+                cx.notify();
+                if event.click_count() >= 2 {
+                    this.double_click_selected(window, cx);
+                }
             }))
             .into_any_element()
+    }
+
+    /// 双击：剪贴板条目执行「复制」（⌘C 那个次级操作），其他结果执行主操作。
+    fn double_click_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let copy = self
+            .selected_item()
+            .filter(|item| provider_of(&item.id) == Some("clipboard"))
+            .and_then(|item| {
+                item.actions
+                    .iter()
+                    .find(|named| named.shortcut.as_deref() == Some("⌘C"))
+                    .cloned()
+            });
+        match copy {
+            Some(action) => self.run_named(action, window, cx),
+            None => self.execute_selected(window, cx),
+        }
     }
 
     fn render_tiles(

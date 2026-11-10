@@ -63,10 +63,61 @@ impl Conflict {
                 "Conflicts with a standard app shortcut ({})",
                 tr(zh, en)
             ),
-            Conflict::OtherApp => {
-                tr("已被其他应用占用", "Already taken by another app").to_string()
-            }
+            Conflict::OtherApp => other_app_message(),
         }
+    }
+}
+
+/// 常见会占用全局快捷键的启动器 / 效率工具：(bundle id, 名称)。
+const KNOWN_HOLDERS: &[(&str, &str)] = &[
+    ("com.xunyong.hapigo", "HapiGo"),
+    ("com.raycast.macos", "Raycast"),
+    ("com.runningwithcrayons.Alfred", "Alfred"),
+    ("com.runningwithcrayons.Alfred-Preferences", "Alfred"),
+    ("org.yuanli.utools", "uTools"),
+    ("at.obdev.LaunchBar", "LaunchBar"),
+    ("com.apple.Spotlight", "Spotlight"),
+];
+
+/// 正在运行的已知启动器名称（去重，按表顺序）。
+pub fn running_holders() -> Vec<&'static str> {
+    use objc2_app_kit::NSWorkspace;
+    let running: Vec<String> = NSWorkspace::sharedWorkspace()
+        .runningApplications()
+        .iter()
+        .filter_map(|app| app.bundleIdentifier().map(|id| id.to_string()))
+        .collect();
+    holders_in(&running)
+}
+
+fn holders_in(running: &[String]) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = Vec::new();
+    for (bundle, name) in KNOWN_HOLDERS {
+        if *name != "Spotlight"
+            && running.iter().any(|id| id == bundle)
+            && !names.contains(name)
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// 「被其他应用占用」：点名正在运行的启动器，并说清 Helmp 会在对方让出后自动接管。
+pub fn other_app_message() -> String {
+    let holders = running_holders();
+    if holders.is_empty() {
+        tr(
+            "已被其他应用占用；在那个应用里换掉这个快捷键或退出它，Helmp 会自动接管",
+            "Taken by another app; change it there or quit that app and Helmp takes it over automatically",
+        )
+        .to_string()
+    } else {
+        let names = holders.join(tr("、", ", "));
+        trf!(
+            "已被其他应用占用（可能是 {names}）；在 {names} 里换掉这个快捷键或退出它，Helmp 会自动接管",
+            "Taken by another app (probably {names}); change it in {names} or quit it and Helmp takes it over automatically"
+        )
     }
 }
 
@@ -802,4 +853,19 @@ mod tests {
         assert_ne!(first, Probe::Taken, "{} 不该被占用", glyphs(&rare));
         assert_eq!(probe(rare), first, "{} 第一次探测没有注销", glyphs(&rare));
     }
+
+    #[test]
+    fn names_the_launcher_that_probably_holds_the_shortcut() {
+        // 想把 ⌘Space 从 HapiGo 换给 Helmp 的用户，只看到「被其他应用占用」不知道找谁；
+        // 要点名正在运行的启动器。聚焦搜索不算（系统快捷键另有判断），同名只列一次。
+        let running = [
+            "com.apple.Spotlight".to_string(),
+            "com.xunyong.hapigo".to_string(),
+            "com.runningwithcrayons.Alfred".to_string(),
+            "com.runningwithcrayons.Alfred-Preferences".to_string(),
+        ];
+        assert_eq!(holders_in(&running), ["HapiGo", "Alfred"]);
+        assert!(holders_in(&[]).is_empty());
+    }
+
 }

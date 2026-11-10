@@ -30,6 +30,8 @@ use crate::launcher::{Launcher, LauncherHandle};
 pub const DEFAULT_TOGGLE: &str = "alt-space";
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// 注册失败的绑定多少个轮询周期重试一次（50 ms × 60 = 3 秒）。
+const RETRY_EVERY: u32 = 60;
 
 /// 快捷键（或菜单项）触发的命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -441,15 +443,17 @@ impl Issue {
                 wanted,
                 kept: Some(kept),
             } => trf!(
-                "{} 注册失败（已被系统或其他应用占用），仍在使用 {}",
-                "Couldn’t register {} (taken by macOS or another app); still using {}",
+                "{} {}。在那之前仍用 {}",
+                "{}: {}. Until then, {} still works",
                 glyphs(wanted),
+                conflict::other_app_message(),
                 glyphs(kept)
             ),
             Issue::Unavailable { wanted, kept: None } => trf!(
-                "{} 注册失败（已被系统或其他应用占用），目前没有生效的快捷键",
-                "Couldn’t register {} (taken by macOS or another app); no shortcut is active",
-                glyphs(wanted)
+                "{} {}。在那之前没有生效的快捷键",
+                "{}: {}. Until then, no shortcut is active",
+                glyphs(wanted),
+                conflict::other_app_message()
             ),
         }
     }
@@ -469,6 +473,13 @@ impl Registry {
 
     pub fn issue(&self, command: Command) -> Option<&Issue> {
         self.issues.get(&command)
+    }
+
+    /// 是否有绑定因注册失败（被占用）而没生效，需要定期重试。
+    pub fn has_unavailable(&self) -> bool {
+        self.issues
+            .values()
+            .any(|issue| matches!(issue, Issue::Unavailable { .. }))
     }
 
     pub fn command_for(&self, hotkey_id: u32) -> Option<Command> {
@@ -726,6 +737,7 @@ pub fn register_toggle(
 
     cx.spawn(async move |cx: &mut AsyncApp| {
         let receiver = GlobalHotKeyEvent::receiver();
+        let mut retry_ticks = 0u32;
         loop {
             while let Ok(event) = receiver.try_recv() {
                 if event.state != HotKeyState::Pressed {
@@ -739,7 +751,15 @@ pub fn register_toggle(
                     None => crate::trace::log(format!("hotkey id {} 没有对应命令", event.id)),
                 }
             }
-            if changed_rx.try_recv().is_ok() {
+            // 有绑定因被其他应用占用而没生效：每 3 秒重试一次，对方退出或换键后自动接管。
+            retry_ticks += 1;
+            let retry_due = retry_ticks >= RETRY_EVERY
+                && SUSPENDED.load(Ordering::Relaxed) == 0
+                && registry.has_unavailable();
+            if retry_due {
+                retry_ticks = 0;
+            }
+            if changed_rx.try_recv().is_ok() || retry_due {
                 while changed_rx.try_recv().is_ok() {}
                 let suspended = SUSPENDED.load(Ordering::Relaxed) > 0;
                 let wanted_now = wanted_while(suspended, &crate::config::get());
