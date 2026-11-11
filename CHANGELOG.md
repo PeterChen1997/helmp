@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-11
+
 ### Added
 
 - Settings › About has a "Contact the Author" section with the author's name and a link to the blog.
@@ -19,6 +21,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ### Fixed
 
+- Much lower CPU use while idle. Codex threads whose details can't be read are retried every 10 seconds instead of every second, agent folders are scanned every 5 seconds while the panel is closed (every second while it's open), and the menu bar only wakes up when there is something to do.
 - Release notes in Settings › About are shown as headings and bullet points instead of raw Markdown (`### Added`, `<kbd>⇧⌘1</kbd>`).
 
 ### 简体中文
@@ -36,6 +39,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 #### 修复
 
+- 空闲时 CPU 占用大幅降低。读不到详情的 Codex 线程改为每 10 秒重试（原来每秒），面板收起时每 5 秒扫描一次 agent 目录（打开时仍是每秒），菜单栏只在有事时才唤醒。
 - 设置 › 关于里的更新说明按小标题和列表显示，不再露出 Markdown 原文（`### Added`、`<kbd>⇧⌘1</kbd>`）。
 
 ## [0.4.1] - 2026-11-11
@@ -252,7 +256,8 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/PeterChen1997/helmp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/PeterChen1997/helmp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/PeterChen1997/helmp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...v0.3.0
