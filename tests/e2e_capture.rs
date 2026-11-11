@@ -63,6 +63,28 @@ fn line<'a>(out: &'a str, prefix: &str) -> &'a str {
         .unwrap_or_else(|| panic!("没有 {prefix:?}：\n{out}"))
 }
 
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_screenshot_and_ocr_are_two_separate_registered_shortcuts() {
+    // 「截图」⇧⌘1 和「截图识别文字」⇧⌘2 是两条独立的全局快捷键：默认两条都真的注册上。
+    let h = Helmp::new().env("HELMP_NO_WELCOME", "1").env("HELMP_SELF_TEST", "1");
+    let out = gui(&h);
+    let hotkeys = line(&out, "self-test hotkeys:");
+    for expected in [" screenshot-capture=⇧⌘1 ", " screenshot=⇧⌘2 "] {
+        assert!(hotkeys.contains(expected), "缺少 {expected:?}：{hotkeys}");
+    }
+
+    // 手改配置让「截图识别文字」也用 ⇧⌘1：不能悄悄覆盖掉「截图」，要把冲突记下来（设置里显示「未生效」）。
+    let h = Helmp::new()
+        .config(|c| c["extensions"] = serde_json::json!({"screenshot": {"hotkey": "cmd-shift-1"}}))
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1");
+    let out = gui(&h);
+    let hotkeys = line(&out, "self-test hotkeys:");
+    assert!(hotkeys.contains(" screenshot-capture=⇧⌘1 "), "{hotkeys}");
+    assert!(hotkeys.contains(" screenshot=-(Duplicate"), "{hotkeys}");
+}
+
 /// 跑一次图形自检，要求正常退出，返回 stdout。
 fn gui(h: &Helmp) -> String {
     let out = h.output(&[]);

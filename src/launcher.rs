@@ -81,6 +81,50 @@ fn should_reset(hidden_for: Option<Duration>, reset_after: Duration, executed: b
     executed || hidden_for.is_some_and(|hidden_for| hidden_for >= reset_after)
 }
 
+/// 剪贴板历史的范围 id（Esc 在这里直接收起面板，见 [`on_escape`]）。
+const CLIPBOARD_SCOPE: &str = "clipboard";
+
+/// 面板里按 Esc（⌘K 菜单没开时）做什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Escape {
+    /// 关掉正在展示的结果，回到列表。
+    DismissResult,
+    /// 退出范围，回到主搜索。
+    ExitScope,
+    /// 收起面板。
+    Hide,
+}
+
+/// - 有结果在展示：先关掉结果（它盖在列表上，关掉后还在原来的范围里）。
+/// - 在剪贴板范围里：直接收起面板，不退回主搜索。剪贴板是「唤起 → 挑一条 → 走」的工具，
+///   用户明确要求 Esc 直接关闭；输入了筛选词也一样直接收起，不先清空输入。
+/// - 其他范围：退回主搜索（插件命令的表单靠它「返回」）。
+/// - 主搜索：收起面板。
+fn on_escape(showing_result: bool, scope: Option<&str>) -> Escape {
+    match scope {
+        _ if showing_result => Escape::DismissResult,
+        Some(CLIPBOARD_SCOPE) => Escape::Hide,
+        Some(_) => Escape::ExitScope,
+        None => Escape::Hide,
+    }
+}
+
+/// 结果刷新后选中哪一项。
+/// - 列表刚换了一批（`fresh`：进入范围、切换筛选）：第一条不是置顶的结果。剪贴板进来默认选中
+///   最近一条，而不是排在最前的置顶记录——唤起剪贴板多半是要贴刚复制的东西；置顶的仍列在原处。
+/// - 否则（后台刷新、改了输入）：尽量保持选中原来那一项（`previous`），找不到时同样跳过置顶的。
+fn selection_after_refresh(items: &[Item], previous: Option<&str>, fresh: bool) -> usize {
+    let first_regular = items
+        .iter()
+        .position(|item| !item.pinned_to_top)
+        .unwrap_or(0);
+    previous
+        .filter(|_| !fresh)
+        .and_then(|id| items.iter().position(|item| item.id == id))
+        .unwrap_or(first_regular)
+        .min(items.len().saturating_sub(1))
+}
+
 struct ActiveScope {
     scope: Scope,
     filter: usize,
@@ -191,6 +235,8 @@ pub struct Launcher {
     hidden_at: Option<Instant>,
     /// 上次唤起后执行过结果，下次唤起清空。
     executed: bool,
+    /// 列表刚换了一批（进入范围、切换筛选），下一次结果回来时按 [`selection_after_refresh`] 重新选默认项。
+    fresh_list: bool,
     /// 面板为展示结果重新弹出的时刻（见 `RESHOW_GRACE`）；普通唤起时为 None。
     reshown_at: Option<Instant>,
     scroll: ScrollHandle,
@@ -308,6 +354,7 @@ impl Launcher {
             visible: false,
             hidden_at: None,
             executed: false,
+            fresh_list: false,
             reshown_at: None,
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
@@ -404,9 +451,11 @@ impl Launcher {
             })
             .unwrap_or_default();
         format!(
-            "scope={:?} query={:?} focus={focus} form={form} result={result:?}",
+            "scope={:?} query={:?} focus={focus} form={form} result={result:?} visible={} selected={:?}",
             self.scope_id(),
-            self.query
+            self.query,
+            self.visible,
+            self.selected_item().map(|item| item.id.as_str()).unwrap_or_default()
         )
     }
 
@@ -578,6 +627,7 @@ impl Launcher {
         self.form = None;
         self.actions_open = false;
         self.selected = 0;
+        self.fresh_list = true;
         self.recall = None;
         self.query = rest.clone();
         self.sync_placeholder(window, cx);
@@ -698,13 +748,12 @@ impl Launcher {
                     items.len(),
                     items.first().map(|item| item.title.as_str())
                 ));
-                // 后台刷新时尽量保持选中同一个结果。
+                // 后台刷新时尽量保持选中同一个结果；刚进入范围时选默认项（剪贴板跳过置顶的）。
                 let selected_id = this.items.get(this.selected).map(|item| item.id.clone());
+                let fresh = std::mem::take(&mut this.fresh_list);
                 this.items = items;
-                this.selected = selected_id
-                    .and_then(|id| this.items.iter().position(|item| item.id == id))
-                    .unwrap_or(0)
-                    .min(this.items.len().saturating_sub(1));
+                this.selected =
+                    selection_after_refresh(&this.items, selected_id.as_deref(), fresh);
                 // 结果一到就建表单状态（不等下一帧渲染）：输入即译的防抖从这里开始计时。
                 this.sync_form(window, cx);
                 cx.notify();
@@ -1318,21 +1367,27 @@ impl Launcher {
                 };
                 active.filter = (active.filter + 1) % active.scope.filters.len();
                 self.selected = 0;
+                self.fresh_list = true;
                 self.refresh(cx);
             }
-            "escape" if !mods.modified() => {
-                if let Some(result) = self.result.take() {
-                    if result.pinned {
+            "escape" if !mods.modified() => match on_escape(self.result.is_some(), self.scope_id()) {
+                Escape::DismissResult => {
+                    if self.result.take().is_some_and(|result| result.pinned) {
                         // 列表里只剩那一项，回到当前查询的正常结果。
                         self.refresh(cx);
                     }
                     cx.notify();
-                } else if self.scope.is_some() {
-                    self.exit_scope(window, cx);
-                } else {
+                }
+                Escape::ExitScope => self.exit_scope(window, cx),
+                Escape::Hide => {
+                    if self.scope.is_some() {
+                        // 在剪贴板里按 Esc 收起：这次用剪贴板的事结束了，下次唤起从主搜索开始，
+                        // 而不是又回到剪贴板（⌘⇧V 照样直接进剪贴板）。
+                        self.executed = true;
+                    }
                     self.hide(window, cx);
                 }
-            }
+            },
             // 范围里删空了再按 ⌫ 退出范围。命令范围的焦点在命令自己的表单里（flomo）：表单也全空时同样退出
             // （翻译的文本框不算：那里 ⌫ 只是删字）。
             "backspace"
@@ -1821,33 +1876,18 @@ impl Launcher {
                     }),
             )
             .child(accessories)
-            // 单击只选中（右侧看详情），双击才执行；剪贴板条目双击是「复制」而不是粘贴到前台 App。
+            // 单击只选中（右侧看详情），双击 = 回车，执行主操作。剪贴板条目的主操作是「粘贴」：
+            // 写回剪贴板、收起面板把焦点还给原来的 App，再替用户按 ⌘V（关了自动粘贴或没有辅助功能权限时
+            // 只复制，与回车一致；见 providers/clipboard 的 `paste`，演练模式下只回报不执行）。
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.selected = ix;
                 this.result = None;
                 cx.notify();
                 if event.click_count() >= 2 {
-                    this.double_click_selected(window, cx);
+                    this.execute_selected(window, cx);
                 }
             }))
             .into_any_element()
-    }
-
-    /// 双击：剪贴板条目执行「复制」（⌘C 那个次级操作），其他结果执行主操作。
-    fn double_click_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let copy = self
-            .selected_item()
-            .filter(|item| provider_of(&item.id) == Some("clipboard"))
-            .and_then(|item| {
-                item.actions
-                    .iter()
-                    .find(|named| named.shortcut.as_deref() == Some("⌘C"))
-                    .cloned()
-            });
-        match copy {
-            Some(action) => self.run_named(action, window, cx),
-            None => self.execute_selected(window, cx),
-        }
     }
 
     fn render_tiles(
@@ -2370,11 +2410,62 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        Deactivated, RESHOW_GRACE, end_position, on_deactivated, placeholder_for, provider_of,
-        should_reset,
+        Deactivated, Escape, RESHOW_GRACE, end_position, on_deactivated, on_escape,
+        placeholder_for, provider_of, selection_after_refresh, should_reset,
     };
+    use crate::provider::Item;
 
     const LIMIT: Duration = Duration::from_secs(90);
+
+    fn item(id: &str, pinned_to_top: bool) -> Item {
+        Item {
+            id: id.into(),
+            pinned_to_top,
+            ..Item::blank()
+        }
+    }
+
+    #[test]
+    fn entering_the_clipboard_selects_the_latest_clip_not_a_pinned_one() {
+        // 唤起剪贴板多半是要贴刚复制的东西：置顶记录排在最前，但默认选中的必须是最近一条，
+        // 否则回车（或双击）贴出去的是很久以前置顶的那条。
+        let items = [
+            item("clipboard:7", true),
+            item("clipboard:3", true),
+            item("clipboard:9", false),
+            item("clipboard:8", false),
+        ];
+        assert_eq!(selection_after_refresh(&items, None, true), 2);
+        // 进入前选中的恰好是置顶那条（面板上次停在剪贴板里）也不保留：进入就回到默认项。
+        assert_eq!(selection_after_refresh(&items, Some("clipboard:7"), true), 2);
+        // 已经在列表里、后台刷新：保持用户自己选的那条，哪怕它是置顶的。
+        assert_eq!(selection_after_refresh(&items, Some("clipboard:7"), false), 0);
+        assert_eq!(selection_after_refresh(&items, Some("clipboard:8"), false), 3);
+        // 原来那条没了：同样落到最近一条，而不是置顶的。
+        assert_eq!(selection_after_refresh(&items, Some("gone"), false), 2);
+        // 全是置顶 / 没有置顶 / 空列表：退回第一条。
+        let all_pinned = [item("clipboard:1", true), item("clipboard:2", true)];
+        assert_eq!(selection_after_refresh(&all_pinned, None, true), 0);
+        let plain = [item("apps:a", false), item("apps:b", false)];
+        assert_eq!(selection_after_refresh(&plain, None, true), 0);
+        assert_eq!(selection_after_refresh(&[], None, true), 0);
+    }
+
+    #[test]
+    fn escape_in_the_clipboard_closes_the_panel_instead_of_going_back() {
+        // 用户要求：剪贴板里按 Esc 直接关掉，不退回主搜索（输入了筛选词也一样）。
+        assert_eq!(on_escape(false, Some("clipboard")), Escape::Hide);
+        // 其他范围不变：Esc 仍是「返回」（插件命令的表单靠它回到主搜索）。
+        assert_eq!(on_escape(false, Some("translate")), Escape::ExitScope);
+        assert_eq!(
+            on_escape(false, Some("plugins:dev.helmp.flomo/memo")),
+            Escape::ExitScope
+        );
+        assert_eq!(on_escape(false, None), Escape::Hide);
+        // 有结果（出错说明等）盖在列表上时，先关掉结果，哪里都不去。
+        assert_eq!(on_escape(true, Some("clipboard")), Escape::DismissResult);
+        assert_eq!(on_escape(true, None), Escape::DismissResult);
+    }
 
     #[test]
     fn cursor_end_counts_lines_and_utf16_columns() {

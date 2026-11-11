@@ -614,6 +614,27 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_and_ocr_shortcuts_guard_each_other() {
+        // 「截图」和「截图识别文字」属于同一个插件，但是两条独立的快捷键：把一条录成另一条正在用的组合，
+        // 必须指名拦下，而不是当成「同一个插件的快捷键」放行——放行后两条抢一个组合，只有一条生效。
+        let capture = crate::hotkey::extension_command("screenshot-capture").unwrap();
+        let ocr = crate::hotkey::extension_command("screenshot").unwrap();
+        let err = check_default("cmd-shift-2", capture, &[]).unwrap_err();
+        assert_eq!(err, Conflict::Command(ocr));
+        crate::i18n::with_lang(crate::i18n::Lang::Zh, || {
+            assert!(err.message().contains("截图识别文字"), "{}", err.message());
+        });
+        let err = check_default("cmd-shift-1", ocr, &[]).unwrap_err();
+        assert_eq!(err, Conflict::Command(capture));
+        crate::i18n::with_lang(crate::i18n::Lang::Zh, || {
+            assert!(err.message().contains("「截图」"), "{}", err.message());
+        });
+        // 各自重新录回自己的组合不算冲突。
+        assert_eq!(check_default("cmd-shift-1", capture, &[]), Ok(()));
+        assert_eq!(check_default("cmd-shift-2", ocr, &[]), Ok(()));
+    }
+
+    #[test]
     fn disabled_extension_keeps_its_combination() {
         // 停用的扩展重新启用时要拿回自己的组合；录制时放行就会在启用那一刻撞车。
         let mut config = Config::default();

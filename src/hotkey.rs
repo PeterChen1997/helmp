@@ -689,6 +689,49 @@ pub fn hint_keys(provider: &str) -> Vec<crate::provider::Accessory> {
         .collect()
 }
 
+/// 图形自检打印用：每个快捷键位真实生效的组合（`-` 表示没有），没生效的附上原因。
+/// 形如 `toggle=⌥Space clipboard=⇧⌘V screenshot-capture=⇧⌘1 screenshot=⇧⌘2 …`。
+pub fn describe_active() -> String {
+    let guard = ACTIVE.lock().expect("hotkey registry poisoned");
+    let registry = guard.as_ref();
+    std::iter::once(("toggle", Command::Toggle))
+        .chain(EXTENSION_SHORTCUTS.iter().map(|s| (s.slot, s.command)))
+        .map(|(slot, command)| {
+            let bound = hint_in(registry, command).unwrap_or_else(|| "-".into());
+            match registry.and_then(|registry| registry.issue(command)) {
+                Some(issue) => format!("{slot}={bound}({issue:?})"),
+                None => format!("{slot}={bound}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 「直接执行某一项」的快捷键（[`Command::RunItem`]）在那一项上的键帽：截图、截图识别文字这样
+/// 同一个插件有两条快捷键时，各自的命令显示各自的组合，不能都显示插件主快捷键位的那一个。
+pub fn item_hint_keys(item_id: &str) -> Vec<crate::provider::Accessory> {
+    item_command(item_id)
+        .and_then(hint)
+        .map(|glyphs| crate::provider::Accessory::keys(&glyphs))
+        .into_iter()
+        .collect()
+}
+
+/// 直接执行 `item_id` 这一项的快捷键命令（没有就是 None）。
+pub fn item_command(item_id: &str) -> Option<Command> {
+    EXTENSION_SHORTCUTS
+        .iter()
+        .map(|shortcut| shortcut.command)
+        .find(|command| matches!(command, Command::RunItem { id, .. } if *id == item_id))
+}
+
+/// 某个插件的全部快捷键位，按 [`EXTENSION_SHORTCUTS`] 的顺序（设置里逐条列出录制框）。
+pub fn shortcuts_of(provider: &str) -> impl Iterator<Item = &'static ExtensionShortcut> + '_ {
+    EXTENSION_SHORTCUTS
+        .iter()
+        .filter(move |shortcut| shortcut.provider == provider)
+}
+
 /// 每次绑定或问题变化加一，菜单栏、设置窗口据此刷新。
 pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
@@ -1364,6 +1407,32 @@ mod tests {
             let spec = &wanted.iter().find(|w| w.command == command).unwrap().spec;
             assert_eq!(spec, &None, "{command:?}");
         }
+    }
+
+    #[test]
+    fn screenshot_and_ocr_are_both_registered_and_hinted_on_their_own_commands() {
+        // 用户看到的「截图快捷键只有一个」：两条都要真的注册上，结果右侧的键帽也要各显示各的，
+        // 不能两条命令都显示插件主键位（截图识别文字）的那个组合，或者「截图」那一项干脆没有键帽。
+        let fake = Fake::default();
+        let mut registry = Registry::default();
+        let problems = registry.apply(&fake, &wanted(&Config::default()));
+        assert!(problems.is_empty(), "{problems:?}");
+        let capture = item_command("screenshot:clipboard").unwrap();
+        let ocr = item_command("screenshot:ocr-screen").unwrap();
+        assert_eq!(Some(capture), extension_command("screenshot-capture"));
+        assert_eq!(Some(ocr), extension_command("screenshot"));
+        assert_eq!(registry.issue(capture), None);
+        assert_eq!(registry.issue(ocr), None);
+        assert_eq!(hint_in(Some(&registry), capture).as_deref(), Some("⇧⌘1"));
+        assert_eq!(hint_in(Some(&registry), ocr).as_deref(), Some("⇧⌘2"));
+        // 不是由快捷键直接执行的项没有键帽。
+        assert_eq!(item_command("screenshot:save"), None);
+
+        // 设置里逐条列出：截图插件名下就是这两条，「截图」在前。
+        let slots: Vec<&str> = shortcuts_of("screenshot").map(|s| s.slot).collect();
+        assert_eq!(slots, ["screenshot-capture", "screenshot"]);
+        let slots: Vec<&str> = shortcuts_of("clipboard").map(|s| s.slot).collect();
+        assert_eq!(slots, ["clipboard"]);
     }
 
     #[test]

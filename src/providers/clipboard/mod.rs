@@ -350,14 +350,19 @@ impl Provider for Clipboard {
             .map(|(position, score)| {
                 let indexed = &index[position];
                 // 空查询按时间浏览，按天分组（设计稿的「今天」）；搜索时按匹配度排序，不再分天。
-                let badge = if query.is_empty() && indexed.pinned {
+                let pinned_to_top = query.is_empty() && indexed.pinned;
+                let badge = if pinned_to_top {
                     tr("置顶", "Pinned").into()
                 } else if query.is_empty() {
                     present::day_label(view.clock, indexed.copied_at_ms)
                 } else {
                     badge().into()
                 };
-                self.item(indexed, score, badge, &view)
+                Item {
+                    // 置顶组排在最前，但进入剪贴板时默认选中最近一条，而不是置顶的那条。
+                    pinned_to_top,
+                    ..self.item(indexed, score, badge, &view)
+                }
             })
             .collect()
     }

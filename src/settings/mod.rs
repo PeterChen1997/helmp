@@ -201,9 +201,18 @@ struct ExtensionRow {
     /// 插件声明的范围前缀（去掉空格），别名为空时作为占位提示。
     default_alias: Option<String>,
     alias: Entity<InputState>,
-    /// 只有带全局快捷键命令的扩展（`hotkey::EXTENSION_SHORTCUTS`）才有录制框；
-    /// 其他扩展录了也不会生效，显示「—」。
-    hotkey: Option<Entity<HotkeyRecorder>>,
+    /// 这个扩展的全局快捷键录制框（`hotkey::EXTENSION_SHORTCUTS` 里 provider 是它的每一条，按表顺序）。
+    /// 没有快捷键命令的扩展为空，录了也不会生效，显示「—」。截图有「截图」「截图识别文字」两条，
+    /// 各占一行、各自录制和查冲突。
+    shortcuts: Vec<ShortcutRow>,
+}
+
+/// 扩展的一条快捷键：名称（截图一类有多条快捷键的扩展逐条显示）和录制框。
+struct ShortcutRow {
+    /// 配置里的快捷键位（`config.extensions[slot].hotkey`）。
+    slot: &'static str,
+    label: (&'static str, &'static str),
+    recorder: Entity<HotkeyRecorder>,
 }
 
 pub struct SettingsView {
@@ -211,8 +220,8 @@ pub struct SettingsView {
     search: Entity<InputState>,
     search_query: String,
     hotkey: Entity<HotkeyRecorder>,
-    /// 截图页「截图」的快捷键（「截图识别文字」的在扩展表格的截图一行里）。
-    capture_hotkey: Option<Entity<HotkeyRecorder>>,
+    /// 截图页的快捷键：「截图」「截图识别文字」两条并排（扩展表格的截图一行下面也各有一条，值都读配置，保持一致）。
+    screenshot_hotkeys: Vec<ShortcutRow>,
     extensions: Vec<ExtensionRow>,
     models: AnyView,
     snippets: AnyView,
@@ -310,8 +319,7 @@ impl SettingsView {
         ];
 
         let extensions = Self::extension_rows(window, cx, &mut subscriptions);
-        let capture_hotkey =
-            Self::shortcut_recorder("screenshot-capture", window, cx, &mut subscriptions);
+        let screenshot_hotkeys = Self::shortcut_rows("screenshot", window, cx, &mut subscriptions);
         let web_engine_name =
             cx.new(|cx| InputState::new(window, cx).placeholder(web_engine_name_placeholder()));
         let web_engine_url = cx.new(|cx| {
@@ -351,7 +359,7 @@ impl SettingsView {
             search,
             search_query: String::new(),
             hotkey,
-            capture_hotkey,
+            screenshot_hotkeys,
             extensions,
             models,
             snippets,
@@ -451,15 +459,34 @@ impl SettingsView {
                     }
                 },
             ));
-            let hotkey = Self::shortcut_recorder(id, window, cx, subscriptions);
+            let shortcuts = Self::shortcut_rows(id, window, cx, subscriptions);
             rows.push(ExtensionRow {
                 id,
                 default_alias,
                 alias,
-                hotkey,
+                shortcuts,
             });
         }
         rows
+    }
+
+    /// 插件 `provider` 的每条快捷键各一个录制框（见 [`ShortcutRow`]）。
+    fn shortcut_rows(
+        provider: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> Vec<ShortcutRow> {
+        crate::hotkey::shortcuts_of(provider)
+            .filter_map(|shortcut| {
+                let recorder = Self::shortcut_recorder(shortcut.slot, window, cx, subscriptions)?;
+                Some(ShortcutRow {
+                    slot: shortcut.slot,
+                    label: (shortcut.label, shortcut.label_en),
+                    recorder,
+                })
+            })
+            .collect()
     }
 
     /// 某个快捷键位（`hotkey::EXTENSION_SHORTCUTS` 的 slot，一般就是插件 id）的录制框，改动写回

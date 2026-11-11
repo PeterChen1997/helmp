@@ -209,17 +209,17 @@ impl Provider for Screenshot {
         COMMANDS
             .iter()
             .filter(|cmd| cmd.key == "ocr-screen")
-            .map(|cmd| Item {
-                accessories: crate::hotkey::hint_keys("screenshot"),
-                ..command_item(cmd, OCR_SUGGESTION_SCORE, commands_section())
-            })
+            .map(|cmd| command_item(cmd, OCR_SUGGESTION_SCORE, commands_section()))
             .collect()
     }
 }
 
 fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
+    let id = format!("screenshot:{}", cmd.key);
     Item {
-        id: format!("screenshot:{}", cmd.key),
+        // 「截图」「截图识别文字」各有各的全局快捷键：右侧键帽按这一项自己的命令取，不按插件取。
+        accessories: crate::hotkey::item_hint_keys(&id),
+        id,
         title: text(cmd.title).into(),
         subtitle: text(cmd.subtitle).into(),
         badge: badge.into(),
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn home_suggests_ocr_with_shortcut() {
         // 设计稿首页「快捷命令」第一条是「截图识别文字 ⌘⇧2」，分数要低于「最近使用」（850）。
-        // 右侧键帽取真正生效的全局快捷键（`hotkey::hint_keys`）；单测里没有注册热键，所以为空。
+        // 右侧键帽取真正生效的全局快捷键（`hotkey::item_hint_keys`）；单测里没有注册热键，所以为空。
         let items = Screenshot.suggestions();
         assert_eq!(items.len(), 1);
         let item = &items[0];

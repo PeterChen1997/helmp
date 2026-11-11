@@ -193,6 +193,9 @@ impl Page {
             Page::Screenshot => &[
                 "ocr",
                 "文字识别",
+                "截图识别文字",
+                "快捷键",
+                "shortcut",
                 "语言",
                 "保存",
                 "目录",

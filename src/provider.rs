@@ -421,6 +421,9 @@ pub struct Item {
     /// 这个 id 的命令范围，在范围里再输入、再执行（见 `Provider::command_scope`）。
     /// 全局搜索里不直接吃掉「关键词 + 空格」后面的文字，免得日常搜索误触发插件。
     pub opens_scope: Option<String>,
+    /// 置顶在列表最前的项（剪贴板空查询时的置顶记录）。仍然排在最前、照常可选，但进入范围时
+    /// 默认选中跳过它们，落在第一条普通结果（最近一条）上：用户唤起剪贴板多半是要贴刚复制的东西。
+    pub pinned_to_top: bool,
 }
 
 impl Item {
@@ -441,6 +444,7 @@ impl Item {
             form: None,
             auto_run: false,
             opens_scope: None,
+            pinned_to_top: false,
         }
     }
 }

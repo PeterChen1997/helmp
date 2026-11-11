@@ -377,3 +377,62 @@ fn clipboard_plain_text_and_sequence_paste() {
         "[dry-run] paste-sequence 1 2 3"
     );
 }
+
+#[test]
+fn clipboard_primary_action_pastes_not_just_copies() {
+    // 剪贴板条目的主操作（回车，以及双击）是「粘贴」：写回剪贴板并替用户按 ⌘V，而不只是复制。
+    // 演练模式下只回报要粘贴哪一条、用哪种方式，不碰真实剪贴板，也不往别的 App 里按键。
+    let h = Helmp::new();
+    let t = now_ms();
+    seed_clipboard(&h, &[("first", t - 2000), ("second", t - 1000)]);
+    assert_eq!(h.run("clipboard:2", "cb ", &[]).trim(), "[dry-run] paste 2 Paste");
+}
+
+fn gui_line<'a>(out: &'a str, prefix: &str) -> &'a str {
+    out.lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("没有 {prefix:?}：\n{out}"))
+}
+
+/// 剪贴板的图形自检环境：三条历史（最旧的那条置顶），按剪贴板快捷键进入，再依次执行 `keys`。
+fn clipboard_gui(keys: &str) -> String {
+    let h = Helmp::new();
+    let t = now_ms();
+    seed_clipboard(&h, &[("old pinned", t - 3000), ("middle", t - 2000), ("fresh", t - 1000)]);
+    assert_eq!(h.run("clipboard:1", "cb ", &["--action", "Pin"]).trim(), "done");
+    let h = h
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_HOTKEY", "clipboard")
+        .env("HELMP_SELF_TEST_KEYS", keys);
+    h.cli(&[])
+}
+
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
+fn gui_clipboard_selects_latest_and_esc_closes_the_panel() {
+    // 进入剪贴板时默认选中最近一条（不是排在最前的置顶记录）；Esc 直接收起面板，不退回主搜索。
+    let out = clipboard_gui("escape");
+    let entered = gui_line(&out, "self-test hotkey clipboard:");
+    assert!(entered.contains(r#"scope=Some("clipboard")"#), "{entered}");
+    assert!(entered.contains(r#"selected="clipboard:3""#), "应选中最近的 fresh：{entered}");
+    let escaped = gui_line(&out, "self-test key escape:");
+    assert!(escaped.contains("visible=false"), "Esc 应收起面板：{escaped}");
+    assert!(
+        escaped.contains(r#"scope=Some("clipboard")"#),
+        "Esc 不应先退回主搜索：{escaped}"
+    );
+}
+
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
+fn gui_double_click_on_a_clip_pastes_it() {
+    // 双击一条剪贴板记录 = 粘贴它（收起面板、焦点还给原来的 App、按 ⌘V），不只是复制。
+    // 双击的是「middle」那一行（不是默认选中的 fresh），粘贴的就得是它。
+    let out = clipboard_gui("click:200,244 dclick:200,244");
+    let clicked = gui_line(&out, "self-test key click:");
+    assert!(clicked.contains(r#"selected="clipboard:2""#), "单击只选中：{clicked}");
+    assert!(clicked.contains("visible=true") && clicked.contains(r#"result="""#), "{clicked}");
+    let pasted = gui_line(&out, "self-test key dclick:");
+    assert!(pasted.contains("[dry-run] paste 2 Paste"), "双击应粘贴而不只是复制：{pasted}");
+}

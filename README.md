@@ -51,9 +51,9 @@ Most modules can also be entered with a prefix followed by a space (`f `, `bm `,
 
 ### Productivity
 
-- **Clipboard history** (`cb ` / `clip ` / `剪贴板 `, <kbd>⇧⌘V</kbd>). Text, images and files, stored locally in SQLite with no item limit, grouped by day and filterable by type. Content marked as concealed by password managers is skipped, and you can exclude apps (Passwords is excluded by default). <kbd>↵</kbd> pastes into the app you came from, <kbd>⌥↵</kbd> pastes as plain text. From ⌘K you can pin items (pinned items stay on top and are never removed by retention) or paste everything from this item to the latest in copy order.
+- **Clipboard history** (`cb ` / `clip ` / `剪贴板 `, <kbd>⇧⌘V</kbd>). Text, images and files, stored locally in SQLite with no item limit, grouped by day and filterable by type. Content marked as concealed by password managers is skipped, and you can exclude apps (Passwords is excluded by default). It opens with the most recent item selected (pinned items stay listed on top). <kbd>↵</kbd> or a double-click pastes into the app you came from, <kbd>⌥↵</kbd> pastes as plain text, and <kbd>esc</kbd> closes the panel right away instead of going back to the main search. From ⌘K you can pin items (pinned items stay on top and are never removed by retention) or paste everything from this item to the latest in copy order.
 - **Snippets** (`sn ` / `片段 `). Save text you use often, search it by name, keyword or content, and press Return to paste into the app you're using. Supports `{date}`, `{time}`, `{clipboard}`, `{uuid}`, `{cursor}` and `{argument name="…"}` (asked before pasting). Create snippets from the launcher, manage them in Settings › Snippets, or import from Raycast and Alfred. Expanding keywords as you type isn't supported yet.
-- **Screenshots, pins and OCR** (<kbd>⇧⌘1</kbd> / <kbd>⇧⌘2</kbd>). Like Snipaste: the screen freezes first and you select on the still image (or click a window); the selection stays adjustable, with Save, Copy, Pin (an always-on-top floating image) and Recognize Text. Recognize Text in Screenshot reads the text as soon as you release the mouse and shows it next to the selection, using Apple Vision. Line breaks and paragraphs are kept; <kbd>↵</kbd> copies everything, <kbd>⇧⌘C</kbd> copies it as one line, <kbd>⌥⌘C</kbd> copies it without line breaks, and <kbd>⌘T</kbd> sends it to Translate. QR codes and barcodes in the image are listed too, with an action to open a link. Recognition languages default to Simplified Chinese and English; Traditional Chinese, Japanese, Korean, French, German, Spanish, Italian, Portuguese and Russian can be added in Settings › Screenshot. Text can also be read from an image on the clipboard or from a file (`ocr /path/to/image.png`).
+- **Screenshots, pins and OCR** (<kbd>⇧⌘1</kbd> Screenshot / <kbd>⇧⌘2</kbd> Recognize Text in Screenshot: two separate shortcuts). Like Snipaste: the screen freezes first and you select on the still image (or click a window); the selection stays adjustable, with Save, Copy, Pin (an always-on-top floating image) and Recognize Text. Recognize Text in Screenshot reads the text as soon as you release the mouse and shows it next to the selection, using Apple Vision. Line breaks and paragraphs are kept; <kbd>↵</kbd> copies everything, <kbd>⇧⌘C</kbd> copies it as one line, <kbd>⌥⌘C</kbd> copies it without line breaks, and <kbd>⌘T</kbd> sends it to Translate. QR codes and barcodes in the image are listed too, with an action to open a link. Recognition languages default to Simplified Chinese and English; Traditional Chinese, Japanese, Korean, French, German, Spanish, Italian, Portuguese and Russian can be added in Settings › Screenshot. Text can also be read from an image on the clipboard or from a file (`ocr /path/to/image.png`).
 - **Translate with your own model** (`fy ` / `tr ` / `翻译 `, <kbd>⌥⇧T</kbd>). Anthropic, any OpenAI-compatible endpoint (OpenAI, DeepSeek, gateways) or a local Ollama; API keys live in the macOS Keychain. Translation starts as you type (after a short pause), the source language is detected, and the target defaults to "Chinese → English, everything else → Chinese"; you can pick another target or model for a single run. When you open it, Translate picks up the text selected in the front app and puts the cursor in the text box. <kbd>↵</kbd> copies the translation, <kbd>⌘↵</kbd> replaces the selection with it, <kbd>⇧⌘C</kbd> copies the source text and <kbd>⌘R</kbd> reads the translation aloud with the system voice. <kbd>↑</kbd> in an empty input brings back recent source texts; repeating one shows the earlier result instead of calling the model again. This history is kept in memory only.
 - **Calculator, units and currency.** Type an expression and the answer is the first result: `+ - * / % ^ **`, parentheses, `sqrt`, `sin`, `ln`, `log`, `pow`, `min`, `max` and more, `pi` and `e`. Full-width symbols, Chinese brackets and `×` `÷` work too. Unit and currency conversions are answered the same way: `10 km to mi`, `3斤`, `100 usd to cny`. Exchange rates are the European Central Bank's daily reference rates, cached locally so conversion keeps working offline (the subtitle says when they were updated); `汇率` / `exchange rate` lists common pairs. <kbd>↵</kbd> copies the result. Plain search terms such as `wx` or `2026` don't produce a result.
 - **Time, time zones and timestamps.** `now`, `time tokyo` / `东京时间`, a Unix timestamp in seconds or milliseconds (`1731234567`), `2026-11-10 10:00 pst to beijing`, `3pm 北京 in 纽约`, `in 3 days` / `3天后`, `next friday`. Each row is one format (local, UTC, ISO 8601, Unix seconds and milliseconds, the target zone); <kbd>↵</kbd> copies it. Time zone rules are built in, so this works offline.
@@ -140,14 +140,14 @@ The global hotkeys use Carbon `RegisterEventHotKey` and need no permission.
 
 ## Keyboard shortcuts
 
-Global (defaults; change the first in Settings › General, the others in Settings › Extensions):
+Global (defaults; change the first in Settings › General, the others in Settings › Extensions; the two screenshot shortcuts are also side by side in Settings › Screenshot):
 
 | Shortcut | Action |
 |---|---|
 | <kbd>⌥ Space</kbd> | Show / hide the panel |
 | <kbd>⇧⌘V</kbd> | Clipboard history |
-| <kbd>⇧⌘1</kbd> | Screenshot: freeze the screen, select, then copy / save / pin (change it in Settings › Screenshot) |
-| <kbd>⇧⌘2</kbd> | Select part of the screen and recognize its text (runs without opening the panel) |
+| <kbd>⇧⌘1</kbd> | Screenshot: freeze the screen, select, then copy / save / pin |
+| <kbd>⇧⌘2</kbd> | Recognize Text in Screenshot: select part of the screen and recognize its text (runs without opening the panel) |
 | <kbd>⌥⇧T</kbd> | Translate (picks up the selected text) |
 | <kbd>⌃⌥A</kbd> | Agent sessions |
 
@@ -161,7 +161,7 @@ In the panel:
 | <kbd>↵</kbd> | Run the primary action |
 | <kbd>⌘K</kbd> | More actions for the selected item |
 | <kbd>⇥</kbd> | On the home view or in search results: enter the selected item's extension. Inside an extension: next filter (e.g. All / Text / Images / Files) |
-| <kbd>esc</kbd> | Close the action menu → close the result or confirmation page → leave the extension → hide |
+| <kbd>esc</kbd> | Close the action menu → close the result or confirmation page → leave the extension → hide. In the clipboard it hides the panel directly |
 | <kbd>⌫</kbd> | With an empty input inside an extension: leave it |
 | <kbd>⌘,</kbd> | Settings |
 
