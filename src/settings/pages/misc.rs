@@ -218,19 +218,29 @@ impl SettingsView {
             );
         }
 
+        // 「截图」「截图识别文字」是两条独立的快捷键，并排列出、各自录制；录成对方正在用的组合会被指名拦下。
         let mut rows = Vec::new();
-        if let Some(recorder) = &self.capture_hotkey {
+        for shortcut in &self.screenshot_hotkeys {
+            let (zh, en) = shortcut.label;
+            let help = if shortcut.slot == "screenshot-capture" {
+                tr(
+                    "冻结屏幕后框选，再复制、保存、钉图或识别文字",
+                    "Freeze the screen, select an area, then copy, save, pin or recognize text",
+                )
+            } else {
+                tr(
+                    "冻结屏幕后框选，松开鼠标立即识别文字并复制",
+                    "Freeze the screen, select an area; its text is recognized and copied when you release the mouse",
+                )
+            };
             rows.push(
                 widgets::row(
                     widgets::label_with_help(
-                        tr("截图快捷键", "Screenshot shortcut"),
-                        tr(
-                            "冻结屏幕后框选；「截图识别文字」的快捷键在「扩展」页的截图一行",
-                            "Freeze the screen and select an area. The shortcut for “Recognize Text in Screenshot” is in Extensions",
-                        ),
+                        trf!("「{}」快捷键", "“{}” shortcut", tr(zh, en)),
+                        help,
                         pal,
                     ),
-                    crate::settings::hotkey::with_note(recorder, pal, cx),
+                    crate::settings::hotkey::with_note(&shortcut.recorder, pal, cx),
                 )
                 .into_any_element(),
             );

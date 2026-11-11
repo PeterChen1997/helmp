@@ -10,6 +10,13 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 - Settings › About has a "Contact the Author" section with the author's name and a link to the blog.
 
+### Changed
+
+- "Screenshot" (<kbd>⇧⌘1</kbd>) and "Recognize Text in Screenshot" (<kbd>⇧⌘2</kbd>) are shown as two separate shortcuts everywhere. Settings › Extensions used to show a single shortcut on the "Screenshot & OCR" row (the OCR one), and Settings › Screenshot only the Screenshot one, so it looked like one shortcut. Both now appear side by side, each with its own recorder, and recording one with the other's combination is refused by name. Search results and the home view show each command's own shortcut. Existing settings are kept.
+- Clipboard history opens with the most recent item selected instead of a pinned item at the top (pinned items stay listed where they are).
+- Double-clicking a clipboard item pastes it into the app you came from, like <kbd>↵</kbd> (it used to only copy). With auto-paste off or without the Accessibility permission it copies, as <kbd>↵</kbd> does.
+- <kbd>Esc</kbd> in clipboard history closes the panel directly instead of going back to the main search; the next time the panel opens it starts from the main search.
+
 ### Fixed
 
 - Release notes in Settings › About are shown as headings and bullet points instead of raw Markdown (`### Added`, `<kbd>⇧⌘1</kbd>`).
@@ -19,6 +26,13 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 #### 新增
 
 - 设置 › 关于新增「联系作者」：作者名字和博客链接。
+
+#### 变更
+
+- 「截图」（<kbd>⇧⌘1</kbd>）和「截图识别文字」（<kbd>⇧⌘2</kbd>）在各处都显示成两条独立的快捷键。以前「设置 › 扩展」里「截图与文字识别」一行只有一个快捷键（其实是识别文字的那条），「设置 › 截图」里只有截图的那条，看起来像只有一个。现在两条并排列出、各自录制，把一条录成另一条正在用的组合会被指名拦下。搜索结果和首页上各自显示自己的快捷键。已有设置保持不变。
+- 打开剪贴板历史时默认选中最近的一条，而不是排在最前的置顶记录（置顶的仍列在原处）。
+- 双击剪贴板条目和回车一样，粘贴到你刚才所在的 App（以前只复制）。关了自动粘贴或没有辅助功能权限时和回车一样只复制。
+- 在剪贴板历史里按 <kbd>Esc</kbd> 直接收起面板，不再退回主搜索；下次唤起从主搜索开始。
 
 #### 修复
 

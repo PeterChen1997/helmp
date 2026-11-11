@@ -114,16 +114,20 @@ impl SettingsView {
                 .text_size(px(12.))
                 // 默认尺寸的输入框自带 10 pt 左右内边距、14 pt 字，64 pt 宽的列里「kill」都放不下。
                 .child(Input::new(&row.alias).appearance(false).xsmall());
-            let hotkey_cell = match &row.hotkey {
-                Some(recorder) => recorder.clone().into_any_element(),
+            // 只有一条快捷键的扩展，录制框就在这一行；截图这样有两条的，这一行空着，
+            // 下面每条快捷键单独一行（名称 + 录制框），不再只露出其中一条、让人以为另一条不存在。
+            let single = match row.shortcuts.as_slice() {
+                [only] => Some(only),
+                _ => None,
+            };
+            let hotkey_cell = match (single, row.shortcuts.is_empty()) {
+                (Some(only), _) => only.recorder.clone().into_any_element(),
                 // 这个扩展没有全局快捷键命令：不给录制框，录了也不会生效。
-                None => widgets::help_text("—", pal).into_any_element(),
+                (None, true) => widgets::help_text("—", pal).into_any_element(),
+                (None, false) => div().into_any_element(),
             };
             // 录制被拒的原因 / 已保存却没生效的原因：表格列太窄，放在整行下方。
-            let note = row
-                .hotkey
-                .as_ref()
-                .and_then(|recorder| recorder.read(cx).note());
+            let note = single.and_then(|only| only.recorder.read(cx).note());
             let line = cells(
                 div()
                     .flex()
@@ -147,23 +151,54 @@ impl SettingsView {
                 )
                 .into_any_element(),
             );
-            rows.push(
+            // 与名称文字左对齐（14 边距 + 24 图标 + 10 间距）。
+            let note_row = |note: hotkey::Note| {
                 div()
-                    .flex()
-                    .flex_col()
-                    .child(line)
-                    .when_some(note, |el, note| {
-                        // 与名称文字左对齐（14 边距 + 24 图标 + 10 间距）。
-                        el.child(
+                    .pl(px(48.))
+                    .pr(px(14.))
+                    .pb(px(8.))
+                    .child(hotkey::note_line(&note, pal))
+            };
+            let mut block = div()
+                .flex()
+                .flex_col()
+                .child(line)
+                .when_some(note, |el, note| el.child(note_row(note)));
+            if single.is_none() {
+                for shortcut in &row.shortcuts {
+                    let (zh, en) = shortcut.label;
+                    // 名称占满名称、类型、别名三列（英文名长），录制框与上面各行的快捷键列对齐。
+                    let line = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .min_h(px(34.))
+                        .px(px(14.))
+                        .py(px(2.))
+                        .child(
                             div()
-                                .pl(px(48.))
-                                .pr(px(14.))
-                                .pb(px(8.))
-                                .child(hotkey::note_line(&note, pal)),
+                                .flex_1()
+                                .min_w_0()
+                                .pl(px(34.))
+                                .text_size(px(12.5))
+                                .text_color(pal.fg)
+                                .child(tr(zh, en)),
                         )
-                    })
-                    .into_any_element(),
-            );
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(COL_HOTKEY)
+                                .child(shortcut.recorder.clone()),
+                        )
+                        .child(div().flex_none().w(COL_SWITCH));
+                    block = block
+                        .child(line)
+                        .when_some(shortcut.recorder.read(cx).note(), |el, note| {
+                            el.child(note_row(note))
+                        });
+                }
+            }
+            rows.push(block.into_any_element());
         }
         // 别名为空时显示的是插件默认前缀（占位提示），这里说明一下。
         let has_default_alias = self

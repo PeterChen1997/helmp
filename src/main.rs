@@ -175,6 +175,8 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         };
 
         report("initial".into(), cx);
+        // 全局快捷键真实的注册结果（每个快捷键位一项）：确认「截图」「截图识别文字」都各自注册上了。
+        println!("self-test hotkeys: {}", hotkey::describe_active());
 
         // 唤起延迟：从 toggle 到窗口成为 key window。
         let started = Instant::now();
@@ -393,6 +395,17 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     if on_other_window {
                         let state = cx.update(capture::debug_state);
                         println!("self-test key {token}: capture={state}");
+                    } else {
+                        // 点在面板上（如双击剪贴板条目）：报告面板状态。
+                        let launcher = launcher.clone();
+                        window
+                            .update(cx, move |_, window, cx| {
+                                println!(
+                                    "self-test key {token}: {}",
+                                    launcher.read(cx).debug_state(window, cx)
+                                );
+                            })
+                            .expect("launcher window gone");
                     }
                     continue;
                 }
