@@ -44,6 +44,35 @@ fn reset_after() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(crate::config::get().general.reset_after_secs))
 }
 
+/// 面板为了展示结果重新弹出后（动作执行时面板是收起的），这么久之内失去焦点不收起，而是把焦点要回来。
+///
+/// 动作在面板收起后执行，期间焦点可能在别的进程手里（以前的 `screencapture -i`、权限弹窗、被激活的其他 App）。
+/// 那个进程结束时系统会把前台还给原来的 App，这一下常常晚于面板重新弹出——要是照常 150 ms 后收起，
+/// 结果（出错说明、「前往授权」）就一闪而过，用户以为什么都没发生。过了这段时间再失去焦点，才是用户自己点走了。
+const RESHOW_GRACE: Duration = Duration::from_millis(1200);
+
+/// 面板失去焦点 150 ms 后仍不在前台时怎么办。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Deactivated {
+    /// 已经隐藏或焦点又回来了：什么也不做。
+    Ignore,
+    /// 用户点到了别处：收起面板。
+    Hide,
+    /// 刚为展示结果弹出，焦点是被别的进程抢走的：重新激活面板。
+    Reclaim,
+}
+
+/// `reshown_for`：距离面板为展示结果重新弹出过了多久（不是为结果弹出的为 None）。
+fn on_deactivated(visible: bool, active: bool, reshown_for: Option<Duration>) -> Deactivated {
+    if !visible || active {
+        return Deactivated::Ignore;
+    }
+    match reshown_for {
+        Some(elapsed) if elapsed < RESHOW_GRACE => Deactivated::Reclaim,
+        _ => Deactivated::Hide,
+    }
+}
+
 /// 唤起时是否清空上次输入。
 /// - 刚执行过一个结果（`executed`）：任务已完成，下次唤起是新任务，清空。
 /// - 隐藏时长达到阈值：大概率是新的意图，清空。
@@ -162,6 +191,8 @@ pub struct Launcher {
     hidden_at: Option<Instant>,
     /// 上次唤起后执行过结果，下次唤起清空。
     executed: bool,
+    /// 面板为展示结果重新弹出的时刻（见 `RESHOW_GRACE`）；普通唤起时为 None。
+    reshown_at: Option<Instant>,
     scroll: ScrollHandle,
     /// 渲染时记录：第 i 个结果在滚动容器里是第几个子元素（小节标题也占位）。
     row_children: Vec<usize>,
@@ -217,9 +248,17 @@ impl Launcher {
                             .timer(Duration::from_millis(150))
                             .await;
                         let _ = this.update_in(cx, |this, window, cx| {
-                            if this.visible && !window.is_window_active() {
-                                crate::trace::log("面板失去焦点，收起");
-                                this.hide(window, cx);
+                            let reshown_for = this.reshown_at.map(|at| at.elapsed());
+                            match on_deactivated(this.visible, window.is_window_active(), reshown_for) {
+                                Deactivated::Ignore => {}
+                                Deactivated::Hide => {
+                                    crate::trace::log("面板失去焦点，收起");
+                                    this.hide(window, cx);
+                                }
+                                Deactivated::Reclaim => {
+                                    crate::trace::log("面板刚为结果弹出就被别的进程抢走焦点，要回来");
+                                    crate::panel::show(window, cx);
+                                }
                             }
                         });
                     })
@@ -269,6 +308,7 @@ impl Launcher {
             visible: false,
             hidden_at: None,
             executed: false,
+            reshown_at: None,
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
             lang_generation: crate::i18n::generation(),
@@ -430,6 +470,8 @@ impl Launcher {
     fn show_inner(&mut self, allow_reset: bool, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.show");
         self.visible = true;
+        // 为展示结果重新弹出（allow_reset = false）时记下时刻：紧接着的焦点抖动不该把结果收起。
+        self.reshown_at = (!allow_reset).then(Instant::now);
         let hidden_for = self.hidden_at.take().map(|at| at.elapsed());
         let executed = std::mem::take(&mut self.executed);
         if allow_reset && should_reset(hidden_for, reset_after(), executed) {
@@ -1041,6 +1083,12 @@ impl Launcher {
                         Ok(Outcome::OpenSettingsPage(page)) => {
                             this.executed = true;
                             cx.defer(move |cx| crate::settings::open_page(cx, page));
+                            return;
+                        }
+                        Ok(Outcome::Capture(mode)) => {
+                            this.executed = true;
+                            // 面板已在执行前收起；截图界面要开新窗口，推迟到本次更新结束。
+                            cx.defer(move |cx| crate::capture::open(mode, cx));
                             return;
                         }
                         Ok(Outcome::Show(detail)) => detail,
@@ -2321,7 +2369,10 @@ mod tests {
     // 不用 `super::*`：那会把 gpui 的 `test` 宏一起导进来，盖掉标准 `#[test]`。
     use std::time::Duration;
 
-    use super::{end_position, placeholder_for, provider_of, should_reset};
+    use super::{
+        Deactivated, RESHOW_GRACE, end_position, on_deactivated, placeholder_for, provider_of,
+        should_reset,
+    };
 
     const LIMIT: Duration = Duration::from_secs(90);
 
@@ -2334,6 +2385,21 @@ mod tests {
         assert_eq!((end.line, end.character), (0, 0));
         let end = end_position("末尾换行\n");
         assert_eq!((end.line, end.character), (1, 0));
+    }
+
+    #[test]
+    fn result_reshown_after_a_background_action_survives_a_focus_bounce() {
+        // 截图、权限检查这类动作执行时面板是收起的，焦点可能在别的进程手里；面板弹出展示结果后，
+        // 系统才把前台还给原来的 App。这时若照常收起，结果一闪而过（用户报告「截图没反应」的根因）。
+        let just = Some(Duration::from_millis(200));
+        assert_eq!(on_deactivated(true, false, just), Deactivated::Reclaim);
+        // 过了这段时间再失去焦点：用户自己点到了别处，照常收起。
+        assert_eq!(on_deactivated(true, false, Some(RESHOW_GRACE)), Deactivated::Hide);
+        // 普通唤起（不是为结果弹出）失去焦点：收起。
+        assert_eq!(on_deactivated(true, false, None), Deactivated::Hide);
+        // 焦点已经回来，或面板本来就收起了：什么也不做。
+        assert_eq!(on_deactivated(true, true, just), Deactivated::Ignore);
+        assert_eq!(on_deactivated(false, false, just), Deactivated::Ignore);
     }
 
     #[test]

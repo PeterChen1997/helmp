@@ -213,14 +213,31 @@ impl SettingsView {
             );
         }
 
+        let mut rows = Vec::new();
+        if let Some(recorder) = &self.capture_hotkey {
+            rows.push(
+                widgets::row(
+                    widgets::label_with_help(
+                        tr("截图快捷键", "Screenshot shortcut"),
+                        tr(
+                            "冻结屏幕后框选；「截图识别文字」的快捷键在「扩展」页的截图一行",
+                            "Freeze the screen and select an area. The shortcut for “Recognize Text in Screenshot” is in Extensions",
+                        ),
+                        pal,
+                    ),
+                    crate::settings::hotkey::with_note(recorder, pal, cx),
+                )
+                .into_any_element(),
+            );
+        }
         div()
             .flex()
             .flex_col()
             .child(widgets::group(
-                vec![
+                rows.into_iter().chain([
                     widgets::row(
                         widgets::label_with_help(
-                            tr("「截图并保存」的位置", "“Screenshot and Save” folder"),
+                            tr("截图默认保存位置", "Default folder for saved screenshots"),
                             dir_text,
                             pal,
                         ),
@@ -255,7 +272,7 @@ impl SettingsView {
                             )),
                     )
                     .into_any_element(),
-                ],
+                ]).collect(),
                 pal,
             ))
             .child(widgets::group_header(

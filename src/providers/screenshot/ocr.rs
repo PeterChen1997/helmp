@@ -168,7 +168,7 @@ pub fn to_png(image: &[u8]) -> Result<Png> {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 由 `tests/fixtures/make-ocr-fixture.swift` 生成：「你好 Huan 2026」+ 一行英文句子。

@@ -40,6 +40,8 @@ pub enum Outcome {
     OpenSettingsPage(crate::settings::Page),
     /// 关掉正在展示的详情（如确认页的「取消」），回到结果列表，同按 Esc。
     Dismiss,
+    /// 冻结屏幕、打开截图选区界面（动作在后台线程执行，开窗口交给界面线程，见 `crate::capture`）。
+    Capture(crate::capture::Mode),
 }
 
 /// 执行时框架传给动作的输入：表单视图下是各字段的值。

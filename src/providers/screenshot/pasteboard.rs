@@ -1,4 +1,4 @@
-//! NSPasteboard 读写：取图片字节、写入识别出的文字。
+//! NSPasteboard 读写：取图片字节、写入识别出的文字、写入截图。
 //!
 //! 函数都接收 pasteboard 参数而不是写死 generalPasteboard，测试用私有 pasteboard，
 //! 不碰用户真实剪贴板。
@@ -8,7 +8,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{
     NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeTIFF,
 };
-use objc2_foundation::NSString;
+use objc2_app_kit::NSBitmapImageRep;
+use objc2_foundation::{NSData, NSString};
 
 use crate::i18n::tr;
 
@@ -38,8 +39,24 @@ pub fn write_text(pasteboard: &NSPasteboard, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// 清空并写入一张 PNG 图片，同时附上 TIFF：有的应用（Keynote、老的 Cocoa 应用）只认 TIFF，
+/// 只放 PNG 时在那里粘贴不出图。
+pub fn write_png(pasteboard: &NSPasteboard, png: &[u8]) -> Result<()> {
+    let data = NSData::with_bytes(png);
+    let tiff = NSBitmapImageRep::imageRepWithData(&data).and_then(|rep| rep.TIFFRepresentation());
+    pasteboard.clearContents();
+    // SAFETY: AppKit 导出的常量。
+    let (png_type, tiff_type) = unsafe { (NSPasteboardTypePNG, NSPasteboardTypeTIFF) };
+    let mut ok = pasteboard.setData_forType(Some(&data), png_type);
+    if let Some(tiff) = tiff {
+        ok &= pasteboard.setData_forType(Some(&tiff), tiff_type);
+    }
+    anyhow::ensure!(ok, tr("写入剪贴板失败", "Couldn't write to the clipboard"));
+    Ok(())
+}
+
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use objc2_foundation::NSData;
 
@@ -65,6 +82,21 @@ pub(super) mod tests {
             // SAFETY: `-[NSPasteboard releaseGlobally]` 无参数无返回值。
             unsafe { objc2::msg_send![&*self.0, releaseGlobally] }
         }
+    }
+
+    #[test]
+    fn write_png_puts_the_image_in_both_formats() {
+        // 截图「复制」后用户直接 ⌘V：PNG 给浏览器、聊天软件，TIFF 给只认 TIFF 的应用；旧的文字不能残留，
+        // 否则粘贴到文本框里贴出来的是上一次复制的字。
+        let pb = Private::new();
+        write_text(&pb.0, "旧文字").unwrap();
+        let png = std::fs::read(super::super::ocr::tests::FIXTURE).unwrap();
+        write_png(&pb.0, &png).unwrap();
+        assert_eq!(image_data(&pb.0).as_deref(), Some(png.as_slice()));
+        // SAFETY: AppKit 导出的常量。
+        let (tiff, text) = unsafe { (NSPasteboardTypeTIFF, NSPasteboardTypeString) };
+        assert!(pb.0.dataForType(tiff).is_some_and(|data| data.length() > 0));
+        assert_eq!(pb.0.stringForType(text), None);
     }
 
     #[test]
