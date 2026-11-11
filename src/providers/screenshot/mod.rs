@@ -75,6 +75,8 @@ struct Cmd {
 }
 
 const SCREENSHOT: [&str; 3] = ["截图", "jt", "screenshot"];
+/// 共用关键词在非主命令上的扣分：只用来分出先后，不能低到被别的插件的模糊匹配盖过。
+const SHARED_KEYWORD_PENALTY: u32 = 20;
 
 const COMMANDS: [Cmd; 4] = [
     // 主「截图」命令。id 沿用旧的「截图到剪贴板」：最近使用、快捷键、菜单栏都按 id 重新找它，
@@ -188,7 +190,13 @@ impl Provider for Screenshot {
                 let score = cmd
                     .keywords
                     .iter()
-                    .filter_map(|keyword| matcher::score(query, keyword))
+                    .filter_map(|keyword| {
+                        let score = matcher::score(query, keyword)?;
+                        // 「截图」「jt」「screenshot」三个命令共用；只有名字就叫「截图」的主命令拿满分，
+                        // 其余略低——否则同分时「最近使用」优先，搜「截图」排第一的成了「截图识别文字」。
+                        let shared = SCREENSHOT.contains(keyword) && cmd.key != "clipboard";
+                        Some(if shared { score.saturating_sub(SHARED_KEYWORD_PENALTY) } else { score })
+                    })
                     .max()?;
                 Some(command_item(cmd, score, badge()))
             })
@@ -804,6 +812,25 @@ mod tests {
         let ocr = ids("识别文字");
         assert!(ocr.contains(&"screenshot:ocr-screen".to_string()));
         assert!(ocr.contains(&"screenshot:ocr-clipboard".to_string()));
+    }
+
+    #[test]
+    fn plain_screenshot_query_ranks_the_screenshot_command_first() {
+        // 搜「截图」想要的就是截图；同分时「最近使用」优先，常用 OCR 的人会被顶成「截图识别文字」（真机上发生过）。
+        for query in ["截图", "jt", "screenshot"] {
+            let items = Screenshot.query(query);
+            let best = items.iter().max_by_key(|item| item.score).unwrap();
+            assert_eq!(best.id, "screenshot:clipboard", "{query:?}");
+            let main = best.score;
+            assert!(
+                items.iter().filter(|item| item.id != best.id).all(|item| item.score < main),
+                "{query:?}：其他截图命令必须严格低于主命令"
+            );
+        }
+        // 用 OCR 自己的名字搜，OCR 仍然第一。
+        let items = Screenshot.query("截图识别文字");
+        let best = items.iter().max_by_key(|item| item.score).unwrap();
+        assert_eq!(best.id, "screenshot:ocr-screen");
     }
 
     #[test]

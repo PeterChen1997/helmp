@@ -12,7 +12,7 @@ use crate::i18n::{tr, trf};
 use crate::style::{self, Palette};
 
 /// 选区外的压暗程度。
-const DIM: f32 = 0.38;
+const DIM: f32 = 0.5;
 /// 控制点边长（pt）。
 const HANDLE: f32 = 8.;
 /// 工具栏按钮边长、间距与内边距（pt）。
