@@ -1,6 +1,6 @@
 //! Provider 注册表。新增模块：在这里加 `mod xxx;`，并在 `all()` 里加一行。
 
-mod agents;
+pub mod agents;
 mod apps;
 mod bookmarks;
 mod builtin;

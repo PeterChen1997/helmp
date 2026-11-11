@@ -519,6 +519,7 @@ impl Launcher {
     fn show_inner(&mut self, allow_reset: bool, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.show");
         self.visible = true;
+        crate::providers::agents::set_panel_visible(true);
         // 为展示结果重新弹出（allow_reset = false）时记下时刻：紧接着的焦点抖动不该把结果收起。
         self.reshown_at = (!allow_reset).then(Instant::now);
         let hidden_for = self.hidden_at.take().map(|at| at.elapsed());
@@ -540,6 +541,7 @@ impl Launcher {
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.hide");
         self.visible = false;
+        crate::providers::agents::set_panel_visible(false);
         self.actions_open = false;
         self.hidden_at = Some(Instant::now());
         crate::panel::hide(window);

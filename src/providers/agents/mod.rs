@@ -30,6 +30,21 @@ use self::state::{Session, Source};
 /// 任何 jsonl 只读尾部这么多字节（本机 Claude 1,514 个 jsonl / 7.2 GB，绝不能全量读）。
 const TAIL_BYTES: u64 = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// 面板收起时每这么多轮才真正扫一次。每轮都要遍历 agent 目录，常驻后台每秒扫一遍要占 1%～2% CPU；
+/// 收起时只有菜单栏的「等你的会话」在用，晚几秒没关系。面板打开后下一轮（1 秒内）就恢复每秒扫。
+const HIDDEN_SCAN_EVERY: u32 = 5;
+/// 面板此刻是否打开，由 launcher 在显示 / 收起时设置。
+static PANEL_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// launcher 显示 / 收起面板时调用，决定后台扫描的频率。
+pub fn set_panel_visible(visible: bool) {
+    PANEL_VISIBLE.store(visible, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 距上次扫描已过 `idle_ticks` 轮，这一轮要不要扫。
+fn should_scan(idle_ticks: u32, panel_visible: bool) -> bool {
+    panel_visible || idle_ticks >= HIDDEN_SCAN_EVERY
+}
 
 /// 全局搜索里会话的分组名（设计稿 Results）。范围视图里按状态分组，首页用 `waiting_section()`。
 fn global_section() -> &'static str {
@@ -120,9 +135,14 @@ impl Provider for Agents {
         std::thread::Builder::new()
             .name("helmp-agents-poll".into())
             .spawn(move || {
+                let mut idle_ticks = 0;
                 loop {
                     std::thread::sleep(POLL_INTERVAL);
-                    poller.refresh(&sessions);
+                    idle_ticks += 1;
+                    if should_scan(idle_ticks, PANEL_VISIBLE.load(std::sync::atomic::Ordering::Relaxed)) {
+                        idle_ticks = 0;
+                        poller.refresh(&sessions);
+                    }
                 }
             })?;
         Ok(())
@@ -295,6 +315,16 @@ fn tail_lines(bytes: &[u8], truncated: bool) -> impl Iterator<Item = &[u8]> {
 mod tests {
     use super::*;
     use crate::provider::{Block, Tone};
+
+    #[test]
+    fn scans_every_tick_only_while_the_panel_is_open() {
+        // 打开面板时用户盯着会话状态，必须每秒刷新；收起时每秒遍历 agent 目录是白占 CPU（真机常驻 1%～2%）。
+        assert!(should_scan(1, true));
+        assert!(!should_scan(1, false));
+        assert!(!should_scan(HIDDEN_SCAN_EVERY - 1, false));
+        // 收起时也不能完全不扫：菜单栏要显示有几个会话在等你。
+        assert!(should_scan(HIDDEN_SCAN_EVERY, false));
+    }
     use state::{Jump, Status};
 
     fn session(title: &str, source: Source, status: Status) -> Session {
