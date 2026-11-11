@@ -13,6 +13,7 @@
 pub mod feed;
 pub mod install;
 pub mod manifest;
+pub mod notes;
 pub mod version;
 
 use std::path::PathBuf;

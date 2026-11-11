@@ -444,6 +444,28 @@ impl SettingsView {
 
 /// 关于页的「更新」分组：状态行 + 按钮、更新说明、安装后的说明。
 /// 状态在 `crate::updates` 里，设置窗口按它的代数轮询重绘（见 `watch_hotkey_registry`）。
+/// 更新说明：小标题加粗，列表项前面放圆点并悬挂缩进，行内 Markdown 已在 `updates::notes` 去掉。
+fn release_notes(markdown: &str, pal: &Palette) -> Vec<AnyElement> {
+    use crate::updates::notes::{Block, blocks};
+    blocks(markdown)
+        .into_iter()
+        .map(|block| match block {
+            Block::Heading(title) => widgets::help_text(title, pal)
+                .pt(px(6.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(pal.fg)
+                .into_any_element(),
+            Block::Bullet(text) => div()
+                .flex()
+                .gap(px(6.))
+                .child(widgets::help_text("•", pal).flex_none())
+                .child(widgets::help_text(text, pal).flex_1().min_w_0())
+                .into_any_element(),
+            Block::Paragraph(text) => widgets::help_text(text, pal).into_any_element(),
+        })
+        .collect()
+}
+
 fn update_rows(pal: &Palette) -> Vec<AnyElement> {
     use crate::updates::{self, Busy, install::Location};
 
@@ -517,7 +539,7 @@ fn update_rows(pal: &Palette) -> Vec<AnyElement> {
                 .flex_col()
                 .gap(px(4.))
                 .child(widgets::label(tr("更新说明", "What's New"), pal))
-                .child(widgets::help_text(notes.to_string(), pal))
+                .children(release_notes(notes, pal))
                 .into_any_element(),
         );
     }

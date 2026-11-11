@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Release notes in Settings › About are shown as headings and bullet points instead of raw Markdown (`### Added`, `<kbd>⇧⌘1</kbd>`).
+
+### 简体中文
+
+#### 修复
+
+- 设置 › 关于里的更新说明按小标题和列表显示，不再露出 Markdown 原文（`### Added`、`<kbd>⇧⌘1</kbd>`）。
+
 ## [0.4.1] - 2026-11-11
 
 ### Added
