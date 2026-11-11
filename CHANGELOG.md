@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-11
+
 ### Added
 
 - Snipaste-style screenshots. "Screenshot" (<kbd>⇧⌘1</kbd>, also in the menu bar) freezes every display first, then you select on the still image: drag in any direction, or click to pick the window under the mouse. The selection stays put; drag its handles to resize it or drag inside to move it. A toolbar at its bottom-right offers Save, Copy, Pin, Recognize Text and Close. <kbd>↵</kbd> or a double-click inside copies, <kbd>⌘C</kbd> copies, <kbd>⌘S</kbd> saves (a save dialog opening in the screenshot folder from Settings), <kbd>Esc</kbd> quits, and a right-click clears the selection (a second one quits). Copy and Save confirm with a short "Copied" / "Saved" notice. Images keep the display's full pixel resolution and color profile. "Pin" turns the selection into an always-on-top floating image at the same spot: drag it anywhere, hover it for Copy / Save / Recognize Text / Close, press <kbd>Esc</kbd> or double-click to close it; pin as many as you like. Change the shortcut in Settings › Screenshot. The old "Screenshot to Clipboard" and "Screenshot and Save" commands open the same screen (Return saves in the latter), so recent items and shortcuts that point at them keep working.
@@ -14,6 +16,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 ### Fixed
 
 - Results shown after an action that ran with the panel hidden (a missing-permission notice, an error) no longer vanish right away. When another process hands focus back a moment after the panel reappears, the panel now takes focus back instead of hiding. This is why "Screenshot" and "Recognize Text in Screenshot" seemed to do nothing.
+- Searching "截图", "jt" or "screenshot" lists "Screenshot" first again, even if you use "Recognize Text in Screenshot" more often.
 
 ### 简体中文
 
@@ -25,6 +28,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 #### 修复
 
 - 面板收起期间执行的动作，结果（没有权限的提示、出错说明）弹出后不再一闪而过。面板重新出现后，别的进程才把焦点还回来时，面板会把焦点要回来，而不是收起。「截图」「截图识别文字」看起来没反应就是这个原因。
+- 搜「截图」「jt」「screenshot」时「截图」重新排第一，即使你更常用「截图识别文字」。
 
 ## [0.4.0] - 2026-11-10
 
@@ -216,7 +220,8 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/PeterChen1997/helmp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/PeterChen1997/helmp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/PeterChen1997/helmp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PeterChen1997/helmp/compare/v0.1.0...v0.2.0
