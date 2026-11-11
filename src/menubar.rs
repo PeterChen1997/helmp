@@ -9,12 +9,15 @@
 //! - 每 2 秒用 `engine.query("")` 刷新等待中的会话；菜单展开期间不重建，避免条目在鼠标下跳动。
 //! - 遵守 `config.general.show_menubar_icon`，通过 `config::subscribe` 实时生效。
 //!
-//! NSMenu 的回调在 AppKit 主线程触发：回调只把命令投进 channel，由 GPUI 前台任务轮询执行，
-//! 不在回调里碰 GPUI 实体。
+//! NSMenu 的回调在 AppKit 主线程触发：回调只把命令投进 channel 并 `WAKE.notify()`，由 GPUI 前台任务
+//! 醒来执行，不在回调里碰 GPUI 实体。
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, mpsc};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
@@ -37,7 +40,10 @@ use crate::i18n::{self, tr, trf};
 use crate::launcher::LauncherHandle;
 use crate::provider::{Accessory, Icon, Item};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// 没有菜单点击 / 配置变更时，轮询任务多久醒一次（查快捷键、更新、语言的变化，按时刷新等待会话）。
+/// 菜单点击、配置变更、菜单收起都会经 `WAKE` 立刻叫醒它，不靠这个间隔。原来固定每 50 ms 醒一次
+/// 只为不漏菜单点击，面板收起、什么都不做时也让进程常驻约 0.2% CPU。
+const IDLE_TICK: Duration = Duration::from_secs(1);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 /// 菜单里最多列出几条等待中的会话，其余从「全部会话…」进。
 const MAX_WAITING_IN_MENU: usize = 8;
@@ -83,6 +89,7 @@ pub fn install(cx: &mut App) {
     crate::config::subscribe(move |_| {
         // 接收端在轮询任务里，进程结束前一直存在。
         let _ = config_tx.send(());
+        WAKE.notify();
     });
 
     let mut bar = MenuBar::new(tx, mtm);
@@ -147,10 +154,57 @@ pub fn install(cx: &mut App) {
                     bar.perform(&title);
                 }
             }
-            cx.background_executor().timer(POLL_INTERVAL).await;
+            WAKE.wait(cx.background_executor().timer(IDLE_TICK)).await;
         }
     })
     .detach();
+}
+
+/// 轮询任务的唤醒器：菜单回调（主线程）与配置变更调 `notify`，轮询任务在它与 `IDLE_TICK` 之间先到先醒。
+struct Wake {
+    pending: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+static WAKE: Wake = Wake::new();
+
+impl Wake {
+    const fn new() -> Self {
+        Self {
+            pending: AtomicBool::new(false),
+            waker: Mutex::new(None),
+        }
+    }
+
+    fn notify(&self) {
+        self.pending.store(true, Ordering::SeqCst);
+        if let Some(waker) = self.waker.lock().expect("菜单栏唤醒锁中毒").take() {
+            waker.wake();
+        }
+    }
+
+    /// 等到 `notify` 或 `tick` 先完成。等待前已有的 `notify` 不会丢：立刻返回。
+    fn wait<F: Future<Output = ()> + Unpin>(&self, tick: F) -> WaitOrTick<'_, F> {
+        WaitOrTick { wake: self, tick }
+    }
+}
+
+struct WaitOrTick<'a, F> {
+    wake: &'a Wake,
+    tick: F,
+}
+
+impl<F: Future<Output = ()> + Unpin> Future for WaitOrTick<'_, F> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // 先登记 waker 再查标志：`notify` 恰好落在两步之间也会叫醒下一次 poll，不会丢。
+        *self.wake.waker.lock().expect("菜单栏唤醒锁中毒") = Some(cx.waker().clone());
+        if self.wake.pending.swap(false, Ordering::SeqCst) {
+            return Poll::Ready(());
+        }
+        Pin::new(&mut self.tick).poll(cx)
+    }
 }
 
 fn run(command: MenuCommand, cx: &mut App) {
@@ -289,6 +343,7 @@ define_class!(
                     if self.ivars().tx.send(command).is_err() {
                         eprintln!("helmp: 菜单命令无人接收（轮询任务已结束）");
                     }
+                    WAKE.notify();
                 }
                 None => eprintln!("helmp: 菜单项 tag {tag} 没有对应命令"),
             }
@@ -308,6 +363,8 @@ define_class!(
         #[unsafe(method(menuDidClose:))]
         fn menu_did_close(&self, _menu: &NSMenu) {
             self.ivars().open.set(false);
+            // 展开期间攒下的重建（dirty）现在就做，不等下一个 IDLE_TICK。
+            WAKE.notify();
         }
     }
 );
@@ -882,5 +939,41 @@ mod tests {
         assert_eq!((up.origin.x, up.origin.y), (13.0, 11.0));
         let down = dot_frame(bounds, true);
         assert_eq!((down.origin.x, down.origin.y), (13.0, 2.0));
+    }
+
+    /// 记录自己有没有被叫醒的 waker。
+    struct Flag(AtomicBool);
+
+    impl std::task::Wake for Flag {
+        fn wake(self: std::sync::Arc<Self>) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn menu_click_wakes_the_loop_without_waiting_for_the_idle_tick() {
+        // 轮询任务平时每 IDLE_TICK（1 秒）才醒一次，省掉面板收起时每 50 ms 一次的空转；
+        // 前提是点菜单、改配置会立刻叫醒它，否则点「打开 Helmp」要等上最多 1 秒。
+        let wake = Wake::new();
+        let flag = std::sync::Arc::new(Flag(AtomicBool::new(false)));
+        let waker = Waker::from(std::sync::Arc::clone(&flag));
+        let mut cx = Context::from_waker(&waker);
+
+        // tick 永远不到：只能靠 notify 醒来。
+        let mut waiting = wake.wait(std::future::pending::<()>());
+        assert!(Pin::new(&mut waiting).poll(&mut cx).is_pending());
+        wake.notify();
+        assert!(flag.0.load(Ordering::SeqCst), "notify 必须叫醒正在等的任务");
+        assert!(Pin::new(&mut waiting).poll(&mut cx).is_ready());
+
+        // 任务还没开始等时就点了菜单：下一次等待立刻返回，不丢这次点击。
+        wake.notify();
+        let mut next = wake.wait(std::future::pending::<()>());
+        assert!(Pin::new(&mut next).poll(&mut cx).is_ready());
+
+        // 没人 notify 时照常由 tick 叫醒（按时刷新等待会话、查快捷键变化）。
+        let mut idle = wake.wait(std::future::ready(()));
+        assert!(Pin::new(&mut idle).poll(&mut cx).is_ready());
+        assert!(IDLE_TICK <= REFRESH_INTERVAL, "tick 比刷新间隔还长，等待会话的圆点会刷新迟到");
     }
 }
