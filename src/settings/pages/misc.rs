@@ -12,6 +12,11 @@ use crate::settings::widgets;
 use crate::settings::{SettingsView, sync_component_theme};
 use crate::style::{self, Palette};
 
+/// 关于页「联系作者」。
+const AUTHOR_NAME: &str = "Peter Chen";
+const AUTHOR_BLOG: &str = "https://blog.peterchen97.cn";
+const AUTHOR_BLOG_LABEL: &str = "blog.peterchen97.cn";
+
 /// 最近一次「连接」的结果（成功的说明或错误）。
 static MCP_CONNECT_STATUS: std::sync::Mutex<Option<Result<String, String>>> =
     std::sync::Mutex::new(None);
@@ -394,6 +399,15 @@ impl SettingsView {
             ),
         };
         let _ = cx;
+        let author_row = widgets::row(
+            widgets::label_with_help(AUTHOR_NAME, AUTHOR_BLOG_LABEL, pal),
+            widgets::push_button(
+                "open-author-blog",
+                tr("访问博客", "Visit Blog"),
+                false,
+                |_, _, cx| cx.open_url(AUTHOR_BLOG),
+            ),
+        );
 
         div()
             .flex()
@@ -437,6 +451,8 @@ impl SettingsView {
             )
             .child(widgets::group_header(tr("更新", "Updates"), pal))
             .child(widgets::group(update_rows(pal), pal))
+            .child(widgets::group_header(tr("联系作者", "Contact the Author"), pal))
+            .child(widgets::group(vec![author_row.into_any_element()], pal))
             .child(widgets::group(vec![dir_row.into_any_element()], pal))
             .into_any_element()
     }

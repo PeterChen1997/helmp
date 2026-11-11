@@ -6,11 +6,19 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Settings › About has a "Contact the Author" section with the author's name and a link to the blog.
+
 ### Fixed
 
 - Release notes in Settings › About are shown as headings and bullet points instead of raw Markdown (`### Added`, `<kbd>⇧⌘1</kbd>`).
 
 ### 简体中文
+
+#### 新增
+
+- 设置 › 关于新增「联系作者」：作者名字和博客链接。
 
 #### 修复
 
