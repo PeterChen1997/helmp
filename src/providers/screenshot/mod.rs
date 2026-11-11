@@ -1,25 +1,30 @@
 //! 截图 + OCR。
 //!
 //! 命令（空查询不返回；首页「快捷命令」里放「截图识别文字」）：
-//! - `screenshot:clipboard`      区域截图到剪贴板
-//! - `screenshot:save`           区域截图保存到 `config.screenshot.save_dir`（缺省 `<data_dir>/screenshots/`），并在 Finder 中显示
-//! - `screenshot:ocr-screen`     区域截图 → OCR → 文字写剪贴板，详情展示截图与识别结果
+//! - `screenshot:clipboard`      「截图」：冻结屏幕后框选（见 `crate::capture`），回车 / 双击复制，
+//!   工具栏可保存、钉图、识别文字。id 沿用旧的「截图到剪贴板」，最近使用和快捷键都按 id 找它。
+//! - `screenshot:save`           同上，但回车是保存（另存为面板，默认目录 `config.screenshot.save_dir`，
+//!   缺省 `<data_dir>/screenshots/`）
+//! - `screenshot:ocr-screen`     冻结屏幕后框选，松开鼠标立即识别，结果在选区旁的浮窗里显示，文字自动复制
 //! - `screenshot:ocr-clipboard`  剪贴板图片 → OCR → 文字写剪贴板（不需要屏幕录制权限）
 //! - `screenshot:ocr-file:<绝对路径>`  查询 `ocr /绝对路径` 时出现，只展示结果、不写剪贴板
+//!
+//! 截图类命令本身只返回 `Outcome::Capture`，由界面线程打开遮罩（它不改动用户环境，所以不过演练开关；
+//! 复制、保存这些真正的副作用在截图界面里各自过 `effects`）。没有录屏权限时返回「前往授权」详情。
 //!
 //! OCR 语言读 `config.screenshot.ocr_languages`。详情里展示的截图存在 `<data_dir>/ocr/`，只保留最近几张。
 //!
 //! 识别结果（对标 HapiGo 文本识别）：标题「识别到 N 行 · 语言」，保留换行与段落；回车复制全部，
 //! ⌘T 翻译，⌘⇧C 复制为单行，⌘⌥C 去掉换行后复制；图里有二维码时列出内容并给「打开链接」。
-//! 识别为空时明确说「没有识别到文字」。按 Esc 取消截图安静返回；没有录屏权限时给「前往授权」。
+//! 识别为空时明确说「没有识别到文字」。
 
 mod capture;
-mod ocr;
-/// 脚本插件的「复制输出」也用它写剪贴板。
-pub(super) mod pasteboard;
+/// 截图界面（`crate::capture`）的识别结果窗口也用它。
+pub(crate) mod ocr;
+/// 脚本插件的「复制输出」、截图界面的复制也用它写剪贴板。
+pub(crate) mod pasteboard;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use anyhow::{Context as _, Result};
@@ -42,7 +47,7 @@ const OCR_SUGGESTION_SCORE: u32 = 720;
 /// `<data_dir>/ocr/` 里保留的截图张数：详情区要显示最近一次的截图，更早的没用。
 const KEEP_OCR_IMAGES: usize = 10;
 /// 翻译插件的范围 id（翻译插件由另一个模块提供）。
-const TRANSLATE_SCOPE: &str = "translate";
+pub(crate) const TRANSLATE_SCOPE: &str = "translate";
 
 /// 最近一次识别出的文字，供 ⌘K 里的「复制识别结果」「翻译」使用。
 static LAST_TEXT: Mutex<Option<String>> = Mutex::new(None);
@@ -64,37 +69,45 @@ struct Cmd {
     action_title: Text,
     /// OCR 命令带「复制识别结果」「翻译」次级操作。
     ocr: bool,
+    /// 执行就会改动用户环境（如写剪贴板），要过演练开关 `effects::dry`。只打开截图界面的命令不算。
+    effects: bool,
     run: fn() -> Result<Outcome>,
 }
 
 const SCREENSHOT: [&str; 3] = ["截图", "jt", "screenshot"];
 
 const COMMANDS: [Cmd; 4] = [
+    // 主「截图」命令。id 沿用旧的「截图到剪贴板」：最近使用、快捷键、菜单栏都按 id 重新找它，
+    // 回车（复制）也正是旧命令的行为。旧标题仍在关键词里，按旧名字搜也能找到。
     Cmd {
         key: "clipboard",
-        title: ("截图到剪贴板", "Screenshot to Clipboard"),
+        title: ("截图", "Screenshot"),
         subtitle: (
-            "Screenshot to Clipboard",
-            "Select an area and copy the image",
+            "冻结屏幕后框选，可复制、保存、钉在屏幕上",
+            "Freeze the screen, select an area, then copy, save or pin it",
         ),
         keywords: &[
             SCREENSHOT[0],
             SCREENSHOT[1],
             SCREENSHOT[2],
+            "截屏",
             "截图到剪贴板",
             "screenshot to clipboard",
+            "钉图",
+            "pin screenshot",
         ],
         symbol: "square-dashed",
         action_title: ("截图", "Capture"),
         ocr: false,
-        run: screenshot_to_clipboard,
+        effects: false,
+        run: capture_and_copy,
     },
     Cmd {
         key: "save",
         title: ("截图并保存", "Screenshot and Save"),
         subtitle: (
-            "Screenshot and Save",
-            "Select an area, save it, and show it in Finder",
+            "框选后回车保存为 PNG",
+            "Select an area and press Return to save it as PNG",
         ),
         keywords: &[
             SCREENSHOT[0],
@@ -107,14 +120,15 @@ const COMMANDS: [Cmd; 4] = [
         symbol: "image-down",
         action_title: ("截图", "Capture"),
         ocr: false,
-        run: screenshot_and_save,
+        effects: false,
+        run: capture_and_save,
     },
     Cmd {
         key: "ocr-screen",
         title: ("截图识别文字", "Recognize Text in Screenshot"),
         subtitle: (
-            "Screenshot OCR — 识别后复制到剪贴板",
-            "Select an area and copy the recognized text",
+            "Screenshot OCR — 框选后立即识别，文字自动复制",
+            "Select an area to recognize its text and copy it",
         ),
         keywords: &[
             SCREENSHOT[0],
@@ -129,7 +143,8 @@ const COMMANDS: [Cmd; 4] = [
         symbol: "scan-text",
         action_title: ("截图识别", "Capture Text"),
         ocr: true,
-        run: ocr_screen,
+        effects: false,
+        run: capture_and_recognize,
     },
     Cmd {
         key: "ocr-clipboard",
@@ -151,6 +166,7 @@ const COMMANDS: [Cmd; 4] = [
         symbol: "scan-text",
         action_title: ("识别", "Recognize"),
         ocr: true,
+        effects: true,
         run: ocr_clipboard,
     },
 ];
@@ -207,7 +223,8 @@ fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
         action: Action::new({
             let key = cmd.key;
             let run = cmd.run;
-            move || match crate::effects::dry("screenshot", key) {
+            let effects = cmd.effects;
+            move || match effects.then(|| crate::effects::dry("screenshot", key)).flatten() {
                 Some(outcome) => Ok(outcome),
                 None => run(),
             }
@@ -280,7 +297,7 @@ fn ocr_file_item(query: &str) -> Option<Item> {
     })
 }
 
-fn languages() -> Vec<String> {
+pub(crate) fn languages() -> Vec<String> {
     crate::config::get().screenshot.ocr_languages.clone()
 }
 
@@ -290,7 +307,7 @@ fn ocr_dir() -> Result<PathBuf> {
 }
 
 /// 「截图并保存」的目录：配置优先（支持 `~`），缺省 `<data_dir>/screenshots`。
-fn save_dir(configured: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn save_dir(configured: Option<&str>) -> Result<PathBuf> {
     match configured.map(str::trim).filter(|dir| !dir.is_empty()) {
         Some("~") => paths::home_dir(),
         Some(dir) => match dir.strip_prefix("~/") {
@@ -301,75 +318,31 @@ fn save_dir(configured: Option<&str>) -> Result<PathBuf> {
     }
 }
 
-fn screenshot_to_clipboard() -> Result<Outcome> {
-    if !capture::has_screen_access() {
+fn capture_and_copy() -> Result<Outcome> {
+    open_capture(
+        capture::has_screen_access(),
+        crate::capture::Mode::Capture(crate::capture::Primary::Copy),
+    )
+}
+
+fn capture_and_save() -> Result<Outcome> {
+    open_capture(
+        capture::has_screen_access(),
+        crate::capture::Mode::Capture(crate::capture::Primary::Save),
+    )
+}
+
+fn capture_and_recognize() -> Result<Outcome> {
+    open_capture(capture::has_screen_access(), crate::capture::Mode::Ocr)
+}
+
+/// 打开截图界面。没有录屏权限时不能去截（截到的是一片空白或报错），改为展示「前往授权」详情；
+/// 测试夹具（`HELMP_CAPTURE_FIXTURE`）不截屏，不需要权限。
+fn open_capture(has_access: bool, mode: crate::capture::Mode) -> Result<Outcome> {
+    if !has_access && crate::capture::fixture().is_none() {
         return Ok(Outcome::Show(permission_detail()));
     }
-    capture::to_clipboard()?;
-    Ok(Outcome::Done)
-}
-
-fn screenshot_and_save() -> Result<Outcome> {
-    if !capture::has_screen_access() {
-        return Ok(Outcome::Show(permission_detail()));
-    }
-    let dir = save_dir(crate::config::get().screenshot.save_dir.as_deref())?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| trf!("创建 {}", "Couldn't create {}", dir.display()))?;
-    let ts = timestamp();
-    let path = dir.join(trf!("Helmp 截图 {ts}.png", "Helmp Screenshot {ts}.png"));
-    if capture::to_file(&path)? {
-        let status = Command::new("open").arg("-R").arg(&path).status()?;
-        anyhow::ensure!(
-            status.success(),
-            trf!(
-                "在 Finder 中显示 {} 失败：{status}",
-                "Couldn't show {} in Finder: {status}",
-                path.display()
-            )
-        );
-    }
-    Ok(Outcome::Done)
-}
-
-fn ocr_screen() -> Result<Outcome> {
-    let path = match capture_for_ocr(capture::has_screen_access(), &capture::to_file, &ocr_dir()?)? {
-        Captured::Image(path) => path,
-        Captured::NoPermission => return Ok(Outcome::Show(permission_detail())),
-        // 用户按 Esc：安静返回，什么也不弹。
-        Captured::Cancelled => return Ok(Outcome::Done),
-    };
-    let image = std::fs::read(&path)
-        .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
-    let png = ocr::to_png(&image)?;
-    let found = ocr::recognize(&image, &languages())?;
-    let size_label = tr("区域尺寸", "Selection Size");
-    copy_and_show(found, Shown::new(path, &png, size_label), &languages())
-}
-
-/// 为 OCR 截图的结果。
-#[derive(Debug, PartialEq)]
-enum Captured {
-    Image(PathBuf),
-    NoPermission,
-    Cancelled,
-}
-
-/// 截一张图给 OCR 用。没有权限、用户取消都不是错误；只有截图本身失败才报错。
-fn capture_for_ocr(
-    has_access: bool,
-    capture: &dyn Fn(&Path) -> Result<bool>,
-    dir: &Path,
-) -> Result<Captured> {
-    if !has_access {
-        return Ok(Captured::NoPermission);
-    }
-    let path = new_image_path(dir)?;
-    if !capture(&path)? {
-        return Ok(Captured::Cancelled);
-    }
-    prune_images(dir)?;
-    Ok(Captured::Image(path))
+    Ok(Outcome::Capture(mode))
 }
 
 fn ocr_clipboard() -> Result<Outcome> {
@@ -398,7 +371,7 @@ fn ocr_file(path: &Path, dir: &Path, languages: &[String]) -> Result<Outcome> {
 }
 
 /// 没有录屏权限时的详情：说明原因，回车直达「系统设置 › 录屏与系统录音」。
-fn permission_detail() -> Detail {
+pub(crate) fn permission_detail() -> Detail {
     Detail {
         icon: Icon::Symbol {
             name: "shield-alert",
@@ -450,7 +423,8 @@ fn copy_and_show(found: ocr::Recognition, shown: Shown, languages: &[String]) ->
     Ok(Outcome::Show(ocr_detail(&found, &shown, copied, languages)))
 }
 
-fn remember(text: &str) {
+/// 记下最近一次识别结果（⌘K 里的「复制识别结果」「翻译识别结果」用；截图界面的识别结果窗口也调用）。
+pub(crate) fn remember(text: &str) {
     *LAST_TEXT.lock().expect("ocr last text poisoned") = Some(text.to_string());
 }
 
@@ -476,12 +450,12 @@ fn join_smart<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
 }
 
 /// 「复制为单行」：所有行接成一行。
-fn single_line(text: &str) -> String {
+pub(crate) fn single_line(text: &str) -> String {
     join_smart(text.lines())
 }
 
 /// 「去掉换行后复制」：去掉段落内部的换行（截图里被版面折断的句子接回去），段落之间仍然换行。
-fn unwrap_lines(text: &str) -> String {
+pub(crate) fn unwrap_lines(text: &str) -> String {
     text.split("\n\n")
         .map(|paragraph| join_smart(paragraph.lines()))
         .filter(|paragraph| !paragraph.is_empty())
@@ -523,7 +497,7 @@ fn script_label(text: &str) -> Option<&'static str> {
 }
 
 /// 二维码内容里的链接（http / https 及其他 `scheme://` 深链）。
-fn links(codes: &[String]) -> Vec<&str> {
+pub(crate) fn links(codes: &[String]) -> Vec<&str> {
     codes
         .iter()
         .map(|code| code.trim())
@@ -539,6 +513,21 @@ fn links(codes: &[String]) -> Vec<&str> {
         .collect()
 }
 
+/// 识别结果的标题：「识别到 N 行 · 语言」；只有二维码时「识别到二维码」；什么都没有时明确说「没有识别到文字」，
+/// 不让用户对着一片空白猜是没识别到还是卡住了。面板详情和截图界面的识别结果窗口共用。
+pub(crate) fn result_title(found: &ocr::Recognition) -> String {
+    let text = found.text.as_str();
+    let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
+    // 英文按单复数说 line / lines。
+    let unit = if lines == 1 { "line" } else { "lines" };
+    match (lines, script_label(text)) {
+        (0, _) if !found.codes.is_empty() => tr("识别到二维码", "Found a QR code").to_string(),
+        (0, _) => tr("没有识别到文字", "No text found").to_string(),
+        (n, Some(script)) => trf!("识别到 {n} 行 · {script}", "{n} {unit} · {script}"),
+        (n, None) => trf!("识别到 {n} 行", "{n} {unit}"),
+    }
+}
+
 /// 设计稿「截图识别」：标题「识别到 N 行 · 语言」，已复制时带标签；截图在上，可选中的识别结果在下；
 /// 有二维码时列出内容并给「打开链接」；元数据 识别语言 / 尺寸。没识别到时明确说没有，并给「再试一次」。
 fn ocr_detail(
@@ -548,16 +537,8 @@ fn ocr_detail(
     languages: &[String],
 ) -> Detail {
     let text = found.text.as_str();
-    let lines = text.lines().filter(|line| !line.trim().is_empty()).count();
-    // 英文按单复数说 line / lines。
-    let unit = if lines == 1 { "line" } else { "lines" };
     let links = links(&found.codes);
-    let title = match (lines, script_label(text)) {
-        (0, _) if !found.codes.is_empty() => tr("识别到二维码", "Found a QR code").to_string(),
-        (0, _) => tr("没有识别到文字", "No text found").to_string(),
-        (n, Some(script)) => trf!("识别到 {n} 行 · {script}", "{n} {unit} · {script}"),
-        (n, None) => trf!("识别到 {n} 行", "{n} {unit}"),
-    };
+    let title = result_title(found);
     let mut blocks = vec![Block::Image(shown.path.clone())];
     if !text.is_empty() {
         blocks.push(Block::Result {
@@ -663,7 +644,7 @@ fn clip(text: &str) -> String {
 }
 
 /// `zh-Hans, en-US` → `简体中文、英文`（英文界面：`Simplified Chinese, English`）。
-fn language_names(languages: &[String]) -> String {
+pub(crate) fn language_names(languages: &[String]) -> String {
     let defaults: Vec<String> = ocr::DEFAULT_LANGUAGES
         .iter()
         .map(|code| code.to_string())
@@ -756,7 +737,7 @@ fn prune_images(dir: &Path) -> Result<()> {
 }
 
 /// 本地时间 `YYYY-MM-DD HH.MM.SS`（用 NSDateFormatter，避免为一个时间戳引入 chrono）。
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let formatter = NSDateFormatter::new();
     formatter.setLocale(Some(&NSLocale::localeWithLocaleIdentifier(
         &NSString::from_str("en_US_POSIX"),
@@ -1027,21 +1008,39 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_capture_is_quiet() {
-        // 用户按 Esc 取消截图是正常操作：不能弹错误，也不能说没权限。
-        let dir = TempDir::new("cancel");
-        let got = capture_for_ocr(true, &|_| Ok(false), &dir.0).unwrap();
-        assert_eq!(got, Captured::Cancelled);
-        // 截图本身失败（显示器异常等）才是错误。
-        assert!(capture_for_ocr(true, &|_| Err(anyhow::anyhow!("boom")), &dir.0).is_err());
+    fn capture_commands_open_the_frozen_screen_overlay() {
+        // 三个截图命令都打开冻结屏幕的选区界面，回车的默认动作各自保留旧命令的含义：
+        // 「截图」复制（旧的「截图到剪贴板」）、「截图并保存」保存、「截图识别文字」松手即识别。
+        use crate::capture::{Mode, Primary};
+        assert_eq!(
+            open_capture(true, Mode::Capture(Primary::Copy)).unwrap(),
+            Outcome::Capture(Mode::Capture(Primary::Copy))
+        );
+        let ids = [
+            ("screenshot:clipboard", Mode::Capture(Primary::Copy)),
+            ("screenshot:save", Mode::Capture(Primary::Save)),
+            ("screenshot:ocr-screen", Mode::Ocr),
+        ];
+        for (id, mode) in ids {
+            let item = Screenshot.query("截图").into_iter().find(|item| item.id == id).unwrap();
+            // 本机有没有录屏权限不由测试决定：有就直接打开界面，没有就给「前往授权」，两种都不能是别的。
+            match item.action.run().unwrap() {
+                Outcome::Capture(got) => assert_eq!(got, mode, "{id}"),
+                Outcome::Show(detail) => assert_eq!(detail.title, "需要录屏权限", "{id}"),
+                other => panic!("{id} 应打开截图界面：{other:?}"),
+            }
+        }
     }
 
     #[test]
     fn missing_permission_leads_to_system_settings() {
         // 没有录屏权限时不能去截（会截到一片空白或报错），而要给「前往授权」，直达对应的系统设置面板。
-        let dir = TempDir::new("perm");
-        let got = capture_for_ocr(false, &|_| panic!("没权限时不该截图"), &dir.0).unwrap();
-        assert_eq!(got, Captured::NoPermission);
+        if crate::capture::fixture().is_none() {
+            let Outcome::Show(detail) = open_capture(false, crate::capture::Mode::Ocr).unwrap() else {
+                panic!("没权限时应展示「前往授权」");
+            };
+            assert_eq!(detail.title, "需要录屏权限");
+        }
         let detail = permission_detail();
         assert_eq!(detail.title, "需要录屏权限");
         assert_eq!(action_titles(&detail), ["前往授权"]);

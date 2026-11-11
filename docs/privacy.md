@@ -17,7 +17,7 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 | `clipboard.sqlite` | Clipboard history: text, file paths, the name and bundle id of the app you copied from, and the time. No item limit unless you set a retention period | Settings › Clipboard, or delete the file |
 | `clipboard-images/` | Images you copied, named by content hash | Removed with the clipboard history |
 | `screenshots/` | Output of "Capture and save" (you can choose another folder) | Delete the files |
-| `ocr/` | The last few screenshots shown next to OCR results; older ones are deleted automatically | Delete the folder |
+| `ocr/` | The last few images shown next to OCR results in the panel; older ones are deleted automatically | Delete the folder |
 | `scripts/` | Your script commands | Yours to manage |
 | `icon-cache/` | PNG renderings of app and file icons | Safe to delete at any time |
 | `fx.json` | The last ECB exchange rates (date and rate table) used for currency conversion | Safe to delete; downloaded again when online |
@@ -66,6 +66,7 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 - **Other MCP clients' settings.** Only when you click "Import from Claude Code / Codex / Cursor" in Settings › MCP (or run `helmp mcp-client import`): `~/.claude.json` (and `$CLAUDE_CONFIG_DIR/.claude.json`), `$CODEX_HOME/config.toml` or `~/.codex/config.toml`, `~/.cursor/mcp.json`, and the `.mcp.json` / `.cursor/mcp.json` of a project folder you name. Read-only; Helmp only copies the servers you tick.
 - **Keyboard shortcut settings.** While you record a hotkey in Settings, Helmp reads `~/Library/Preferences/com.apple.symbolichotkeys.plist` (read-only) to find system shortcuts that would conflict.
 - **Images for OCR.** Screenshots, clipboard images and files you pass to `ocr` are processed on your Mac with Apple Vision, including QR code and barcode detection.
+- **Frozen screen.** While you select a screenshot, the image of every display is kept in the system temporary folder (`$TMPDIR/helmp-capture-<pid>/`) and deleted when the selection screen closes. Pinned images live only in memory.
 - **Clipboard.** Polled every 300 ms to build the history (see the rules above). Turn the history off in Settings › Clipboard.
 
 ## Network
@@ -90,7 +91,7 @@ Things that may reach the network because *you* asked for them: web search resul
 | Permission | Why |
 |---|---|
 | Accessibility | Simulate <kbd>⌘V</kbd> to paste into the front app; read selected text for Translate (simulating <kbd>⌘C</kbd> when needed) and replace it; press <kbd>⌃⌘Q</kbd> for Lock Screen |
-| Screen Recording | Region screenshots (`screencapture -i`) |
+| Screen Recording | Freezing the screen for screenshots and screenshot OCR (`screencapture -x`) |
 | Automation (iTerm2, Terminal) | Select the tab of an agent session when you jump to it |
 | Automation (System Events, Finder) | System commands: Lock Screen, Toggle Dark Mode, Restart, Shut Down and Log Out go through System Events; Empty Trash goes through Finder |
 

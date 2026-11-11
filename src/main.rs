@@ -4,6 +4,7 @@
 //! `helmp query <text>`      无头查询，见 `cli.rs`
 //! `HELMP_SELF_TEST=1 helmp`  图形界面自检：程序化 show → 查询 → hide 后退出
 
+mod capture;
 mod cli;
 mod config;
 mod deeplink;
@@ -134,6 +135,9 @@ fn run_gui(engine: Engine) {
 /// - `HELMP_SELF_TEST_AGENT_CONFIRM`：可选，`<查询>|<结果 id>`，弹出 agent 请求执行的确认页。
 /// - `HELMP_SELF_TEST_SETTINGS`：可选，在屏幕外打开设置窗口的某一页（页面名中英文都行），
 ///   之后的按键、`click:` / `scroll:` 和 `snap:` 都作用于设置窗口。
+/// - 截图界面（快捷键 `screenshot` / `screenshot-capture` 或 `HELMP_SELF_TEST_KEYS` 里的操作打开）开着时，
+///   按键和鼠标送给它（遮罩 → 识别结果 → 最新的钉图），每步之后多打印一段 `capture=…` 状态。
+///   配合 `HELMP_CAPTURE_FIXTURE=<png>` 用一张图代替真实截屏（见 src/capture/freeze.rs）。
 fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, queries: String) {
     use std::time::{Duration, Instant};
 
@@ -209,10 +213,11 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     cx.update(|cx| hotkey::execute(command, cx));
                     cx.background_executor().timer(settle).await;
                     let launcher = launcher.clone();
+                    let state = cx.update(capture::debug_state);
                     window
                         .update(cx, move |_, window, cx| {
                             println!(
-                                "self-test hotkey {provider}: {}",
+                                "self-test hotkey {provider}: {} capture={state}",
                                 launcher.read(cx).debug_state(window, cx)
                             );
                         })
@@ -262,7 +267,7 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 None => println!("self-test 没有这个设置页：{name}"),
             }
         }
-        let on_settings = target != window;
+        let settings_target = target;
 
         // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入，
         // `wait:<秒>` 干等，`snap:<名字>` 截图（需 `--features readme-shots`，见 docs/images/README.md）。
@@ -270,29 +275,45 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         if let Ok(keys) = std::env::var("HELMP_SELF_TEST_KEYS") {
             let tokens: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
             for (ix, token) in tokens.iter().enumerate() {
+                // 截图界面开着时，输入都给它（遮罩、识别结果或钉图）。
+                let target = cx
+                    .update(capture::self_test_target)
+                    .unwrap_or(settings_target);
+                let on_other_window = target != window;
                 // `wait:<秒>`：干等，留给慢操作（如图片 OCR）跑完。
                 if let Some(secs) = token.strip_prefix("wait:").and_then(|s| s.parse().ok()) {
                     cx.background_executor().timer(Duration::from_secs(secs)).await;
+                    // 截图界面开着时报告等完之后的状态（识别结果就是这时出来的）。
+                    if on_other_window && cx.update(capture::self_test_target).is_some() {
+                        let state = cx.update(capture::debug_state);
+                        println!("self-test key {token}: capture={state}");
+                    }
                     continue;
                 }
                 // `click:<x>,<y>` 在窗口坐标处单击；`scroll:<x>,<y>,<dy>` 在那里滚动（dy 为负 = 往下翻）。
                 let numbers = |rest: &str| -> Vec<f32> {
                     rest.split(',').filter_map(|n| n.trim().parse().ok()).collect()
                 };
-                let pointer = if let Some(rest) = token.strip_prefix("click:") {
+                // `dclick:<x>,<y>` 双击，`rclick:<x>,<y>` 右键单击，`drag:<x1>,<y1>,<x2>,<y2>` 按住左键拖动（截图框选）。
+                let click = [("click:", MouseButton::Left, 1), ("dclick:", MouseButton::Left, 2), ("rclick:", MouseButton::Right, 1)]
+                    .into_iter()
+                    .find_map(|(prefix, button, count)| {
+                        token.strip_prefix(prefix).map(|rest| (rest, button, count))
+                    });
+                let pointer = if let Some((rest, button, click_count)) = click {
                     match numbers(rest)[..] {
                         [x, y] => {
                             let position = point(px(x), px(y));
                             let down = MouseDownEvent {
-                                button: MouseButton::Left,
+                                button,
                                 position,
-                                click_count: 1,
+                                click_count,
                                 ..Default::default()
                             };
                             let up = MouseUpEvent {
-                                button: MouseButton::Left,
+                                button,
                                 position,
-                                click_count: 1,
+                                click_count,
                                 ..Default::default()
                             };
                             // 先把鼠标挪过去：悬停状态按上一帧的鼠标位置算，有的控件只认悬停中的点击。
@@ -305,6 +326,37 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                                 PlatformInput::MouseMove(hover),
                                 PlatformInput::MouseDown(down),
                                 PlatformInput::MouseUp(up),
+                            ])
+                        }
+                        _ => None,
+                    }
+                } else if let Some(rest) = token.strip_prefix("drag:") {
+                    match numbers(rest)[..] {
+                        [x1, y1, x2, y2] => {
+                            let from = point(px(x1), px(y1));
+                            let to = point(px(x2), px(y2));
+                            let moved = |position| {
+                                PlatformInput::MouseMove(MouseMoveEvent {
+                                    position,
+                                    pressed_button: Some(MouseButton::Left),
+                                    modifiers: Modifiers::default(),
+                                })
+                            };
+                            Some(vec![
+                                PlatformInput::MouseDown(MouseDownEvent {
+                                    button: MouseButton::Left,
+                                    position: from,
+                                    click_count: 1,
+                                    ..Default::default()
+                                }),
+                                moved(point(px((x1 + x2) / 2.), px((y1 + y2) / 2.))),
+                                moved(to),
+                                PlatformInput::MouseUp(MouseUpEvent {
+                                    button: MouseButton::Left,
+                                    position: to,
+                                    click_count: 1,
+                                    ..Default::default()
+                                }),
                             ])
                         }
                         _ => None,
@@ -325,15 +377,23 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     for event in events {
                         // 屏幕外的窗口系统不驱动重绘：每个事件后手动画一帧，按下 / 抬起之间的
                         // 状态（开关等控件靠它判断一次完整的点击）才会更新。
-                        target
+                        // 点击可能关掉这个窗口（截图工具栏的「复制」），之后的事件就不用再送了。
+                        let alive = target
                             .update(cx, |_, window, cx| {
                                 window.dispatch_event(event, cx);
                                 window.draw(cx).clear(cx);
                             })
-                            .expect("self-test window gone");
+                            .is_ok();
                         cx.background_executor().timer(Duration::from_millis(80)).await;
+                        if !alive {
+                            break;
+                        }
                     }
                     cx.background_executor().timer(Duration::from_millis(500)).await;
+                    if on_other_window {
+                        let state = cx.update(capture::debug_state);
+                        println!("self-test key {token}: capture={state}");
+                    }
                     continue;
                 }
                 // `snap:<名字>`：把面板此刻的画面存成 `$HELMP_SNAPSHOT_DIR/<名字>.png`（README 配图）。
@@ -390,13 +450,14 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                             .expect("launcher window gone");
                         cx.background_executor().timer(Duration::from_millis(30)).await;
                     }
-                } else if on_settings {
+                } else if on_other_window {
                     match gpui_kit::Keystroke::parse(Box::leak(token.clone().into_boxed_str())) {
-                        Ok(stroke) => target
-                            .update(cx, move |_, window, cx| {
+                        // 窗口可能在这一步里被关掉（截图界面按 Esc），关掉了也不算错。
+                        Ok(stroke) => {
+                            let _ = target.update(cx, move |_, window, cx| {
                                 window.dispatch_keystroke(stroke, cx);
-                            })
-                            .expect("settings window gone"),
+                            });
+                        }
                         Err(err) => println!("self-test 不认识的按键 {token:?}：{err}"),
                     }
                 } else {
@@ -419,9 +480,13 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 cx.background_executor().timer(wait).await;
                 let launcher = launcher.clone();
                 let token = token.clone();
+                let state = cx.update(capture::debug_state);
                 window
                     .update(cx, move |_, window, cx| {
-                        println!("self-test key {token}: {}", launcher.read(cx).debug_state(window, cx));
+                        println!(
+                            "self-test key {token}: {} capture={state}",
+                            launcher.read(cx).debug_state(window, cx)
+                        );
                     })
                     .expect("launcher window gone");
             }

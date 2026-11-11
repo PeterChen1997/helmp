@@ -1,8 +1,9 @@
 //! 全局快捷键：`global-hotkey`（Carbon `RegisterEventHotKey`，免辅助功能权限）。
 //!
 //! - 唤起面板：`config.general.hotkey`（默认 ⌥Space）。
-//! - 范围快捷键：`config.extensions[<provider id>].hotkey`，未配置用 [`EXTENSION_SHORTCUTS`] 的默认值，
-//!   配置成空字符串表示不绑定；扩展被停用时也不绑定。
+//! - 范围快捷键：`config.extensions[<slot>].hotkey`，未配置用 [`EXTENSION_SHORTCUTS`] 的默认值，
+//!   配置成空字符串表示不绑定；扩展被停用时也不绑定。`slot` 一般就是插件 id；一个插件有第二条快捷键时
+//!   另起一个名字（截图：`screenshot` 是「截图识别文字」，`screenshot-capture` 是「截图」）。
 //! - 配置变化（设置窗口改快捷键）时增量重新注册：新组合注册失败就保留旧的，
 //!   原因记成 [`Issue`]，设置窗口在对应行显示（同时写 stderr）。
 //! - 录制前的冲突判定（Helmp 自己的命令 / 系统快捷键 / 保留组合 / 其他 App）见 [`conflict`]。
@@ -52,23 +53,40 @@ pub enum Command {
 /// 设计稿上翻译是 ⌘⇧T、Agent 是 ⌥A：前者会抢浏览器「重新打开标签页」，后者会抢输入字符 å，
 /// 所以默认改成 ⌥⇧T 和 ⌃⌥A。
 pub struct ExtensionShortcut {
+    /// 所属插件：插件停用时这条快捷键也不注册。
     pub provider: &'static str,
+    /// 配置里存这条快捷键的键（`config.extensions[slot].hotkey`），也是设置、自检里认它的名字。
+    pub slot: &'static str,
     pub label: &'static str,
     pub label_en: &'static str,
     pub default: &'static str,
     pub command: Command,
 }
 
-pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
+pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 5] = [
     ExtensionShortcut {
         provider: "clipboard",
+        slot: "clipboard",
         label: "剪贴板历史",
         label_en: "Clipboard History",
         default: "cmd-shift-v",
         command: Command::Scope("clipboard"),
     },
+    // 「截图」：冻结屏幕后框选。⇧⌘1 不和系统的 ⇧⌘3 / 4 / 5 截图冲突，与「截图识别文字」⇧⌘2 挨着好记。
     ExtensionShortcut {
         provider: "screenshot",
+        slot: "screenshot-capture",
+        label: "截图",
+        label_en: "Screenshot",
+        default: "cmd-shift-1",
+        command: Command::RunItem {
+            id: "screenshot:clipboard",
+            query: "截图",
+        },
+    },
+    ExtensionShortcut {
+        provider: "screenshot",
+        slot: "screenshot",
         label: "截图识别文字",
         label_en: "Recognize Text in Screenshot",
         default: "cmd-shift-2",
@@ -79,6 +97,7 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
     },
     ExtensionShortcut {
         provider: "translate",
+        slot: "translate",
         label: "翻译选中文字",
         label_en: "Translate Selection",
         default: "alt-shift-t",
@@ -86,6 +105,7 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 4] = [
     },
     ExtensionShortcut {
         provider: "agents",
+        slot: "agents",
         label: "Agent 会话",
         label_en: "Agent Sessions",
         default: "ctrl-alt-a",
@@ -320,7 +340,7 @@ pub fn assigned(config: &Config) -> Vec<Wanted> {
         spec: Some(config.general.hotkey.clone()),
     }];
     for shortcut in &EXTENSION_SHORTCUTS {
-        let ext = config.extensions.get(shortcut.provider);
+        let ext = config.extensions.get(shortcut.slot);
         let spec = match ext.and_then(|ext| ext.hotkey.as_deref()) {
             // 用户清除了快捷键（写成空字符串）：不绑定。
             Some(spec) if spec.trim().is_empty() => None,
@@ -373,11 +393,11 @@ pub fn default_spec(command: Command) -> Option<&'static str> {
     }
 }
 
-/// 某个扩展的快捷键命令（扩展表格里哪些行能录快捷键）。
-pub fn extension_command(provider: &str) -> Option<Command> {
+/// 某个快捷键位的命令（扩展表格里哪些行能录快捷键；插件 id 就是它的主快捷键位）。
+pub fn extension_command(slot: &str) -> Option<Command> {
     EXTENSION_SHORTCUTS
         .iter()
-        .find(|shortcut| shortcut.provider == provider)
+        .find(|shortcut| shortcut.slot == slot)
         .map(|shortcut| shortcut.command)
 }
 
@@ -968,6 +988,7 @@ mod tests {
             [
                 "alt-space",
                 "cmd-shift-v",
+                "cmd-shift-1",
                 "cmd-shift-2",
                 "alt-shift-t",
                 "ctrl-alt-a"
@@ -1299,6 +1320,50 @@ mod tests {
         assert_eq!(hint_in(Some(&registry), Command::Scope("clipboard")), None);
         // 热键还没注册（命令行模式、单测）时什么都不显示。
         assert_eq!(hint_in(None, Command::Toggle), None);
+    }
+
+    #[test]
+    fn screenshot_has_its_own_configurable_shortcut() {
+        // 「截图」和「截图识别文字」是同一个插件的两条快捷键：各自存、各自清，互不影响；
+        // 插件停用时两条都不注册。
+        let capture = extension_command("screenshot-capture").unwrap();
+        let ocr = extension_command("screenshot").unwrap();
+        assert_eq!(
+            capture,
+            Command::RunItem {
+                id: "screenshot:clipboard",
+                query: "截图"
+            }
+        );
+        assert_ne!(capture, ocr);
+        assert_eq!(default_spec(capture), Some("cmd-shift-1"));
+        let config = Config::default();
+        assert_eq!(assigned_spec(&config, capture).as_deref(), Some("cmd-shift-1"));
+        assert_eq!(assigned_spec(&config, ocr).as_deref(), Some("cmd-shift-2"));
+
+        let mut config = Config::default();
+        config.extensions.insert(
+            "screenshot-capture".into(),
+            ExtensionConfig {
+                hotkey: Some("ctrl-alt-s".into()),
+                ..ExtensionConfig::default()
+            },
+        );
+        assert_eq!(assigned_spec(&config, capture).as_deref(), Some("ctrl-alt-s"));
+        assert_eq!(assigned_spec(&config, ocr).as_deref(), Some("cmd-shift-2"));
+
+        config.extensions.insert(
+            "screenshot".into(),
+            ExtensionConfig {
+                enabled: false,
+                ..ExtensionConfig::default()
+            },
+        );
+        let wanted = wanted(&config);
+        for command in [capture, ocr] {
+            let spec = &wanted.iter().find(|w| w.command == command).unwrap().spec;
+            assert_eq!(spec, &None, "{command:?}");
+        }
     }
 
     #[test]

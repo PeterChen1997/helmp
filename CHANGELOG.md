@@ -6,6 +6,26 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Snipaste-style screenshots. "Screenshot" (<kbd>⇧⌘1</kbd>, also in the menu bar) freezes every display first, then you select on the still image: drag in any direction, or click to pick the window under the mouse. The selection stays put; drag its handles to resize it or drag inside to move it. A toolbar at its bottom-right offers Save, Copy, Pin, Recognize Text and Close. <kbd>↵</kbd> or a double-click inside copies, <kbd>⌘C</kbd> copies, <kbd>⌘S</kbd> saves (a save dialog opening in the screenshot folder from Settings), <kbd>Esc</kbd> quits, and a right-click clears the selection (a second one quits). Copy and Save confirm with a short "Copied" / "Saved" notice. Images keep the display's full pixel resolution and color profile. "Pin" turns the selection into an always-on-top floating image at the same spot: drag it anywhere, hover it for Copy / Save / Recognize Text / Close, press <kbd>Esc</kbd> or double-click to close it; pin as many as you like. Change the shortcut in Settings › Screenshot. The old "Screenshot to Clipboard" and "Screenshot and Save" commands open the same screen (Return saves in the latter), so recent items and shortcuts that point at them keep working.
+- "Recognize Text in Screenshot" (<kbd>⇧⌘2</kbd>) uses the same frozen screen and recognizes the moment you release the mouse. The text appears in a floating window next to the selection ("Recognizing…" first), titled like "2 lines · English", with Copy (<kbd>↵</kbd>), Translate (<kbd>⌘T</kbd>), Open Link for QR codes (<kbd>⌘O</kbd>) and Close (<kbd>Esc</kbd>). Non-empty text is still copied automatically, and the window says so; when nothing is found it says that too.
+
+### Fixed
+
+- Results shown after an action that ran with the panel hidden (a missing-permission notice, an error) no longer vanish right away. When another process hands focus back a moment after the panel reappears, the panel now takes focus back instead of hiding. This is why "Screenshot" and "Recognize Text in Screenshot" seemed to do nothing.
+
+### 简体中文
+
+#### 新增
+
+- Snipaste 式截图。「截图」（<kbd>⇧⌘1</kbd>，菜单栏里也有）先冻结所有屏幕，再在静止的画面上框选：往任意方向拖，或者单击选中鼠标下的窗口。松手后选区留在原地，拖控制点改大小，在里面拖动可以平移；选区右下角外侧是工具栏「保存、复制、钉图、识别文字、关闭」。<kbd>↵</kbd> 或在选区里双击复制，<kbd>⌘C</kbd> 复制，<kbd>⌘S</kbd> 保存（另存为面板，默认在设置里的截图目录），<kbd>Esc</kbd> 退出，右键取消选区（再按一次退出）。复制、保存后有「已复制」「已保存」提示。图片保持屏幕的原始像素分辨率和色彩配置。「钉图」把选区原地变成一张置顶的浮动图片：可以拖到任意位置，鼠标移上去出现复制 / 保存 / 识别文字 / 关闭，按 <kbd>Esc</kbd> 或双击关闭，可以钉很多张。快捷键在「设置 › 截图」里改。原来的「截图到剪贴板」「截图并保存」命令打开同一个界面（后者回车是保存），指向它们的最近使用和快捷键照常可用。
+- 「截图识别文字」（<kbd>⇧⌘2</kbd>）用同样的冻结画面，松开鼠标立即识别。结果显示在选区旁边的浮窗里（先显示「识别中…」），标题如「识别到 2 行 · 中文」，可以复制（<kbd>↵</kbd>）、翻译（<kbd>⌘T</kbd>）、打开二维码链接（<kbd>⌘O</kbd>）、关闭（<kbd>Esc</kbd>）。非空的文字仍会自动复制，窗口里写明；什么都没识别到时也明确说出来。
+
+#### 修复
+
+- 面板收起期间执行的动作，结果（没有权限的提示、出错说明）弹出后不再一闪而过。面板重新出现后，别的进程才把焦点还回来时，面板会把焦点要回来，而不是收起。「截图」「截图识别文字」看起来没反应就是这个原因。
+
 ## [0.4.0] - 2026-11-10
 
 ### Added

@@ -51,6 +51,12 @@ const OCR: Command = Command::RunItem {
     query: "截图识别文字",
 };
 
+/// 截图（冻结屏幕后框选）：与快捷键共用同一条命令。
+const CAPTURE: Command = Command::RunItem {
+    id: "screenshot:clipboard",
+    query: "截图",
+};
+
 /// 菜单项被点击后要做的事。
 #[derive(Clone)]
 enum MenuCommand {
@@ -496,7 +502,7 @@ impl MenuBar {
         );
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
 
-        let entries: [(&str, &str, MenuCommand, Command); 4] = [
+        let entries: [(&str, &str, MenuCommand, Command); 5] = [
             (
                 tr("打开 Helmp", "Open Helmp"),
                 "magnifyingglass",
@@ -508,6 +514,12 @@ impl MenuBar {
                 "list.clipboard",
                 MenuCommand::Scope("clipboard"),
                 Command::Scope("clipboard"),
+            ),
+            (
+                tr("截图", "Screenshot"),
+                "camera.viewfinder",
+                MenuCommand::Run(CAPTURE),
+                CAPTURE,
             ),
             (
                 tr("截图识别文字", "Recognize Text in Screenshot"),

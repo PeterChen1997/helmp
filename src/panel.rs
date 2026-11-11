@@ -223,20 +223,59 @@ pub fn make_activating(window: &Window) {
 
 /// 唤起前的前台 App（不是 Helmp 自己时）的 pid：收起时把焦点还给它。
 static PREVIOUS_APP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// 面板最近一次收起时把焦点还给了谁。截图等命令从面板里执行时，面板先收起、再开截图界面，
+/// 截图界面关闭时要把焦点还给同一个 App（见 [`app_to_return_to`]）。
+static LAST_RETURNED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-fn remember_previous_app() {
+/// 此刻的前台 App（不是 Helmp 自己时）的 pid，否则 0。
+fn frontmost_other_app() -> i32 {
     let me = std::process::id();
-    let pid = objc2_app_kit::NSWorkspace::sharedWorkspace()
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
         .frontmostApplication()
         .map(|app| app.processIdentifier())
         .filter(|pid| u32::try_from(*pid).ok() != Some(me))
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// 下一次唤起面板时，前台若是 Helmp 自己（从识别结果窗口点「翻译」），就当作是从这个 App 唤起的。
+static HANDED_OVER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+fn remember_previous_app() {
+    let handed_over = HANDED_OVER.swap(0, Ordering::Relaxed);
+    let pid = match frontmost_other_app() {
+        0 => handed_over,
+        pid => pid,
+    };
     PREVIOUS_APP.store(pid, Ordering::Relaxed);
 }
 
-/// 收起面板后把焦点还给唤起前的 App：还有别的 Helmp 窗口（设置、欢迎页）开着时只激活那个 App，
-/// 否则隐藏 Helmp（系统会把前台还给上一个 App，和 Alfred 的做法一样）。
+/// Helmp 自己的窗口（识别结果）要接着唤起面板：面板收起时把焦点还给 `pid`（截图前的 App），
+/// 而不是留在 Helmp。
+pub fn hand_over_previous_app(pid: i32) {
+    HANDED_OVER.store(pid, Ordering::Relaxed);
+}
+
+/// 不经面板、自己抢焦点的界面（截图遮罩、识别结果窗口）打开前调用：关闭时该把焦点还给谁。
+/// 此刻前台是别的 App 就是它；是 Helmp 自己（命令是在面板里执行的，面板刚收起、前台还没换过来），
+/// 就是面板收起时还回去的那个 App。0 表示留在 Helmp。
+pub fn app_to_return_to() -> i32 {
+    match frontmost_other_app() {
+        0 => LAST_RETURNED.load(Ordering::Relaxed),
+        pid => pid,
+    }
+}
+
+/// 收起面板后把焦点还给唤起前的 App，见 [`return_focus`]。
 fn restore_previous_app(panel: &NSWindow) {
+    let pid = PREVIOUS_APP.swap(0, Ordering::Relaxed);
+    LAST_RETURNED.store(pid, Ordering::Relaxed);
+    return_focus(pid, Some(panel));
+}
+
+/// 关掉一个 Helmp 窗口后把焦点还给 `pid`：还有别的 Helmp 窗口（设置、欢迎页）开着时只激活那个 App，
+/// 否则隐藏 Helmp（系统会把前台还给上一个 App，和 Alfred 的做法一样）。`closing` 是正在关的窗口，不算「别的」；
+/// 非激活面板（钉图、提示）也不算，它们设了 `canHide = false`，隐藏 Helmp 时照样留在屏幕上。
+pub fn return_focus(pid: i32, closing: Option<&NSWindow>) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
@@ -244,13 +283,12 @@ fn restore_previous_app(panel: &NSWindow) {
     if !app.isActive() {
         return;
     }
-    let pid = PREVIOUS_APP.swap(0, Ordering::Relaxed);
     if pid == 0 {
         // 从 Helmp 自己的窗口（如设置）里唤起的：留在 Helmp。
         return;
     }
     let other_windows = app.windows().iter().any(|window| {
-        !std::ptr::eq(&*window, panel)
+        !closing.is_some_and(|closing| std::ptr::eq(&*window, closing))
             && window.isVisible()
             && !window.styleMask().contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel)
     });

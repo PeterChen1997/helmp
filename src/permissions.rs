@@ -53,15 +53,20 @@ fn can_read_other_window_titles() -> bool {
     })
 }
 
-fn object_for(dict: &AnyObject, key: &str) -> Option<Retained<AnyObject>> {
+/// NSDictionary（或与之免费桥接的 CFDictionary）里 `key` 对应的对象。截图界面读窗口列表和屏幕编号也用它。
+pub(crate) fn object_for(dict: &AnyObject, key: &str) -> Option<Retained<AnyObject>> {
     let key = NSString::from_str(key);
     // SAFETY: `dict` 是 CGWindowList 返回的 NSDictionary；objectForKey: 返回对象或 nil。
     unsafe { msg_send![dict, objectForKey: &*key] }
 }
 
 fn number(dict: &AnyObject, key: &str) -> Option<f64> {
-    let value = object_for(dict, key)?;
+    double(&*object_for(dict, key)?)
+}
+
+/// NSNumber 等响应 `doubleValue` 的对象的数值；不响应时为 None。
+pub(crate) fn double(value: &AnyObject) -> Option<f64> {
     // SAFETY: 先确认响应 doubleValue 再调用。
-    let responds: bool = unsafe { msg_send![&*value, respondsToSelector: objc2::sel!(doubleValue)] };
-    responds.then(|| unsafe { msg_send![&*value, doubleValue] })
+    let responds: bool = unsafe { msg_send![value, respondsToSelector: objc2::sel!(doubleValue)] };
+    responds.then(|| unsafe { msg_send![value, doubleValue] })
 }

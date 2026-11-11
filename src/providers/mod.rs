@@ -14,7 +14,7 @@ pub mod mcp;
 mod color;
 mod devtools;
 mod emoji;
-mod screenshot;
+pub(crate) mod screenshot;
 mod scripts;
 mod settings_panes;
 pub mod snippets;

@@ -211,6 +211,8 @@ pub struct SettingsView {
     search: Entity<InputState>,
     search_query: String,
     hotkey: Entity<HotkeyRecorder>,
+    /// 截图页「截图」的快捷键（「截图识别文字」的在扩展表格的截图一行里）。
+    capture_hotkey: Option<Entity<HotkeyRecorder>>,
     extensions: Vec<ExtensionRow>,
     models: AnyView,
     snippets: AnyView,
@@ -308,6 +310,8 @@ impl SettingsView {
         ];
 
         let extensions = Self::extension_rows(window, cx, &mut subscriptions);
+        let capture_hotkey =
+            Self::shortcut_recorder("screenshot-capture", window, cx, &mut subscriptions);
         let web_engine_name =
             cx.new(|cx| InputState::new(window, cx).placeholder(web_engine_name_placeholder()));
         let web_engine_url = cx.new(|cx| {
@@ -347,6 +351,7 @@ impl SettingsView {
             search,
             search_query: String::new(),
             hotkey,
+            capture_hotkey,
             extensions,
             models,
             snippets,
@@ -446,37 +451,7 @@ impl SettingsView {
                     }
                 },
             ));
-            let hotkey = crate::hotkey::extension_command(id).map(|command| {
-                let recorder = cx.new(|cx| {
-                    HotkeyRecorder::new(
-                        command,
-                        move || crate::hotkey::assigned_spec(&config::get(), command),
-                        true,
-                        true,
-                        window,
-                        cx,
-                    )
-                });
-                subscriptions.push(cx.subscribe(
-                    &recorder,
-                    move |this, _, event: &HotkeyEvent, cx| match event {
-                        HotkeyEvent::Changed(Some(hotkey)) => {
-                            let hotkey = hotkey.clone();
-                            this.save(cx, move |config| {
-                                model::set_extension_hotkey(config, id, Some(hotkey))
-                            });
-                        }
-                        HotkeyEvent::Changed(None) => {
-                            this.save(cx, |config| model::clear_extension_hotkey(config, id))
-                        }
-                        HotkeyEvent::Reset => {
-                            this.save(cx, |config| model::reset_extension_hotkey(config, id))
-                        }
-                    },
-                ));
-                subscriptions.push(cx.observe(&recorder, |_, _, cx| cx.notify()));
-                recorder
-            });
+            let hotkey = Self::shortcut_recorder(id, window, cx, subscriptions);
             rows.push(ExtensionRow {
                 id,
                 default_alias,
@@ -485,6 +460,46 @@ impl SettingsView {
             });
         }
         rows
+    }
+
+    /// 某个快捷键位（`hotkey::EXTENSION_SHORTCUTS` 的 slot，一般就是插件 id）的录制框，改动写回
+    /// `config.extensions[slot].hotkey`。这个键位没有快捷键命令时为 None。
+    fn shortcut_recorder(
+        slot: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> Option<Entity<HotkeyRecorder>> {
+        let command = crate::hotkey::extension_command(slot)?;
+        let recorder = cx.new(|cx| {
+            HotkeyRecorder::new(
+                command,
+                move || crate::hotkey::assigned_spec(&config::get(), command),
+                true,
+                true,
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe(
+            &recorder,
+            move |this, _, event: &HotkeyEvent, cx| match event {
+                HotkeyEvent::Changed(Some(hotkey)) => {
+                    let hotkey = hotkey.clone();
+                    this.save(cx, move |config| {
+                        model::set_extension_hotkey(config, slot, Some(hotkey))
+                    });
+                }
+                HotkeyEvent::Changed(None) => {
+                    this.save(cx, |config| model::clear_extension_hotkey(config, slot))
+                }
+                HotkeyEvent::Reset => {
+                    this.save(cx, |config| model::reset_extension_hotkey(config, slot))
+                }
+            },
+        ));
+        subscriptions.push(cx.observe(&recorder, |_, _, cx| cx.notify()));
+        Some(recorder)
     }
 
     /// 全局快捷键在后台重新注册（改配置后 ≤50ms、或别的 App 抢占后），结果不经过本窗口：
