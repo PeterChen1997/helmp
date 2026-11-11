@@ -141,7 +141,7 @@ impl Engine {
                 .filter(|provider| provider.scope().is_some_and(|s| s.id == scope))
                 .flat_map(|provider| provider.query_scoped(query, filter))
                 .collect();
-            group(items)
+            group_ranked(items, &[], scope == crate::providers::agents::SCOPE_ID)
         })
     }
 
@@ -329,7 +329,11 @@ fn group(items: Vec<Item>) -> Vec<Item> {
 /// 同 [`group`]，但分数相同的结果里，最近用过的排前（`recent` 新的在前）。
 /// 只在同一档内调整：字面前缀永远压过拼音模糊之类的档位规则不变，
 /// 但打 `term` 时常用的「终端」会排在没用过的 Termius 前面。
-fn group_preferring(mut items: Vec<Item>, recent: &[String]) -> Vec<Item> {
+fn group_preferring(items: Vec<Item>, recent: &[String]) -> Vec<Item> {
+    group_ranked(items, recent, false)
+}
+
+fn group_ranked(mut items: Vec<Item>, recent: &[String], demote_read: bool) -> Vec<Item> {
     let used = |item: &Item| {
         recent
             .iter()
@@ -348,8 +352,17 @@ fn group_preferring(mut items: Vec<Item>, recent: &[String]) -> Vec<Item> {
             order.push(item.badge.clone());
         }
     }
-    // 稳定排序：组内保持上面的分数顺序。
-    items.sort_by_key(|item| order.iter().position(|badge| badge == &item.badge));
+    // 稳定排序：Agent 范围里已读的完成项放到同组末尾，其余仍保持上面的分数顺序。
+    items.sort_by_key(|item| {
+        (
+            order.iter().position(|badge| badge == &item.badge),
+            demote_read
+                && item
+                    .completion
+                    .as_ref()
+                    .is_some_and(|completion| !completion.unread),
+        )
+    });
     items.truncate(MAX_RESULTS);
     items
 }

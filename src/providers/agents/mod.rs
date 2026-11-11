@@ -7,6 +7,7 @@ mod claude;
 mod codex;
 mod jump;
 mod process;
+mod seen;
 mod state;
 
 use std::collections::HashSet;
@@ -22,7 +23,7 @@ use crate::engine::waiting_section;
 use crate::i18n::tr;
 use crate::paths;
 use crate::provider::{
-    Accessory, Action, Block, Detail, Icon, Item, NamedAction, Provider, Scope, Tint,
+    Accessory, Action, Block, Completion, Detail, Icon, Item, NamedAction, Provider, Scope, Tint,
 };
 
 use self::state::{Session, Source};
@@ -50,7 +51,8 @@ fn should_scan(idle_ticks: u32, panel_visible: bool) -> bool {
 fn global_section() -> &'static str {
     tr("Agent 会话", "Agent Sessions")
 }
-const SCOPE_ID: &str = "agents";
+pub(crate) const SCOPE_ID: &str = "agents";
+pub(crate) use seen::mark_read;
 
 /// 一轮扫描里遇到的问题。每条只在首次出现时打印到 stderr，避免每秒刷屏。
 type Warnings = Vec<String>;
@@ -123,6 +125,7 @@ impl Provider for Agents {
     }
 
     fn start(&self) -> Result<()> {
+        seen::init();
         let home = paths::home_dir()?;
         let mut poller = Poller {
             claude: claude::ClaudeScanner::new(&home),
@@ -203,8 +206,13 @@ impl Agents {
             Source::Codex => self.codex_icon.clone(),
         };
         let (tag, tone) = session.status.tag();
+        let id = format!("agents:{}", session.domain_id());
+        let completion = session.completion_revision().map(|revision| Completion {
+            unread: !seen::is_read(&id, &revision),
+            revision,
+        });
         Item {
-            id: format!("agents:{}", session.domain_id()),
+            id,
             title: session.title.clone(),
             subtitle: session.subtitle(home, now),
             badge: badge.into(),
@@ -214,6 +222,7 @@ impl Agents {
             accessories: vec![Accessory::Tag { text: tag, tone }],
             actions: actions(session),
             detail: Some(detail(session, icon.clone(), home, now)),
+            completion,
             icon,
             ..Item::blank()
         }
@@ -266,9 +275,15 @@ fn detail(session: &Session, icon: Icon, home: Option<&Path>, now: u64) -> Detai
         blocks: session
             .last_message
             .iter()
-            .map(|text| Block::Quote {
-                label: tr("最后一条消息", "Last Message").into(),
-                text: text.clone(),
+            .map(|text| {
+                let label = tr("最后一条消息", "Last Message").into();
+                let text = text.clone();
+                if session.status.needs_you() {
+                    // 等待确认的命令或工具参数应逐字显示，不能当成 Markdown。
+                    Block::Quote { label, text }
+                } else {
+                    Block::Markdown { label, text }
+                }
             })
             .collect(),
         metadata,
@@ -336,6 +351,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/me/code_hub/finder")),
             branch: Some("main".into()),
             last_activity_ms: now_ms() - 10 * 60_000,
+            status_revision: "fixture".into(),
             last_message: Some("需要你确认：是否允许运行 npm test？".into()),
             jump: Jump::DeepLink("claude://claude.ai/epitaxy/x".into()),
         }

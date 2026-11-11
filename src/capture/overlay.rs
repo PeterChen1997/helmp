@@ -3,22 +3,21 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
+use super::annotation::{BLOCK_SIZES, Tool, WIDTHS};
 use super::geometry::{self, Handle, Hit, Rect};
 use super::selector::{Effect, Selector, State};
+use super::toolbar::{self, Edit};
 use super::{Act, Mode, Primary, Session, act};
-use crate::i18n::{tr, trf};
+use crate::i18n::tr;
 use crate::style::{self, Palette};
 
 /// 选区外的压暗程度。
 const DIM: f32 = 0.5;
 /// 控制点边长（pt）。
 const HANDLE: f32 = 8.;
-/// 工具栏按钮边长、间距与内边距（pt）。
-const BUTTON: f32 = 32.;
-const BUTTON_GAP: f32 = 2.;
-const TOOLBAR_PAD: f32 = 4.;
 /// 工具栏与选区的间距（pt）。
 const TOOLBAR_GAP: f64 = 6.;
 
@@ -28,7 +27,9 @@ pub struct Overlay {
     focus: FocusHandle,
     /// 鼠标的最新位置（本屏坐标），决定光标形状。
     mouse: geometry::Point,
+    hex: Entity<InputState>,
     _observe: Subscription,
+    _hex_input: Subscription,
 }
 
 impl Overlay {
@@ -42,12 +43,33 @@ impl Overlay {
         focus.focus(window, cx);
         // 别的屏上的操作（在那里开始框选会清掉本屏的选区）也要让本屏重画。
         let observe = cx.observe(&session, |_, _, cx| cx.notify());
+        let hex = cx.new(|cx| InputState::new(window, cx).placeholder("#RRGGBB"));
+        let hex_input = cx.subscribe_in(
+            &hex,
+            window,
+            |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let value = input.read(cx).value();
+                    let hex = value.trim().trim_start_matches('#');
+                    if hex.len() == 6
+                        && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        && let Ok(color) = u32::from_str_radix(hex, 16)
+                    {
+                        this.edit(Edit::Color(color), cx);
+                    }
+                }
+                InputEvent::PressEnter { .. } => this.focus.focus(window, cx),
+                _ => {}
+            },
+        );
         Self {
             session,
             index,
             focus,
             mouse: geometry::Point::default(),
+            hex,
             _observe: observe,
+            _hex_input: hex_input,
         }
     }
 
@@ -70,7 +92,50 @@ impl Overlay {
         cx.defer(move |cx| act(action, cx));
     }
 
-    fn on_down(&mut self, event: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn edit(&self, edit: Edit, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            if session.busy
+                || session.mode == Mode::Ocr
+                || !session.selected().is_some_and(|(ix, _)| ix == self.index)
+            {
+                return;
+            }
+            match edit {
+                Edit::Select(tool) => session.select_tool(self.index, tool, cx),
+                Edit::Undo => session.editor.undo(),
+                Edit::Redo => session.editor.redo(),
+                Edit::Color(color) => session.editor.color = Some(color),
+                Edit::Width(width) => session.editor.width = width,
+                Edit::BlockSize(size) => session.editor.block_size = size,
+                Edit::StepSize(step) => match session.editor.tool {
+                    Some(Tool::Mosaic) => {
+                        let size = &mut session.editor.block_size;
+                        *size = size.saturating_add_signed(step).min(BLOCK_SIZES.len() - 1);
+                    }
+                    Some(_) => {
+                        let width = &mut session.editor.width;
+                        *width = width.saturating_add_signed(step).min(WIDTHS.len() - 1);
+                    }
+                    None => {}
+                },
+            }
+            cx.notify();
+        });
+    }
+
+    fn toolbar_edit(&self, edit: Edit, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
+        self.edit(edit, cx);
+        if matches!(edit, Edit::Select(_) | Edit::Color(_)) {
+            let color = self.session.read(cx).editor.color();
+            let value = format!("#{color:06X}");
+            self.hex
+                .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+    }
+
+    fn on_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
         let p = local(event.position);
         self.mouse = p;
         let index = self.index;
@@ -78,17 +143,31 @@ impl Overlay {
             if session.busy {
                 return Effect::None;
             }
-            let Session {
-                selectors, screens, ..
-            } = session;
-            // 选区只在一块屏上：在这块屏开始框选，别的屏上的选区就不要了。
-            for (ix, selector) in selectors.iter_mut().enumerate() {
+            if let Some((screen, selection)) = session.selected() {
+                if screen == index
+                    && let Some(tool) = session.editor.tool
+                {
+                    if selection.contains(p) {
+                        session.editor.begin(tool, p);
+                        cx.notify();
+                    }
+                    return Effect::None;
+                }
+                if screen != index || session.selectors[index].hit(p) == Hit::Outside {
+                    session.editor.clear();
+                }
+            }
+            // 选区只在一块屏上。
+            for (ix, selector) in session.selectors.iter_mut().enumerate() {
                 if ix != index {
                     *selector = Selector::new(selector.bounds);
                 }
             }
-            let effect =
-                selectors[index].press(p, event.click_count, &screens[index].screen.windows);
+            let effect = session.selectors[index].press(
+                p,
+                event.click_count,
+                &session.screens[index].screen.windows,
+            );
             cx.notify();
             effect
         });
@@ -100,17 +179,32 @@ impl Overlay {
         self.mouse = p;
         let index = self.index;
         let effect = self.session.update(cx, |session, cx| {
-            let Session {
-                selectors, screens, ..
-            } = session;
-            let effect = if event.pressed_button == Some(MouseButton::Left) {
-                selectors[index].drag(p);
+            if session.busy {
+                return Effect::None;
+            }
+            let effect = if session.editor.drawing() {
+                if event.pressed_button != Some(MouseButton::Left) {
+                    // 跨屏松开时，结束留在原屏上的笔迹。
+                    session.editor.finish();
+                } else if let Some((ix, rect)) = session.selected()
+                    && ix == index
+                {
+                    session.editor.drag(p, event.modifiers.shift, rect);
+                }
                 Effect::None
-            } else if let Some(pressing) = selectors.iter_mut().find(|s| s.pressing()) {
+            } else if event.pressed_button == Some(MouseButton::Left) {
+                session.selectors[index].drag(p);
+                Effect::None
+            } else if let Some(pressing) = session.selectors.iter_mut().find(|s| s.pressing()) {
                 // 在另一块屏上松开了鼠标，按下的那块屏没收到松开：补上。
                 pressing.finish()
             } else {
-                selectors[index].hover_at(p, &screens[index].screen.windows);
+                if session.editor.tool.is_some()
+                    && matches!(session.selectors[index].state, State::Selected { .. })
+                {
+                    return Effect::None;
+                }
+                session.selectors[index].hover_at(p, &session.screens[index].screen.windows);
                 Effect::None
             };
             cx.notify();
@@ -123,7 +217,20 @@ impl Overlay {
         let p = local(event.position);
         let index = self.index;
         let effect = self.session.update(cx, |session, cx| {
-            let effect = session.selectors[index].release(p);
+            if session.busy {
+                return Effect::None;
+            }
+            let effect = if session.editor.drawing() {
+                if let Some((ix, rect)) = session.selected()
+                    && ix == index
+                {
+                    session.editor.drag(p, event.modifiers.shift, rect);
+                }
+                session.editor.finish();
+                Effect::None
+            } else {
+                session.selectors[index].release(p)
+            };
             cx.notify();
             effect
         });
@@ -132,6 +239,14 @@ impl Overlay {
 
     fn on_right(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let effect = self.session.update(cx, |session, cx| {
+            if session.busy {
+                return Effect::None;
+            }
+            if session.editor.cancel() || session.editor.tool.take().is_some() {
+                cx.notify();
+                return Effect::None;
+            }
+            session.editor.clear();
             // 哪块屏上有选区就取消哪块的；都没有时右键关闭截图。
             let effect = match session
                 .selectors
@@ -147,9 +262,23 @@ impl Overlay {
         self.apply(effect, cx);
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.hex.focus_handle(cx).is_focused(window) && event.keystroke.key != "escape" {
+            return;
+        }
         let keystroke = &event.keystroke;
         let command = keystroke.modifiers.platform;
+        let edit = match keystroke.key.as_str() {
+            "z" if command && keystroke.modifiers.shift => Some(Edit::Redo),
+            "z" if command => Some(Edit::Undo),
+            key if !keystroke.modifiers.modified() => toolbar::key_tool(key),
+            _ => None,
+        };
+        if let Some(edit) = edit {
+            cx.stop_propagation();
+            self.toolbar_edit(edit, window, cx);
+            return;
+        }
         let action = match keystroke.key.as_str() {
             "escape" => Act::Close,
             "enter" => self.primary(cx),
@@ -257,92 +386,6 @@ fn handles(sel: Rect, pal: &Palette) -> Vec<Div> {
         .collect()
 }
 
-/// 工具栏的按钮：(操作, 图标, 中文名, 英文名, 快捷键提示)。顺序即设计稿的「保存、复制、钉图、识别文字、关闭」。
-const BUTTONS: [(Act, &str, &str, &str, &str); 5] = [
-    (Act::Save, "download", "保存", "Save", "⌘S"),
-    (Act::Copy, "copy", "复制", "Copy", "⌘C"),
-    (Act::Pin, "pin", "钉在屏幕上", "Pin to Screen", ""),
-    (
-        Act::Recognize,
-        "scan-text",
-        "识别文字",
-        "Recognize Text",
-        "",
-    ),
-    (Act::Close, "x", "关闭", "Close", "Esc"),
-];
-
-pub fn toolbar_size() -> (f64, f64) {
-    let n = BUTTONS.len() as f32;
-    (
-        f64::from(n * BUTTON + (n - 1.) * BUTTON_GAP + TOOLBAR_PAD * 2.),
-        f64::from(BUTTON + TOOLBAR_PAD * 2.),
-    )
-}
-
-/// 工具栏按钮按下时调用（遮罩直接执行截图操作，钉图作用于自己）。
-pub type OnPress = Rc<dyn Fn(Act, &mut Window, &mut App)>;
-
-/// 一排图标按钮（遮罩和钉图共用）：主操作的图标用强调色，提示里写出快捷键。
-pub fn button_row(
-    buttons: &[(Act, &str, &str, &str, &str)],
-    primary: Act,
-    pal: &Palette,
-    on_press: OnPress,
-) -> Div {
-    let mut row = div()
-        .flex()
-        .gap(px(BUTTON_GAP))
-        .p(px(TOOLBAR_PAD))
-        .rounded(px(8.))
-        .bg(pal.window)
-        .border_1()
-        .border_color(pal.separator)
-        .shadow_lg();
-    for &(action, icon, zh, en, keys) in buttons {
-        let label = tr(zh, en);
-        let tip = if action == primary {
-            trf!("{label}（↵）", "{label} (↵)")
-        } else if keys.is_empty() {
-            label.to_string()
-        } else {
-            trf!("{label}（{keys}）", "{label} ({keys})")
-        };
-        let color = if action == primary {
-            pal.accent
-        } else {
-            pal.fg
-        };
-        let on_press = on_press.clone();
-        row = row.child(
-            div()
-                .id(SharedString::from(format!("capture-{action:?}")))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(BUTTON))
-                .rounded(px(6.))
-                .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(pal.key_bg))
-                // 按下即执行（并拦住事件）：不然遮罩会把这次按下当成重新框选、钉图会当成拖动窗口。
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    cx.stop_propagation();
-                    on_press(action, window, cx);
-                })
-                .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-                })
-                .child(
-                    gpui_kit::component::Icon::empty()
-                        .path(SharedString::from(format!("icons/{icon}.svg")))
-                        .text_color(color)
-                        .size(px(18.)),
-                ),
-        );
-    }
-    row
-}
-
 impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pal = style::palette(window);
@@ -355,7 +398,12 @@ impl Render for Overlay {
         let selected = matches!(selector.state, State::Selected { .. });
         let pressing = selector.pressing();
         let hole = selection.or(hover);
-        let cursor = cursor_for(selector.hit(self.mouse), pressing);
+        let annotating = selected && session.editor.tool.is_some();
+        let cursor = if annotating {
+            CursorStyle::Crosshair
+        } else {
+            cursor_for(selector.hit(self.mouse), pressing)
+        };
         let ocr = session.mode == Mode::Ocr;
         let busy = session.busy;
         let primary = self.primary(cx);
@@ -375,6 +423,16 @@ impl Render for Overlay {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_up))
             .children(dimming(hole, bounds));
 
+        if let Some(sel) = selection.filter(|_| selected && !ocr) {
+            let marks = session.editor.preview();
+            if !marks.is_empty() {
+                root = root.child(super::preview::layer(
+                    sel,
+                    marks,
+                    session.mosaic(self.index).cloned(),
+                ));
+            }
+        }
         if let Some(rect) = hole {
             // 悬停的窗口用粗一点的框提示「单击选中它」；选区用细框加控制点。
             let border = at(rect).border_color(pal.accent);
@@ -386,20 +444,28 @@ impl Render for Overlay {
         }
         if let Some(sel) = selection {
             root = root.children(size_label(sel, frozen.scale, frozen.pixels));
-            if selected && !pressing && !ocr {
+            if selected && !pressing && !ocr && !annotating {
                 root = root.children(handles(sel, &pal));
             }
             if selected && !pressing && !ocr && !busy {
-                let origin = geometry::toolbar_origin(sel, toolbar_size(), bounds, TOOLBAR_GAP);
+                let origin = geometry::toolbar_origin(sel, toolbar::size(), bounds, TOOLBAR_GAP);
+                let entity = cx.entity();
                 root = root.child(
                     div()
                         .absolute()
                         .left(px(origin.x as f32))
                         .top(px(origin.y as f32))
-                        .child(button_row(
-                            &BUTTONS,
+                        .child(toolbar::editor_toolbar(
+                            &session.editor,
                             primary,
+                            &self.hex,
+                            toolbar::options_offset(origin.y, bounds.bottom()),
                             &pal,
+                            Rc::new(move |edit, window, cx| {
+                                entity.update(cx, |overlay, cx| {
+                                    overlay.toolbar_edit(edit, window, cx)
+                                })
+                            }),
                             Rc::new(|action, _, cx| cx.defer(move |cx| act(action, cx))),
                         )),
                 );

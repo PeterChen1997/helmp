@@ -1,6 +1,6 @@
 //! 剪贴板历史的持久化：`clipboard.sqlite` + 图片文件目录。
 //!
-//! - 不设条数上限（「无上限」是剪贴板用户的第一诉求）。
+//! - 历史内容以 50 MB 为清理目标，最近三天和置顶条目不因体积被删除。
 //! - 同内容（按 sha256 判重）再次复制时不新增行，而是把原行移到最前（`seq` 取新值），
 //!   这样 `clipboard:<行 id>` 在整个生命周期内保持稳定。
 //! - 图片落盘到 `clipboard-images/<hash>.<png|tiff>`，库里只存文件名。
@@ -17,6 +17,7 @@ use crate::i18n::{tr, trf};
 
 pub const DB_FILE: &str = "clipboard.sqlite";
 pub const IMAGES_DIR: &str = "clipboard-images";
+pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -161,7 +162,12 @@ impl Store {
                 copied_at     INTEGER NOT NULL,
                 seq           INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS clips_seq ON clips(seq DESC);",
+            CREATE INDEX IF NOT EXISTS clips_seq ON clips(seq DESC);
+            CREATE TABLE IF NOT EXISTS skipped_copies (
+                copied_at INTEGER NOT NULL,
+                kind      TEXT    NOT NULL,
+                bytes     INTEGER NOT NULL
+            );",
         )
         .context(tr(
             "初始化剪贴板数据库表",
@@ -349,42 +355,123 @@ impl Store {
 
     /// 删除最近一次复制早于 `cutoff_ms` 的条目（保留天数到期），返回被删的 id。置顶的不删。
     pub fn prune_before(&mut self, cutoff_ms: i64) -> Result<Vec<i64>> {
-        let expired: Vec<(i64, Option<String>)> = {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, kind, content FROM clips WHERE copied_at < ?1 AND pinned = 0")?;
-            let rows = stmt.query_map([cutoff_ms], |row| {
-                let kind: String = row.get(1)?;
-                let image = if kind == Kind::Image.as_str() {
-                    Some(row.get::<_, String>(2)?)
-                } else {
-                    None
-                };
-                Ok((row.get::<_, i64>(0)?, image))
-            })?;
+        let expired = {
+            let mut stmt = self.conn.prepare(
+                "DELETE FROM clips WHERE copied_at < ?1 AND pinned = 0
+                 RETURNING id, CASE WHEN kind = 'image' THEN content END",
+            )?;
+            let rows = stmt.query_map([cutoff_ms], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        self.conn
-            .execute(
-                "DELETE FROM clips WHERE copied_at < ?1 AND pinned = 0",
-                [cutoff_ms],
-            )
-            .context(tr(
-                "清理过期剪贴板历史",
-                "Couldn’t remove expired clipboard history",
-            ))?;
-        for image in expired.iter().filter_map(|(_, image)| image.as_deref()) {
-            remove_image(&self.images_dir.join(image))?;
+        Ok(self.finish_prune(expired))
+    }
+
+    /// 超出内容预算时，从最旧的未置顶条目开始清理，保留 `cutoff_ms` 及之后的历史。
+    pub fn prune_over_budget(&mut self, cutoff_ms: i64, budget: u64) -> Result<Vec<i64>> {
+        let text_bytes: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(octet_length(content)), 0) FROM clips WHERE kind != 'image'",
+            [],
+            |row| row.get(0),
+        )?;
+        let image_bytes: u64 = fs::read_dir(&self.images_dir)?
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum();
+        let mut excess = (text_bytes as u64 + image_bytes).saturating_sub(budget);
+        if excess == 0 {
+            return Ok(Vec::new());
         }
-        Ok(expired.into_iter().map(|(id, _)| id).collect())
+
+        let transaction = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let retired = {
+            let mut stmt = transaction.prepare(
+                "SELECT id, CASE WHEN kind = 'image' THEN content END, octet_length(content)
+                 FROM clips WHERE copied_at < ?1 AND pinned = 0 ORDER BY copied_at, seq, id",
+            )?;
+            let mut rows = stmt.query([cutoff_ms])?;
+            let mut retired = Vec::new();
+            while excess > 0 {
+                let Some(row) = rows.next()? else {
+                    break;
+                };
+                let image: Option<String> = row.get(1)?;
+                let bytes = match &image {
+                    Some(name) => fs::metadata(self.images_dir.join(name)).map_or(0, |m| m.len()),
+                    None => row.get::<_, i64>(2)? as u64,
+                };
+                excess = excess.saturating_sub(bytes);
+                retired.push((row.get(0)?, image));
+            }
+            retired
+        };
+        {
+            let mut delete = transaction.prepare("DELETE FROM clips WHERE id = ?1")?;
+            for (id, _) in &retired {
+                delete.execute([id])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(self.finish_prune(retired))
+    }
+
+    /// 记录跳过事件，仅保留时间、类型和字节数。
+    pub fn log_oversize(&self, copied_at: i64, kind: &str, bytes: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO skipped_copies (copied_at, kind, bytes) VALUES (?1, ?2, ?3)",
+            params![copied_at, kind, i64::try_from(bytes).unwrap_or(i64::MAX)],
+        )?;
+        Ok(())
+    }
+
+    pub fn prune_skip_log(&self, cutoff_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM skipped_copies WHERE copied_at < ?1",
+            [cutoff_ms],
+        )?;
+        Ok(())
+    }
+
+    fn finish_prune(&self, retired: Vec<(i64, Option<String>)>) -> Vec<i64> {
+        retired
+            .into_iter()
+            .map(|(id, image)| {
+                if let Some(image) = image
+                    && let Err(err) = remove_image(&self.images_dir.join(image))
+                {
+                    eprintln!("helmp: {err:#}");
+                }
+                id
+            })
+            .collect()
+    }
+
+    /// 大量 SQLite 空页已可回收时才压缩文件，避免每次清理都重写数据库。
+    pub fn reclaim_space(&self) -> Result<()> {
+        let page_bytes: i64 = self
+            .conn
+            .pragma_query_value(None, "page_size", |row| row.get(0))?;
+        let free_pages: i64 = self
+            .conn
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))?;
+        if free_pages * page_bytes >= MAX_BYTES as i64 / 5 {
+            self.conn
+                .execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        }
+        Ok(())
     }
 
     /// 清空全部历史（含图片文件），返回删除的条数。
     pub fn clear(&mut self) -> Result<usize> {
-        let removed = self
-            .conn
+        let transaction = self.conn.transaction()?;
+        let removed = transaction
             .execute("DELETE FROM clips", [])
             .context(tr("清空剪贴板历史", "Couldn’t clear clipboard history"))?;
+        transaction.execute("DELETE FROM skipped_copies", [])?;
+        transaction.commit()?;
         let entries = match fs::read_dir(&self.images_dir) {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
@@ -680,6 +767,52 @@ pub(crate) mod tests {
         assert!(store.get(old.id).unwrap().is_some());
         assert!(!store.set_pinned(old.id, false).unwrap().pinned);
         assert!(store.set_pinned(9999, true).is_err());
+    }
+
+    #[test]
+    fn budget_removes_oldest_payloads_and_keeps_recent_and_pinned_entries() {
+        let dir = TempDir::new("budget");
+        let mut store = Store::open(&dir.0).unwrap();
+        let oldest = store.add(text("你好"), None, 1).unwrap().0;
+        let old_image = store.add(image(b"1234"), None, 2).unwrap().0;
+        let pinned = store.add(text("pinned"), None, 3).unwrap().0;
+        store.set_pinned(pinned.id, true).unwrap();
+        let recent = store.add(text("recent"), None, 4).unwrap().0;
+
+        assert_eq!(store.prune_over_budget(4, 16).unwrap(), [oldest.id]);
+        assert!(store.image_path(&old_image).is_file());
+        assert_eq!(store.prune_over_budget(4, 8).unwrap(), [old_image.id]);
+        assert!(!store.image_path(&old_image).exists());
+        assert!(store.get(pinned.id).unwrap().is_some());
+        assert!(store.get(recent.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn oversize_events_are_kept_separately_and_clearable() {
+        let dir = TempDir::new("oversize-log");
+        let mut store = Store::open(&dir.0).unwrap();
+        store.log_oversize(1, "files", MAX_BYTES + 1).unwrap();
+        store.log_oversize(2, "image", MAX_BYTES + 2).unwrap();
+        store.prune_skip_log(2).unwrap();
+        let logged: (i64, String, i64) = store
+            .conn
+            .query_row(
+                "SELECT copied_at, kind, bytes FROM skipped_copies",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(logged, (2, "image".into(), MAX_BYTES as i64 + 2));
+        assert!(store.load_all(10).unwrap().is_empty());
+        assert_eq!(store.clear().unwrap(), 0);
+        assert!(
+            !store
+                .conn
+                .prepare("SELECT 1 FROM skipped_copies")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! 录屏权限：截图类命令执行前检查，没有权限就给「前往授权」，不去截一片空白。
 //!
 //! 屏幕录制权限只用 `crate::permissions::screen_recording_granted` 实时查询，不调用 Request 弹框。
-//! 真正的截屏在 `crate::capture::freeze`（`screencapture -x`）；注意子进程继承父进程的 TCC 身份：
+//! 截屏在 `crate::capture::freeze`，通过 ScreenCaptureKit 或系统截图工具获取。系统工具继承父进程的 TCC 身份：
 //! 终端里跑问的是终端的权限，打包后问的是 Helmp。
 
 use crate::i18n::tr;

@@ -6,6 +6,36 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-11
+
+### Added
+
+- Screenshot selections support rectangle, ellipse, line, arrow, pen, highlighter, and rectangular mosaic annotations. Choose a preset or enter a hex color, adjust stroke and mosaic block sizes, and use <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> to undo or redo. Copy is the rightmost action.
+- Completed agent replies preserve Markdown formatting and remember which completion you have read.
+
+### Changed
+
+- Clipboard history targets 50 MB of saved content. When it exceeds that size, Helmp removes the oldest unpinned items older than 72 hours first. Copies over 50 MB keep a local record of their time, type, and size.
+
+### Fixed
+
+- Global shortcuts respond to system events immediately. Screenshot overlays open without a popup animation or an extra wait when the launcher is hidden. On macOS 26 and later, ScreenCaptureKit provides full-resolution frames directly in memory. The system screenshot utility remains available as a fallback.
+
+### 简体中文
+
+#### 新增
+
+- 截图选区支持矩形、椭圆、直线、箭头、画笔、荧光笔和框选马赛克。可用预设色或输入十六进制颜色，调整笔宽和马赛克块大小，并用 <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> 撤销或重做。复制按钮位于最右侧。
+- 已完成的 Agent 回复保留 Markdown 格式，并记住已经查看过的完成结果。
+
+#### 变更
+
+- 剪贴板历史以 50 MB 为清理目标。超过时优先清理 72 小时前最旧的未置顶条目。单次复制超过 50 MB 时，本地只记录时间、类型和大小。
+
+#### 修复
+
+- 全局快捷键收到系统事件后立即响应。启动器已收起时，截图直接取屏，遮罩关闭弹出动画。macOS 26 及以上通过 ScreenCaptureKit 直接获取内存里的全分辨率画面，必要时回退到系统截图工具。
+
 ## [0.4.3] - 2026-11-11
 
 ### Changed

@@ -3,6 +3,8 @@
 
 mod support;
 
+use std::fs::File;
+use std::os::fd::AsRawFd as _;
 use std::process::{Child, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -80,4 +82,61 @@ fn ended_sessions_are_not_listed() {
         !rows.iter().any(|r| r.title.contains("Refactor the auth module")),
         "{rows:#?}"
     );
+}
+
+fn codex_reply(h: &Helmp, id: &str, title: &str, turn: &str) {
+    let events = [
+        json!({"type": "session_meta", "payload": {"originator": "Codex Desktop"}}),
+        json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "UserMessage", "content": [{"text": title}]
+        }}}),
+        json!({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn,
+            "last_agent_message": "**完成。**\n\n1. 查看结果"
+        }}),
+    ];
+    let body = events
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    h.write(
+        &format!("codex/sessions/2026/11/11/rollout-{id}.jsonl"),
+        &body,
+    );
+}
+
+fn codex_writer(h: &Helmp, id: &str) -> File {
+    let lock = File::open(h.write(&format!("codex/thread-writer-locks/{id}.lock"), "")).unwrap();
+    // SAFETY: 文件在测试结束前保持打开，模拟 Codex 持有写锁。
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    lock
+}
+
+#[test]
+fn completed_sessions_move_back_until_the_next_turn_finishes() {
+    let h = Helmp::new();
+    let older = "aaaaaaaa-0001-4000-8000-000000000001";
+    let newer = "aaaaaaaa-0001-4000-8000-000000000002";
+    let _writers = [codex_writer(&h, older), codex_writer(&h, newer)];
+    codex_reply(&h, older, "Session B (earlier)", "one");
+    codex_reply(&h, newer, "Session B", "one");
+    // B 的标题完全匹配查询：即便匹配分更高，看过的完成项也必须让给未读项。
+    h.write(
+        "data/agent-completions.json",
+        &json!({(format!("agents:codex:{newer}")): "done:one"}).to_string(),
+    );
+    let titles = || {
+        h.query_in("agents", "Session B")
+            .into_iter()
+            .map(|row| row.title)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(titles(), ["Session B (earlier)", "Session B"]);
+
+    // 同一个会话完成了新一轮，旧回执不再适用。
+    codex_reply(&h, newer, "Session B", "two");
+    assert_eq!(titles(), ["Session B", "Session B (earlier)"]);
 }

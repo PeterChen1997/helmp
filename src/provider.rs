@@ -312,8 +312,13 @@ pub enum Block {
     Caption(String),
     /// 等宽文本（命令、代码、脚本输出）。
     Code(String),
-    /// 带小标题的引用框（如「最后一条消息」）。
+    /// 带小标题的纯文本引用框。
     Quote {
+        label: String,
+        text: String,
+    },
+    /// 带小标题的 Markdown 预览。
+    Markdown {
         label: String,
         text: String,
     },
@@ -393,6 +398,13 @@ pub struct Form {
 }
 
 #[derive(Debug, Clone)]
+pub struct Completion {
+    /// 同一会话的不同完成轮次分别记为已读。
+    pub revision: String,
+    pub unread: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct Item {
     /// `<provider>:<domain id>`，同一 provider 内稳定唯一。
     pub id: String,
@@ -422,6 +434,8 @@ pub struct Item {
     /// 置顶在列表最前的项（剪贴板空查询时的置顶记录）。仍然排在最前、照常可选，但进入范围时
     /// 默认选中跳过它们，落在第一条普通结果（最近一条）上：用户唤起剪贴板多半是要贴刚复制的东西。
     pub pinned_to_top: bool,
+    /// 仅已完成或空闲的 Agent 会话有已读状态。
+    pub completion: Option<Completion>,
 }
 
 impl Item {
@@ -443,6 +457,7 @@ impl Item {
             auto_run: false,
             opens_scope: None,
             pinned_to_top: false,
+            completion: None,
         }
     }
 }

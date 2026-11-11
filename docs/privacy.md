@@ -14,7 +14,8 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 |---|---|---|
 | `config.json` | Your settings: interface language, hotkeys, enabled modules and aliases, model names / endpoints / model ids, clipboard and screenshot options, web search engines (including custom URL templates), extra script folders. **No API keys.** | Delete the file to reset settings |
 | `history.json` | The "Recent" row on the home view: up to 30 entries, each with the item's title, subtitle, icon and **the query you typed** to find it | Delete the file |
-| `clipboard.sqlite` | Clipboard history: text, file paths, the name and bundle id of the app you copied from, and the time. No item limit unless you set a retention period | Settings › Clipboard, or delete the file |
+| `agent-completions.json` | Session IDs and the completion versions you've seen in Agent Sessions. No message text | Quit Helmp and delete the file to reset unread status |
+| `clipboard.sqlite` | Clipboard history: text, file paths, the name and bundle id of the app you copied from, and the time. A 50 MB content budget protects the latest 72 hours and pinned items. Copies over 50 MB log only the time, type and size | Settings › Clipboard, or delete the file |
 | `clipboard-images/` | Images you copied, named by content hash | Removed with the clipboard history |
 | `screenshots/` | Output of "Capture and save" (you can choose another folder) | Delete the files |
 | `ocr/` | The last few images shown next to OCR results in the panel; older ones are deleted automatically | Delete the folder |
@@ -91,7 +92,7 @@ Things that may reach the network because *you* asked for them: web search resul
 | Permission | Why |
 |---|---|
 | Accessibility | Simulate <kbd>⌘V</kbd> to paste into the front app; read selected text for Translate (simulating <kbd>⌘C</kbd> when needed) and replace it; press <kbd>⌃⌘Q</kbd> for Lock Screen |
-| Screen Recording | Freezing the screen for screenshots and screenshot OCR (`screencapture -x`) |
+| Screen Recording | Freezing the screen for screenshots and screenshot OCR (ScreenCaptureKit, with the system screenshot utility as a fallback) |
 | Automation (iTerm2, Terminal) | Select the tab of an agent session when you jump to it |
 | Automation (System Events, Finder) | System commands: Lock Screen, Toggle Dark Mode, Restart, Shut Down and Log Out go through System Events; Empty Trash goes through Finder |
 

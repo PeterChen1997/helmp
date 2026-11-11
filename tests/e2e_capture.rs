@@ -67,7 +67,9 @@ fn line<'a>(out: &'a str, prefix: &str) -> &'a str {
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_capture -- --ignored"]
 fn gui_screenshot_and_ocr_are_two_separate_registered_shortcuts() {
     // 「截图」⇧⌘1 和「截图识别文字」⇧⌘2 是两条独立的全局快捷键：默认两条都真的注册上。
-    let h = Helmp::new().env("HELMP_NO_WELCOME", "1").env("HELMP_SELF_TEST", "1");
+    let h = Helmp::new()
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1");
     let out = gui(&h);
     let hotkeys = line(&out, "self-test hotkeys:");
     for expected in [" screenshot-capture=⇧⌘1 ", " screenshot=⇧⌘2 "] {
@@ -172,12 +174,12 @@ fn gui_ocr_mode_recognizes_on_release_and_copies() {
 #[test]
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_capture -- --ignored"]
 fn gui_pin_then_copy_and_close() {
-    // 选区 (100,10)–(400,100)，工具栏在选区右下方外侧：左上角 (224,106)，第三个按钮是「钉图」。
+    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始，「钉图」在 (355,125)。
     // 钉住后 ⌘C 复制钉图（600×180 像素），Esc 关掉钉图；Esc 也能直接关掉截图界面。
-    let keys = "drag:100,10,400,100 click:312,126 cmd-c escape";
+    let keys = "drag:100,10,400,100 click:355,125 cmd-c escape";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
-    let pinned = line(&out, "self-test key click:312,126:");
+    let pinned = line(&out, "self-test key click:355,125:");
     assert!(
         pinned.contains("overlays=0") && pinned.contains("pins=1"),
         "{pinned}"
@@ -196,4 +198,86 @@ fn gui_pin_then_copy_and_close() {
         cancelled.contains("overlays=0") && cancelled.contains("\"cancel\""),
         "{cancelled}"
     );
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_annotations_are_baked_into_the_saved_retina_png() {
+    let h = Helmp::new();
+    let fixture = h.root.join("annotation-fixture.png");
+    let source_value = |x, y| ((x + 2 * y) % 127) as u8;
+    let mut encoder = png::Encoder::new(std::fs::File::create(&fixture).unwrap(), 1200, 320);
+    encoder.set_color(png::ColorType::Rgb);
+    let pixels: Vec<_> = (0..320)
+        .flat_map(|y| (0..1200).flat_map(move |x| [source_value(x, y); 3]))
+        .collect();
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&pixels).unwrap();
+    writer.finish().unwrap();
+
+    // 选区 (12,6)–(550,110)，主工具栏下方只有一排的空间，选项排到主工具栏上面。
+    let keys = concat!(
+        "drag:12,6,550,110 click:135,135 click:250,92 drag:32,24,80,48 ",
+        "click:389,92 cmd-a ~B2285C enter drag:90,24,130,48 ",
+        "click:315,135 drag:150,24,198,54 cmd-z cmd-shift-z cmd-s"
+    );
+    let shots = h.root.join("shots");
+    let shots_for_config = shots.display().to_string();
+    let h = capture_env(
+        h.config(move |c| c["screenshot"] = serde_json::json!({"save_dir": shots_for_config})),
+        "screenshot-capture",
+        keys,
+    )
+    .env("HELMP_CAPTURE_FIXTURE", fixture.display().to_string());
+    let out = gui(&h);
+    let saved = line(&out, "self-test key cmd-s:");
+    assert!(saved.contains("toast Saved"), "{out}");
+    let path = std::fs::read_dir(shots)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(path).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .unwrap();
+    let mut buffer = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buffer).unwrap();
+    assert_eq!((info.width, info.height), (1076, 208));
+    assert_eq!(info.bit_depth, png::BitDepth::Eight);
+    let channels = info.color_type.samples();
+    assert!(matches!(
+        info.color_type,
+        png::ColorType::Rgb | png::ColorType::Rgba
+    ));
+    let rgb = |x, y| {
+        let offset = y * info.line_size + x * channels;
+        <[u8; 3]>::try_from(&buffer[offset..offset + 3]).unwrap()
+    };
+    let near = |actual: [u8; 3], expected: [u8; 3]| {
+        assert!(
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(a, b)| a.abs_diff(b) <= 10),
+            "{actual:?} differs from {expected:?}\n{out}"
+        );
+    };
+    near(rgb(70, 36), [0x0a, 0x84, 0xff]); // 预设蓝色矩形
+    near(rgb(185, 36), [0xb2, 0x28, 0x5c]); // HEX 自定义色矩形
+    let tile = rgb(278, 38);
+    assert_eq!(tile, rgb(287, 43), "同一块马赛克里的像素应相同");
+    assert_ne!(tile, rgb(298, 38), "相邻色块应取到各自的颜色");
+    near(rgb(274, 38), [source_value(274 + 24, 38 + 12); 3]); // 色块边外不受影响
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_rightmost_capture_button_copies() {
+    let keys = "drag:12,6,550,110 click:531,135";
+    let out = gui(&capture_env(Helmp::new(), "screenshot-capture", keys));
+    let copied = line(&out, "self-test key click:531,135:");
+    assert!(copied.contains("overlays=0"), "{out}");
+    assert!(copied.contains("[dry-run] copy image 1076x208"), "{out}");
 }

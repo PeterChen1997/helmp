@@ -1,4 +1,4 @@
-//! 剪贴板历史：后台轮询采集、SQLite 持久化（无上限）、范围内浏览 / 搜索、选中写回并粘贴。
+//! 剪贴板历史：后台轮询采集、SQLite 持久化、范围内浏览 / 搜索、选中写回并粘贴。
 //!
 //! 查询规则：
 //! - 范围「剪贴板」（前缀 `cb ` / `clip ` / `剪贴板 ` / `剪切板 `，由框架解析）：
@@ -30,7 +30,7 @@ use crate::engine::{MAX_RESULTS, commands_section};
 use crate::i18n::{Lang, tr, trf};
 use crate::provider::{Action, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint};
 use present::{Clock, TextKind};
-use store::{Entry, Kind, NewClip, Source, Store};
+use store::{Added, Entry, Kind, MAX_BYTES, NewClip, Source, Store};
 use watcher::Read;
 
 const PROVIDER_ID: &str = "clipboard";
@@ -64,6 +64,7 @@ const SUGGESTION_SCORE: u32 = 700;
 const AUTOPASTE_ENV: &str = "HELMP_CLIPBOARD_AUTOPASTE";
 /// 过期清理的间隔；保留天数改了会立即清理一次。
 const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
+const DAY_MS: i64 = 86_400_000;
 
 /// 已启动的实例，供设置窗口「清空全部历史」使用（它拿不到 provider 对象）。
 static SHARED: OnceLock<Arc<Inner>> = OnceLock::new();
@@ -177,7 +178,10 @@ impl Clipboard {
         if indexed.kind != Kind::Image {
             let inner = Arc::clone(&self.inner);
             actions.push(NamedAction::new(
-                tr("按复制顺序合并粘贴到最新", "Paste Through Latest in Copy Order"),
+                tr(
+                    "按复制顺序合并粘贴到最新",
+                    "Paste Through Latest in Copy Order",
+                ),
                 None,
                 Action::new(move || inner.paste_sequence(id)),
             ));
@@ -233,7 +237,7 @@ impl Provider for Clipboard {
         }
 
         let config = crate::config::get();
-        let mut retention = config.clipboard.retention_days;
+        let mut retention = config.clipboard.retention_days();
         self.inner.prune(&config.clipboard)?;
         let mut pruned_at = Instant::now();
         if !capture_enabled() {
@@ -259,11 +263,12 @@ impl Provider for Clipboard {
                     std::thread::sleep(watcher::POLL_INTERVAL);
                     let full = crate::config::get();
                     let config = &full.clipboard;
-                    if retention != config.retention_days || pruned_at.elapsed() >= PRUNE_INTERVAL {
+                    if retention != config.retention_days() || pruned_at.elapsed() >= PRUNE_INTERVAL
+                    {
                         if let Err(err) = inner.prune(config) {
                             eprintln!("helmp: 清理过期剪贴板历史失败：{err:#}");
                         }
-                        retention = config.retention_days;
+                        retention = config.retention_days();
                         pruned_at = Instant::now();
                     }
                     let count = watcher::Pasteboard::change_count(&pasteboard);
@@ -475,6 +480,14 @@ impl Inner {
     fn handle(&self, read: Read, source: Option<Source>) -> Result<()> {
         match read {
             Read::Clip(clip) => self.record(clip, source.as_ref()),
+            Read::Oversize { kind, bytes } => {
+                eprintln!("helmp: clipboard: skipped {kind} ({bytes} bytes, limit {MAX_BYTES})");
+                let guard = self.store.lock().expect("clipboard store poisoned");
+                guard
+                    .as_ref()
+                    .context(not_ready())?
+                    .log_oversize(now_ms(), kind, bytes)
+            }
             Read::Unchanged | Read::Private(_) | Read::Empty | Read::Ignored(_) => Ok(()),
         }
     }
@@ -482,8 +495,12 @@ impl Inner {
     fn record(&self, clip: NewClip, source: Option<&Source>) -> Result<()> {
         let mut guard = self.store.lock().expect("clipboard store poisoned");
         let store = guard.as_mut().context(not_ready())?;
-        let (entry, _) = store.add(clip, source, now_ms())?;
+        let now = now_ms();
+        let (entry, added) = store.add(clip, source, now)?;
         self.move_to_front(&entry, image_path(store, &entry));
+        if added == Added::New {
+            self.trim_to_budget(store, now)?;
+        }
         Ok(())
     }
 
@@ -493,21 +510,36 @@ impl Inner {
         index.insert(0, Indexed::new(&truncated(entry), image_path));
     }
 
-    /// 按保留天数删掉过期条目，返回删除条数。
+    /// 按保留天数和内容预算清理历史，返回删除条数。
     fn prune(&self, config: &ClipboardConfig) -> Result<usize> {
-        let Some(cutoff) = retention_cutoff(config, now_ms()) else {
-            return Ok(0);
-        };
+        let now = now_ms();
         let mut guard = self.store.lock().expect("clipboard store poisoned");
         let store = guard.as_mut().context(not_ready())?;
-        let removed = store.prune_before(cutoff)?;
+        let expired = match retention_cutoff(config, now) {
+            Some(cutoff) => self.remove_from_index(store.prune_before(cutoff)?),
+            None => 0,
+        };
+        let trimmed = self.trim_to_budget(store, now)?;
+        if capture_enabled() {
+            store.prune_skip_log(three_days_ago(now))?;
+            store.reclaim_space()?;
+        }
+        Ok(expired + trimmed)
+    }
+
+    fn trim_to_budget(&self, store: &mut Store, now: i64) -> Result<usize> {
+        Ok(self.remove_from_index(store.prune_over_budget(three_days_ago(now), MAX_BYTES)?))
+    }
+
+    fn remove_from_index(&self, removed: Vec<i64>) -> usize {
         if !removed.is_empty() {
+            let removed: std::collections::HashSet<_> = removed.iter().copied().collect();
             self.index
                 .write()
                 .expect("clipboard index poisoned")
                 .retain(|indexed| !removed.contains(&indexed.id));
         }
-        Ok(removed.len())
+        removed.len()
     }
 
     fn set_pinned(&self, id: i64, pinned: bool) -> Result<()> {
@@ -644,10 +676,11 @@ pub fn paste_text_then(text: &str, left: usize) -> Result<Outcome> {
     let previous = {
         use watcher::Pasteboard as _;
         let pasteboard = macos::SystemPasteboard;
-        let plain_only = pasteboard
-            .types()
-            .iter()
-            .all(|ty| ty.starts_with("public.utf8") || ty == "NSStringPboardType" || ty.starts_with("public.utf16"));
+        let plain_only = pasteboard.types().iter().all(|ty| {
+            ty.starts_with("public.utf8")
+                || ty == "NSStringPboardType"
+                || ty.starts_with("public.utf16")
+        });
         if plain_only { pasteboard.text() } else { None }
     };
     macos::write_text(text)?;
@@ -716,10 +749,14 @@ fn autopaste_wanted(config: &ClipboardConfig, env: Option<&str>) -> bool {
     }
 }
 
-/// 早于这个时间（Unix 毫秒）的条目已过保留期；`None` 表示永久保留。
+/// 早于这个时间（Unix 毫秒）的条目已过保留期；`None` 表示不按时间清理。
 fn retention_cutoff(config: &ClipboardConfig, now_ms: i64) -> Option<i64> {
-    let days = i64::from(config.retention_days?);
-    Some(now_ms - days * 86_400_000)
+    let days = i64::from(config.retention_days()?);
+    Some(now_ms - days * DAY_MS)
+}
+
+fn three_days_ago(now_ms: i64) -> i64 {
+    now_ms - i64::from(ClipboardConfig::MIN_RETENTION_DAYS) * DAY_MS
 }
 
 /// 筛选名 → 类型，中英两种名字都认；未知（如 `find` 重放时传空串）按「全部」。
@@ -1373,7 +1410,7 @@ mod tests {
 
     #[test]
     fn retention_prunes_index_and_store() {
-        // 保留天数到期的条目要同时从搜索结果和磁盘消失；None（永久）不能删任何东西。
+        // 保留天数到期的条目要同时从搜索结果和磁盘消失；未超预算时 None 跳过清理。
         let dir = TempDir::new("retention");
         let provider = provider_with(&dir, &[]);
         {
@@ -1393,6 +1430,11 @@ mod tests {
         let forever = ClipboardConfig::default();
         assert_eq!(retention_cutoff(&forever, 1_000), None);
         assert_eq!(provider.inner.prune(&forever).unwrap(), 0);
+        let legacy = ClipboardConfig {
+            retention_days: Some(1),
+            ..ClipboardConfig::default()
+        };
+        assert_eq!(retention_cutoff(&legacy, 4 * DAY_MS), Some(DAY_MS));
 
         let week = ClipboardConfig {
             retention_days: Some(7),

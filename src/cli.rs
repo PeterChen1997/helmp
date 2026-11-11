@@ -456,7 +456,9 @@ pub(crate) fn outcome_text(outcome: Outcome) -> String {
                     | Block::Code(text)
                     | Block::Caption(text)
                     | Block::Result { text, .. } => lines.push(text),
-                    Block::Quote { label, text } => lines.push(format!("{label}{}{text}", tr("：", ": "))),
+                    Block::Quote { label, text } | Block::Markdown { label, text } => {
+                        lines.push(format!("{label}{}{text}", tr("：", ": ")))
+                    }
                     Block::Image(path) => {
                         lines.push(trf!("[图片 {}]", "[Image {}]", path.display()))
                     }

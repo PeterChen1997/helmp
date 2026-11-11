@@ -3,7 +3,7 @@
 //! 流程：截图命令返回 `Outcome::Capture` → 面板已收起 → [`open`] 截下每块屏（[`freeze`]）→
 //! 每块屏一个铺满整屏的遮罩窗口（[`overlay`]），显示冻结的画面、选区外压暗。
 //! - 截图模式：松开鼠标后选区留在原地，可拖控制点调整、在里面拖动平移；选区右下角外侧是工具栏
-//!   「保存、复制、钉图、识别文字、关闭」。回车 / 选区里双击 = 默认动作（复制；「截图并保存」是保存），
+//!   可标注和打马赛克，操作按钮依次是「保存、钉图、识别文字、关闭、复制」。回车 / 选区里双击 = 默认动作（复制；「截图并保存」是保存），
 //!   ⌘C 复制，⌘S 保存，Esc 关闭，右键取消选区（没有选区时右键关闭）。
 //! - 识别文字模式：松开鼠标立即识别，结果显示在选区旁的浮窗里（[`result`]），文字自动复制。
 //! - 钉图（[`pin`]）：把选区原地变成置顶的无边框小窗，可拖动，悬停出工具栏，Esc / 双击关闭，可以钉多张。
@@ -14,30 +14,30 @@
 //! 副作用都过演练开关：`HELMP_DRY_RUN=1` 时复制只记一行日志，不碰用户剪贴板。
 //! 图形自检（`HELMP_SELF_TEST`）时窗口都在屏幕外、不激活 Helmp，另存为不弹面板、直接存进默认目录。
 
+mod annotation;
+mod composite;
 mod freeze;
 mod geometry;
 mod native;
 mod overlay;
 mod pin;
+mod preview;
 mod result;
+mod screen_capture_kit;
 mod selector;
 mod toast;
+mod toolbar;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
-use gpui_kit::*;
-use objc2::AnyThread as _;
-use objc2::rc::autoreleasepool;
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
-use objc2_core_graphics::CGImage;
-use objc2_foundation::{NSData, NSDictionary, NSPoint, NSRect, NSSize};
-
+use anyhow::Context as _;
+use composite::{MosaicSource, crop_png};
 use freeze::Frozen;
 pub use freeze::fixture;
-use geometry::{PixelRect, Rect};
+use geometry::Rect;
+use gpui_kit::*;
 use selector::Selector;
 
 use crate::i18n::{tr, trf};
@@ -85,12 +85,53 @@ pub struct Session {
     pub mode: Mode,
     pub screens: Vec<Frozen>,
     pub selectors: Vec<Selector>,
+    editor: annotation::Editor,
+    /// 当前屏的取样图，None 表示后台正在读取。
+    mosaic: Option<(usize, Option<Arc<MosaicSource>>)>,
     pub overlays: Vec<AnyWindowHandle>,
     /// 正在裁图、等另存为面板：重复的操作忽略（连按两次回车不会复制两次）。
     pub busy: bool,
 }
 
 impl Session {
+    fn mosaic(&self, index: usize) -> Option<&Arc<MosaicSource>> {
+        self.mosaic
+            .as_ref()
+            .filter(|(ix, _)| *ix == index)
+            .and_then(|(_, source)| source.as_ref())
+    }
+
+    fn select_tool(
+        &mut self,
+        index: usize,
+        tool: Option<annotation::Tool>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.drawing() {
+            return;
+        }
+        self.editor.tool = tool.filter(|tool| Some(*tool) != self.editor.tool);
+        if self.editor.tool != Some(annotation::Tool::Mosaic)
+            || self.mosaic.as_ref().is_some_and(|(ix, _)| *ix == index)
+        {
+            return;
+        }
+        self.mosaic = Some((index, None));
+        let screen = self.screens[index].clone();
+        cx.spawn(async move |session, cx: &mut AsyncApp| {
+            let source = cx
+                .background_spawn(async move { MosaicSource::new(&screen.image, screen.scale) })
+                .await;
+            let _ = session.update(cx, |session, cx| {
+                if matches!(session.mosaic, Some((ix, None)) if ix == index) {
+                    session.mosaic = source.ok().map(|source| (index, Some(Arc::new(source))));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// 选好的选区在哪块屏、是哪一块（同一时刻只有一块屏有选区）。
     pub fn selected(&self) -> Option<(usize, Rect)> {
         self.selectors
@@ -152,7 +193,7 @@ fn log(cx: &mut App, line: String) {
 }
 
 /// 打开截图界面。已经在截图时不重复打开。
-pub fn open(mode: Mode, cx: &mut App) {
+pub fn open(mode: Mode, panel_hidden_at: Option<Instant>, cx: &mut App) {
     let captures = state(cx);
     if captures.session.is_some() || captures.opening {
         return;
@@ -165,23 +206,26 @@ pub fn open(mode: Mode, cx: &mut App) {
         state(cx).opening = false;
         return;
     };
+    log(cx, format!("open {}", mode.name()));
     let screens = freeze::screens(mtm);
     let dir = freeze::session_dir();
-    log(cx, format!("open {}", mode.name()));
+    crate::trace::log("capture: screens ready");
     cx.spawn(async move |cx: &mut AsyncApp| {
-        if !offscreen() {
-            // 面板刚收起：等窗口服务器把它从屏幕上撤掉再截，免得冻结的画面里还留着面板。
-            cx.background_executor()
-                .timer(Duration::from_millis(80))
-                .await;
-        }
         // 用户按下快捷键正等着：高优先级，且不让系统把此刻没有可见窗口的 Helmp 当后台 App 降速（App Nap）。
         let _awake = cx.background_executor().prevent_app_nap("冻结屏幕");
+        if let Some(hidden_at) = panel_hidden_at.filter(|_| !offscreen()) {
+            // 给窗口服务器时间撤下面板。面板已经收起的快捷键无需等待。
+            let remaining = Duration::from_millis(80).saturating_sub(hidden_at.elapsed());
+            if !remaining.is_zero() {
+                cx.background_executor().timer(remaining).await;
+            }
+        }
         let frozen = cx
             .background_executor()
             .spawn_with_priority(Priority::High, async move { freeze::grab(screens, &dir) })
             .await;
         cx.update(|cx| {
+            crate::trace::log("capture: frozen");
             state(cx).opening = false;
             match frozen {
                 Ok(frozen) => open_overlays(mode, frozen, cx),
@@ -220,6 +264,8 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         mode,
         selectors: frozen.iter().map(|f| Selector::new(f.bounds())).collect(),
         screens: frozen.clone(),
+        editor: Default::default(),
+        mosaic: None,
         overlays: Vec::new(),
         busy: false,
     });
@@ -266,7 +312,7 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         let image = screen.image.clone();
         let _ = handle.update(cx, |_, window, _| {
             native::setup(window, native::Kind::Overlay, frame, offscreen);
-            native::underlay_file(window, &image, (frame.w, frame.h));
+            native::underlay_image(window, &image, (frame.w, frame.h));
         });
         let contains = mouse.0 >= frame.x
             && mouse.0 <= frame.x + frame.w
@@ -284,6 +330,7 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         let _ = handle.update(cx, |_, window, _| native::present(window, key, offscreen));
     }
     state(cx).session = Some(session);
+    crate::trace::log("capture: overlays ready");
 }
 
 fn remove(handle: AnyWindowHandle, cx: &mut App) {
@@ -331,19 +378,31 @@ pub fn act(action: Act, cx: &mut App) {
         close_session(true, cx);
         return;
     }
-    let picked = session.update(cx, |session, _| {
+    let picked = session.update(cx, |session, cx| {
         if session.busy {
             return None;
         }
         let (ix, rect) = session.selected()?;
+        if session.editor.drawing() {
+            return None;
+        }
         session.busy = true;
-        Some((session.screens[ix].clone(), rect))
+        cx.notify();
+        Some((
+            session.screens[ix].clone(),
+            rect,
+            session.editor.marks(),
+            session.mosaic(ix).cloned(),
+        ))
     });
-    let Some((frozen, rect)) = picked else {
+    let Some((frozen, rect, marks, mosaic)) = picked else {
         return;
     };
     let Some(crop) = geometry::pixel_crop(rect, frozen.scale, frozen.pixels) else {
-        session.update(cx, |session, _| session.busy = false);
+        session.update(cx, |session, cx| {
+            session.busy = false;
+            cx.notify();
+        });
         return;
     };
     let image = frozen.image.clone();
@@ -352,9 +411,14 @@ pub fn act(action: Act, cx: &mut App) {
         let _awake = cx.background_executor().prevent_app_nap("裁剪截图");
         let png = cx
             .background_executor()
-            .spawn_with_priority(Priority::High, async move { crop_png(&image, crop, scale) })
+            .spawn_with_priority(Priority::High, async move {
+                crop_png(&image, crop, scale, &marks, mosaic.as_deref())
+            })
             .await;
         cx.update(|cx| {
+            if state(cx).session.as_ref() != Some(&session) {
+                return;
+            }
             let png = match png {
                 Ok(png) => png,
                 Err(err) => {
@@ -452,7 +516,10 @@ fn finish_save(shot: &Shot, path: Option<PathBuf>, from_overlay: bool, cx: &mut 
         // 取消另存为：回到选区，什么都没丢。
         log(cx, "save cancelled".into());
         if from_overlay && let Some(session) = state(cx).session.clone() {
-            session.update(cx, |session, _| session.busy = false);
+            session.update(cx, |session, cx| {
+                session.busy = false;
+                cx.notify();
+            });
             set_overlays_visible(true, cx);
         }
         return;
@@ -503,37 +570,6 @@ fn set_overlays_visible(visible: bool, cx: &mut App) {
             native::set_visible(window, visible, offscreen)
         });
     }
-}
-
-/// 从整屏截图里裁出 `rect`（像素），编码成 PNG。走 ImageIO（NSBitmapImageRep / CGImage）：
-/// 保留截图的色彩空间（P3 屏截出来的颜色不偏），并按倍数写入 DPI，Retina 截图粘贴到别处仍是原来的点尺寸。
-pub fn crop_png(image: &Path, rect: PixelRect, scale: f64) -> Result<Vec<u8>> {
-    let bytes = std::fs::read(image)
-        .with_context(|| trf!("读取 {}", "Couldn't read {}", image.display()))?;
-    autoreleasepool(|_| {
-        let rep = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(&bytes))
-            .with_context(|| tr("截图无法解码", "Couldn't decode the screenshot"))?;
-        let full = rep
-            .CGImage()
-            .with_context(|| tr("截图无法解码", "Couldn't decode the screenshot"))?;
-        let area = NSRect::new(
-            NSPoint::new(f64::from(rect.x), f64::from(rect.y)),
-            NSSize::new(f64::from(rect.w), f64::from(rect.h)),
-        );
-        let cropped = CGImage::with_image_in_rect(Some(&full), area)
-            .with_context(|| tr("裁剪截图失败", "Couldn't crop the screenshot"))?;
-        let out = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cropped);
-        out.setSize(NSSize::new(
-            f64::from(rect.w) / scale,
-            f64::from(rect.h) / scale,
-        ));
-        // SAFETY: properties 传空字典即可。
-        let png = unsafe {
-            out.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
-        }
-        .with_context(|| tr("PNG 编码失败", "Couldn't encode the image as PNG"))?;
-        Ok(png.to_vec())
-    })
 }
 
 /// 图形自检：此刻该往哪个窗口送按键和鼠标（遮罩 → 识别结果 → 最新的钉图）。
@@ -588,12 +624,15 @@ mod tests {
     // gpui_kit::* 里也有一个 `test` 属性宏，经 `super::*` 引入后会遮住标准库的。
     use core::prelude::v1::test;
 
+    use super::geometry::PixelRect;
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn crop_keeps_full_pixel_resolution() {
         // 裁出来的必须是选区里的原始像素（Retina 下是点数的 2 倍），而不是按点缩小后的糊图。
         let fixture = crate::providers::screenshot::ocr::tests::FIXTURE;
+        let image = composite::load_image(Path::new(fixture)).unwrap();
         let (w, h) = freeze::png_size(&std::fs::read(fixture).unwrap()).unwrap();
         let rect = PixelRect {
             x: 2,
@@ -601,7 +640,7 @@ mod tests {
             w: w / 2,
             h: h / 2,
         };
-        let png = crop_png(Path::new(fixture), rect, 2.0).unwrap();
+        let png = crop_png(&image, rect, 2.0, &[], None).unwrap();
         assert_eq!(freeze::png_size(&png), Some((w / 2, h / 2)));
         // 裁剪框超出图片：系统会裁到图内，不会崩。
         let edge = PixelRect {
@@ -611,10 +650,10 @@ mod tests {
             h: 50,
         };
         assert_eq!(
-            freeze::png_size(&crop_png(Path::new(fixture), edge, 1.0).unwrap()),
+            freeze::png_size(&crop_png(&image, edge, 1.0, &[], None).unwrap()),
             Some((10, 10))
         );
-        assert!(crop_png(Path::new("/nonexistent/helmp.png"), rect, 1.0).is_err());
+        assert!(composite::load_image(Path::new("/nonexistent/helmp.png")).is_err());
     }
 
     #[test]

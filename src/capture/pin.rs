@@ -1,6 +1,7 @@
-//! 钉图：选区原地变成一张置顶的无边框小窗（位置、大小和选区完全一样），可以钉很多张。
+//! 钉图：选区原地变成一张置顶的无边框小窗，只用 AppKit 的窗口阴影。
+//! 图片的位置、大小和选区完全一样，可以钉很多张。
 //!
-//! 拖动窗口任意处移动它；鼠标移上去时右下角出现工具栏（复制、保存、识别文字、关闭）；
+//! 拖动窗口任意处移动它；鼠标移上去时右下角出现工具栏（保存、识别文字、关闭、复制）；
 //! Esc 或双击关闭；获得焦点后 ⌘C 复制、⌘S 保存。点它不会激活 Helmp，不打断用户在别的 App 里的输入。
 
 use std::rc::Rc;
@@ -8,7 +9,7 @@ use std::rc::Rc;
 use gpui_kit::*;
 
 use super::geometry::{self, Rect};
-use super::overlay::button_row;
+use super::toolbar::{ActionButton, button_row};
 use super::{Act, Shot, log, native, offscreen, state};
 use crate::i18n::tr;
 use crate::style;
@@ -20,17 +21,11 @@ pub struct Pin {
 }
 
 /// 钉图的工具栏按钮（遮罩工具栏去掉「钉图」）。
-const BUTTONS: [(Act, &str, &str, &str, &str); 4] = [
-    (Act::Copy, "copy", "复制", "Copy", "⌘C"),
-    (Act::Save, "download", "保存", "Save", "⌘S"),
-    (
-        Act::Recognize,
-        "scan-text",
-        "识别文字",
-        "Recognize Text",
-        "",
-    ),
-    (Act::Close, "x", "关闭", "Close", "Esc"),
+const BUTTONS: [ActionButton; 4] = [
+    super::toolbar::ACTIONS[0],
+    super::toolbar::ACTIONS[2],
+    super::toolbar::ACTIONS[3],
+    super::toolbar::ACTIONS[4],
 ];
 
 /// 钉图窗口的位置：就是选区原来的位置（AppKit 全局坐标）。
@@ -161,12 +156,6 @@ impl Render for Pin {
             .relative()
             .track_focus(&self.focus)
             .cursor(CursorStyle::OpenHand)
-            .border_1()
-            .border_color(if self.hovered {
-                pal.accent
-            } else {
-                pal.separator
-            })
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.hovered = *hovered;
                 cx.notify();

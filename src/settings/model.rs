@@ -289,13 +289,17 @@ pub fn language_label(language: Language) -> &'static str {
 
 // ---------------------------------------------------------------- 剪贴板
 
-/// 保留时长：(天数, 中文名, 英文名)，None = 永久。
+/// 按时间清理的保留时长：(天数, 中文名, 英文名)。
 pub const RETENTION_OPTIONS: [(Option<u32>, &str, &str); 5] = [
-    (Some(1), "1 天", "1 day"),
+    (
+        Some(crate::config::ClipboardConfig::MIN_RETENTION_DAYS),
+        "3 天",
+        "3 days",
+    ),
     (Some(7), "7 天", "7 days"),
     (Some(30), "30 天", "30 days"),
     (Some(90), "90 天", "90 days"),
-    (None, "永久", "Forever"),
+    (None, "不按时间清理", "No time limit"),
 ];
 
 pub fn retention_label(days: Option<u32>) -> String {
@@ -304,9 +308,8 @@ pub fn retention_label(days: Option<u32>) -> String {
         .find(|(value, _, _)| *value == days)
         .map(|(_, zh, en)| tr(zh, en).to_string())
         .unwrap_or_else(|| match days {
-            Some(1) => tr("1 天", "1 day").to_string(),
             Some(days) => trf!("{days} 天", "{days} days"),
-            None => tr("永久", "Forever").to_string(),
+            None => tr("不按时间清理", "No time limit").to_string(),
         })
 }
 
@@ -961,7 +964,7 @@ mod tests {
             assert_eq!(reset_label(90), "After 90 seconds");
             assert_eq!(reset_label(RESET_NEVER), "Never");
             assert_eq!(reset_label(45), "After 45 seconds");
-            assert_eq!(retention_label(None), "Forever");
+            assert_eq!(retention_label(None), "No time limit");
             assert_eq!(retention_label(Some(14)), "14 days");
             assert_eq!(panel_screen_label(PanelScreen::Primary), "Main screen");
             assert_eq!(extension_meta("scripts").kind, "Script");
@@ -984,9 +987,10 @@ mod tests {
     }
 
     #[test]
-    fn retention_none_means_forever() {
-        // None 是「永久」：显示成别的值会让用户以为历史会被删。
-        assert_eq!(retention_label(None), "永久");
+    fn retention_options_start_at_three_days() {
+        assert_eq!(retention_label(None), "不按时间清理");
+        assert_eq!(RETENTION_OPTIONS[0].0, Some(3));
+        assert_eq!(retention_label(Some(3)), "3 天");
         assert_eq!(retention_label(Some(7)), "7 天");
         assert_eq!(retention_label(Some(14)), "14 天");
     }

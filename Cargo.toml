@@ -1,6 +1,6 @@
 [package]
 name = "helmp"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 rust-version = "1.99"
 description = "Helmp — a native macOS launcher with an agent switcher"
@@ -9,14 +9,17 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+async-channel = "2"
+futures-lite = "2"
 gpui-kit = "=0.9.0"
 global-hotkey = "0.9.0"
 objc2 = "0.6.5"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDate", "NSDateFormatter", "NSDictionary", "NSError", "NSFormatter", "NSGeometry", "NSLocale", "NSString", "NSURL", "block2", "NSBundle", "NSValue"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAppearance", "NSBezierPath", "NSBitmapImageRep", "NSColor", "NSGraphics", "NSImage", "NSImageRep", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "NSWorkspace", "block2", "objc2-core-foundation", "objc2-core-graphics", "NSAlert", "NSButton", "NSControl", "NSEvent", "NSFont", "NSImageView", "NSMenu", "NSMenuItem", "NSMenuItemBadge", "NSScreen", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSText", "NSTextField", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGlassEffectView", "NSGraphicsContext", "NSColorSampler", "NSColorSpace", "NSCell"] }
 raw-window-handle = "0.6.2"
 block2 = "0.6.2"
-objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay", "CGError", "CGImage"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGWindow", "CGDirectDisplay", "CGError", "CGImage", "CGBitmapContext", "CGColor", "CGColorSpace", "CGContext", "CGPath"] }
 objc2-vision = { version = "0.3.2", default-features = false, features = ["std", "VNRequest", "VNRequestHandler", "VNRecognizeTextRequest", "VNDetectBarcodesRequest", "VNObservation", "VNTypes", "objc2-core-foundation"] }
 notify = "8.2.1"
 pinyin = { version = "0.11.0", default-features = false, features = ["plain", "heteronym"] }

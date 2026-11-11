@@ -233,13 +233,22 @@ impl Default for TranslateConfig {
 #[serde(default)]
 pub struct ClipboardConfig {
     pub enabled: bool,
-    /// 保留天数；None = 永久。
+    /// 按时间清理的保留天数；None = 不按时间清理。
     pub retention_days: Option<u32>,
     pub record_images: bool,
     pub skip_concealed: bool,
     /// 不记录这些应用复制的内容（bundle id）。
     pub ignore_apps: Vec<String>,
     pub auto_paste: bool,
+}
+
+impl ClipboardConfig {
+    pub const MIN_RETENTION_DAYS: u32 = 3;
+
+    pub fn retention_days(&self) -> Option<u32> {
+        self.retention_days
+            .map(|days| days.max(Self::MIN_RETENTION_DAYS))
+    }
 }
 
 impl Default for ClipboardConfig {

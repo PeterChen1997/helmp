@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use super::store::{ImageFormat, NewClip, Source};
+use super::store::{ImageFormat, MAX_BYTES, NewClip, Source};
 use crate::config::ClipboardConfig;
 
 /// 轮询间隔。
@@ -37,8 +37,8 @@ pub trait Pasteboard {
     /// 文件 URL 对应的本地路径（Finder 复制文件）。
     fn file_paths(&self) -> Vec<PathBuf>;
     fn text(&self) -> Option<String>;
-    /// PNG 优先，其次 TIFF。
-    fn image(&self) -> Option<Image>;
+    /// PNG 优先，其次 TIFF；超过上限时返回字节数，不解码。
+    fn image(&self) -> Option<Result<Image, u64>>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +59,11 @@ pub enum Read {
     Empty,
     /// 按配置不记录（关闭、忽略的 App、不记录图片），附原因。
     Ignored(&'static str),
+    /// 只记类型和字节数，不写入历史。
+    Oversize {
+        kind: &'static str,
+        bytes: u64,
+    },
     Clip(NewClip),
 }
 
@@ -66,7 +71,7 @@ pub enum Read {
 ///
 /// 文件优先于文本：Finder 复制文件时还会附带文件名文本和图标 TIFF，那些不是用户想要的。
 /// 文本优先于图片：Excel / Keynote 复制时会附带一张渲染图，用户要的是文字。
-pub fn read(pasteboard: &dyn Pasteboard, skip_concealed: bool) -> Read {
+fn read(pasteboard: &dyn Pasteboard, skip_concealed: bool, record_images: bool) -> Read {
     let types = pasteboard.types();
     let private = |ty: &&String| {
         TRANSIENT_TYPES.contains(&ty.as_str())
@@ -78,20 +83,55 @@ pub fn read(pasteboard: &dyn Pasteboard, skip_concealed: bool) -> Read {
     }
     let files = pasteboard.file_paths();
     if !files.is_empty() {
+        if !record_images {
+            return Read::Ignored("不记录图片和文件");
+        }
+        // Finder 提供的是引用。只读普通文件的大小，文件夹不递归扫描。
+        let mut file_bytes = 0u64;
+        let mut path_bytes = 0u64;
+        for path in &files {
+            path_bytes += path.to_string_lossy().len() as u64;
+            let bytes = std::fs::metadata(path)
+                .ok()
+                .filter(|metadata| metadata.is_file())
+                .map_or(0, |metadata| metadata.len());
+            file_bytes = file_bytes.saturating_add(bytes);
+        }
+        let bytes = file_bytes.max(path_bytes + files.len() as u64 - 1);
+        if bytes > MAX_BYTES {
+            return Read::Oversize {
+                kind: "files",
+                bytes,
+            };
+        }
         return Read::Clip(NewClip::Files(files));
     }
     if let Some(text) = pasteboard.text().filter(|text| !text.is_empty()) {
+        let bytes = text.len() as u64;
+        if bytes > MAX_BYTES {
+            return Read::Oversize {
+                kind: "text",
+                bytes,
+            };
+        }
         return Read::Clip(NewClip::Text(text));
     }
-    if let Some(image) = pasteboard.image() {
-        return Read::Clip(NewClip::Image {
+    if !record_images {
+        return Read::Ignored("不记录图片和文件");
+    }
+    match pasteboard.image() {
+        Some(Ok(image)) => Read::Clip(NewClip::Image {
             bytes: image.bytes,
             format: image.format,
             width: image.width,
             height: image.height,
-        });
+        }),
+        Some(Err(bytes)) => Read::Oversize {
+            kind: "image",
+            bytes,
+        },
+        None => Read::Empty,
     }
-    Read::Empty
 }
 
 /// 一个轮询周期。`last` 为 `None` 时（启动）无条件读一次，即「启动时采集当前剪贴板」。
@@ -112,10 +152,7 @@ pub fn poll(
         *last = Some(before);
         return Read::Ignored(reason);
     }
-    let read = match read(pasteboard, config.skip_concealed) {
-        Read::Clip(clip) if !admits(config, &clip) => Read::Ignored("不记录图片和文件"),
-        other => other,
-    };
+    let read = read(pasteboard, config.skip_concealed, config.record_images);
     if pasteboard.change_count() != before {
         // 读的过程中剪贴板又被改了，读到的可能是新旧混合，丢掉等下个周期。
         return Read::Unchanged;
@@ -135,11 +172,6 @@ pub fn gate(config: &ClipboardConfig, source: Option<&Source>) -> Option<&'stati
         .iter()
         .any(|ignored| ignored.eq_ignore_ascii_case(bundle))
         .then_some("来源 App 在忽略列表里")
-}
-
-/// 读到内容之后的判断：`record_images` 关闭时图片和文件都不记录（设置里写的是「记录图片和文件」）。
-fn admits(config: &ClipboardConfig, clip: &NewClip) -> bool {
-    config.record_images || matches!(clip, NewClip::Text(_))
 }
 
 #[cfg(test)]
@@ -195,9 +227,16 @@ pub(crate) mod tests {
             self.content_read();
             self.text.borrow().clone()
         }
-        fn image(&self) -> Option<Image> {
+        fn image(&self) -> Option<Result<Image, u64>> {
             self.content_read();
-            self.image.borrow().clone()
+            self.image.borrow().as_ref().map(|image| {
+                let bytes = image.bytes.len() as u64;
+                if bytes > MAX_BYTES {
+                    Err(bytes)
+                } else {
+                    Ok(image.clone())
+                }
+            })
         }
     }
 
@@ -212,7 +251,7 @@ pub(crate) mod tests {
         ] {
             let pb = FakePasteboard::default();
             pb.set_text("hunter2", &[marker]);
-            assert_eq!(read(&pb, true), Read::Private(marker.to_string()));
+            assert_eq!(read(&pb, true, true), Read::Private(marker.to_string()));
             assert_eq!(pb.content_reads.get(), 0, "{marker} 命中后不应读取内容");
         }
     }
@@ -224,11 +263,11 @@ pub(crate) mod tests {
         let pb = FakePasteboard::default();
         pb.set_text("hunter2", &["org.nspasteboard.ConcealedType"]);
         assert_eq!(
-            read(&pb, false),
+            read(&pb, false, true),
             Read::Clip(NewClip::Text("hunter2".into()))
         );
         pb.set_text("x", &[TRANSIENT_TYPE]);
-        assert_eq!(read(&pb, false), Read::Private(TRANSIENT_TYPE.into()));
+        assert_eq!(read(&pb, false, true), Read::Private(TRANSIENT_TYPE.into()));
     }
 
     fn source(bundle: &str) -> Source {
@@ -301,9 +340,37 @@ pub(crate) mod tests {
         pb.set_text("report.pdf", &["public.file-url"]);
         *pb.files.borrow_mut() = vec![PathBuf::from("/tmp/report.pdf")];
         assert_eq!(
-            read(&pb, true),
+            read(&pb, true, true),
             Read::Clip(NewClip::Files(vec![PathBuf::from("/tmp/report.pdf")]))
         );
+    }
+
+    #[test]
+    fn finder_copy_logs_oversized_files_without_reading_their_contents() {
+        let dir = super::super::store::tests::TempDir::new("oversize");
+        let path = dir.0.join("large-file");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_BYTES).unwrap();
+
+        let pb = FakePasteboard::default();
+        pb.set_text("large-file", &["public.file-url"]);
+        *pb.files.borrow_mut() = vec![path.clone()];
+        assert_eq!(
+            read(&pb, true, true),
+            Read::Clip(NewClip::Files(vec![path]))
+        );
+
+        file.set_len(MAX_BYTES + 1).unwrap();
+        let mut last = None;
+        let config = ClipboardConfig::default();
+        assert_eq!(
+            poll(&pb, &mut last, &config, None),
+            Read::Oversize {
+                kind: "files",
+                bytes: MAX_BYTES + 1,
+            }
+        );
+        assert_eq!(poll(&pb, &mut last, &config, None), Read::Unchanged);
     }
 
     #[test]
@@ -318,7 +385,7 @@ pub(crate) mod tests {
             height: 5,
         });
         assert!(matches!(
-            read(&pb, true),
+            read(&pb, true, true),
             Read::Clip(NewClip::Image { width: 4, .. })
         ));
     }

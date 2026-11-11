@@ -133,13 +133,14 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> Tail {
             }
             Some("assistant" | "user") => {
                 let blocks = value["message"]["content"].as_array();
+                let mut reply = Vec::new();
                 for block in blocks.into_iter().flatten() {
                     match block["type"].as_str() {
                         Some("text") if value["type"] == "assistant" => {
                             if let Some(text) =
                                 block["text"].as_str().filter(|t| !t.trim().is_empty())
                             {
-                                last_message = Some(state::one_line(text, 200));
+                                reply.push(text);
                             }
                         }
                         Some("tool_use") => {
@@ -158,6 +159,9 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> Tail {
                         }
                         _ => {}
                     }
+                }
+                if !reply.is_empty() {
+                    last_message = Some(reply.join("\n\n"));
                 }
             }
             _ => {}
@@ -384,6 +388,11 @@ fn to_session(cached: &Cached) -> Session {
         cwd,
         branch,
         last_activity_ms,
+        status_revision: entry
+            .status_updated_at
+            .or(entry.updated_at)
+            .unwrap_or(last_activity_ms)
+            .to_string(),
         last_message,
         jump,
     }

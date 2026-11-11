@@ -14,6 +14,7 @@ use gpui_kit::component::input::{
     Input, InputEvent, InputState, Position, Textarea, TextareaState,
 };
 use gpui_kit::component::skeleton::Skeleton;
+use gpui_kit::component::text::TextView;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -23,6 +24,7 @@ use crate::provider::{
     Accessory, ActionInput, Block, Detail, FieldKind, Form, Icon as ItemIcon, Item, NamedAction,
     Outcome, Scope,
 };
+use crate::providers::agents;
 use crate::style::{self, Palette};
 
 pub const PANEL_SIZE: Size<Pixels> = size(px(720.), px(520.));
@@ -222,6 +224,10 @@ pub struct Launcher {
     scope: Option<ActiveScope>,
     items: Vec<Item>,
     selected: usize,
+    /// 实际渲染在 Agent 详情里的未读轮次；离开这条详情时才记为已读。
+    viewed_completion: Option<(String, String)>,
+    /// 会话信息默认折叠，展开只对当前选中的会话有效。
+    expanded_agent_info: Option<String>,
     /// 每次发起查询加一，后台结果回来时版本不对就丢弃。
     revision: u64,
     result: Option<ResultView>,
@@ -344,6 +350,8 @@ impl Launcher {
             scope: None,
             items: Vec::new(),
             selected: 0,
+            viewed_completion: None,
+            expanded_agent_info: None,
             revision: 0,
             result: None,
             form: None,
@@ -400,7 +408,7 @@ impl Launcher {
                     | Block::Code(text)
                     | Block::Caption(text)
                     | Block::Result { text, .. } => text.clone(),
-                    Block::Quote { text, .. } => text.clone(),
+                    Block::Quote { text, .. } | Block::Markdown { text, .. } => text.clone(),
                     Block::Image(path) => path.display().to_string(),
                 })
                 .collect::<Vec<_>>()
@@ -519,10 +527,13 @@ impl Launcher {
     fn show_inner(&mut self, allow_reset: bool, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.show");
         self.visible = true;
-        crate::providers::agents::set_panel_visible(true);
+        agents::set_panel_visible(true);
         // 为展示结果重新弹出（allow_reset = false）时记下时刻：紧接着的焦点抖动不该把结果收起。
         self.reshown_at = (!allow_reset).then(Instant::now);
         let hidden_for = self.hidden_at.take().map(|at| at.elapsed());
+        if hidden_for.is_some() && self.scope_id() == Some(agents::SCOPE_ID) {
+            self.fresh_list = true;
+        }
         let executed = std::mem::take(&mut self.executed);
         if allow_reset && should_reset(hidden_for, reset_after(), executed) {
             crate::trace::log("reset query");
@@ -541,7 +552,9 @@ impl Launcher {
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::trace::log("launcher.hide");
         self.visible = false;
-        crate::providers::agents::set_panel_visible(false);
+        agents::set_panel_visible(false);
+        self.finish_completion_view();
+        self.expanded_agent_info = None;
         self.actions_open = false;
         self.hidden_at = Some(Instant::now());
         crate::panel::hide(window);
@@ -549,6 +562,33 @@ impl Launcher {
     }
 
     // ---------- 状态变化 ----------
+
+    fn finish_completion_view(&mut self) -> bool {
+        self.viewed_completion
+            .take()
+            .is_some_and(|(id, revision)| agents::mark_read(id, revision))
+    }
+
+    fn sync_completion_view(&mut self, cx: &mut Context<Self>) {
+        let item = self.selected_item().filter(|_| {
+            self.visible && !self.fresh_list && self.scope_id() == Some(agents::SCOPE_ID)
+        });
+        let same_session = item
+            .zip(self.viewed_completion.as_ref())
+            .is_some_and(|(item, (id, _))| item.id == *id);
+        let next = item.and_then(|item| {
+            let completion = item
+                .completion
+                .as_ref()
+                .filter(|completion| completion.unread)?;
+            item.detail.as_ref()?;
+            Some((item.id.clone(), completion.revision.clone()))
+        });
+        if !same_session && self.finish_completion_view() {
+            self.refresh(cx);
+        }
+        self.viewed_completion = next;
+    }
 
     /// 界面语言切换后（在设置窗口里切的，那时面板已隐藏），唤起时重取构造时固定下来的文案：
     /// 搜索框占位，以及当前范围的标签、占位与筛选名（筛选按下标保持不变）。结果随后由 `refresh` 重查。
@@ -1072,12 +1112,15 @@ impl Launcher {
         };
         // 表单视图在原地显示结果、标记了 keep_open 的动作原地刷新，都不隐藏面板；其他情况先隐藏再在后台执行。
         let keep_open = action.keeps_open();
-        if in_form || keep_open {
+        let panel_hidden_at = if in_form || keep_open {
             self.running = true;
             cx.notify();
+            None
         } else {
+            let was_visible = self.visible;
             self.hide(window, cx);
-        }
+            was_visible.then(Instant::now)
+        };
         if in_form {
             self.form_run += 1;
         }
@@ -1133,7 +1176,7 @@ impl Launcher {
                         Ok(Outcome::Capture(mode)) => {
                             this.executed = true;
                             // 面板已在执行前收起；截图界面要开新窗口，推迟到本次更新结束。
-                            cx.defer(move |cx| crate::capture::open(mode, cx));
+                            cx.defer(move |cx| crate::capture::open(mode, panel_hidden_at, cx));
                             return;
                         }
                         Ok(Outcome::Show(detail)) => detail,
@@ -1643,33 +1686,67 @@ fn render_detail(
     detail: &Detail,
     pal: &Palette,
     result_text: Option<&Entity<TextareaState>>,
+    item_id: &str,
+    agent_info: Option<Div>,
 ) -> Div {
+    let compact = agent_info.is_some();
     let mut pane = div()
         .flex()
         .flex_col()
-        .gap(px(16.))
+        .gap(px(if compact { 8. } else { 16. }))
         .flex_1()
         .min_w_0()
-        .px(px(26.))
-        .py(px(22.))
+        .px(px(if compact { 20. } else { 26. }))
+        .pt(px(if compact { 12. } else { 22. }))
+        .pb(px(if compact { 8. } else { 22. }))
         .overflow_hidden();
     if !detail.title.is_empty() || detail.icon != ItemIcon::None {
-        let mut heading = div().flex().flex_col().gap(px(4.)).min_w_0().child(
+        let title = div()
+            .text_size(px(if compact { 16. } else { 17. }))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(pal.fg)
+            .child(detail.title.clone());
+        let tag = detail
+            .tag
+            .as_ref()
+            .map(|(tag, tone)| chip(tag.clone(), *tone, pal, false));
+        let heading = if compact {
+            let full_title = detail.title.clone();
             div()
-                .text_size(px(17.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(pal.fg)
-                .child(detail.title.clone()),
-        );
-        if let Some((tag, tone)) = &detail.tag {
-            heading = heading.child(div().flex().child(chip(tag.clone(), *tone, pal, false)));
-        }
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    title
+                        .id("agent-title")
+                        .flex_1()
+                        .min_w_0()
+                        .line_height(px(19.))
+                        .line_clamp(2)
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(full_title.clone())
+                                .build(window, cx)
+                        }),
+                )
+                .children(tag.map(|tag| tag.max_w(relative(0.45)).truncate()))
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .min_w_0()
+                .child(title)
+                .children(tag.map(|tag| div().flex().child(tag)))
+        };
         pane = pane.child(
             div()
                 .flex()
+                .flex_none()
                 .items_center()
-                .gap(px(12.))
-                .child(icon_element(&detail.icon, px(40.), pal))
+                .gap(px(if compact { 8. } else { 12. }))
+                .child(icon_element(&detail.icon, px(if compact { 28. } else { 40. }), pal))
                 .child(heading),
         );
     }
@@ -1720,26 +1797,44 @@ fn render_detail(
                 .line_height(px(20.))
                 .text_color(pal.fg)
                 .child(text.clone()),
-            Block::Quote { label, text } => div()
-                .flex()
-                .flex_col()
-                .gap(px(4.))
-                .px(px(14.))
-                .py(px(12.))
-                .rounded(px(10.))
-                .bg(pal.card)
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(pal.muted)
-                        .child(label.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(pal.fg)
-                        .line_height(px(21.))
-                        .child(text.clone()),
-                ),
+            Block::Quote { label, text } => {
+                let card = detail_card(label, pal, compact);
+                let body = div()
+                    .text_color(pal.fg)
+                    .line_height(px(21.))
+                    .child(text.clone());
+                if compact {
+                    card.min_h_0().child(
+                        div()
+                            .id(SharedString::from(format!("agent-question:{item_id}")))
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .child(body),
+                    )
+                } else {
+                    card.child(body)
+                }
+            }
+            Block::Markdown { label, text } => detail_card(label, pal, compact).min_h_0().child(
+                div()
+                    .id(SharedString::from(format!("markdown-preview:{item_id}")))
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .text_color(pal.fg)
+                    .line_height(px(21.))
+                    .child(
+                        TextView::markdown("message", text.clone())
+                            // 打开会话预览不应访问回复里引用的图片地址。
+                            .image_source(|_| ImageSource::Custom(std::sync::Arc::new(|_, _| None)))
+                            .on_link_click(|url, _, _, cx| {
+                                if (url.starts_with("https://") || url.starts_with("http://"))
+                                    && crate::effects::dry("open", url.as_ref()).is_none()
+                                {
+                                    cx.open_url(url);
+                                }
+                            }),
+                    ),
+            ),
             // 有可选中的结果文字时图只当参照，缩成矮条，把高度让给文字。
             Block::Image(path) => div()
                 .flex()
@@ -1758,34 +1853,57 @@ fn render_detail(
                 ),
         });
     }
-    if !detail.metadata.is_empty() {
-        // 标签列固定宽、值列占满：两列平分时标签列太宽，「Last Activity」反被挤成两行。
-        let mut grid = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .pt(px(14.))
-            .border_t_1()
-            .border_color(pal.separator)
-            .text_size(px(12.5));
-        for (key, value) in &detail.metadata {
-            grid = grid.child(
-                div()
-                    .flex()
-                    .gap(px(12.))
-                    .child(
-                        div()
-                            .w(px(96.))
-                            .flex_none()
-                            .text_color(pal.muted)
-                            .child(key.clone()),
-                    )
-                    .child(div().flex_1().min_w_0().text_color(pal.fg).child(value.clone())),
-            );
-        }
-        pane = pane.child(div().mt_auto().child(grid));
+    if let Some(info) = agent_info {
+        pane = pane.child(info);
+    } else if !detail.metadata.is_empty() {
+        pane = pane.child(
+            div()
+                .flex_none()
+                .mt_auto()
+                .pt(px(14.))
+                .border_t_1()
+                .border_color(pal.separator)
+                .child(metadata_grid(&detail.metadata, pal, px(8.))),
+        );
     }
     pane
+}
+
+fn metadata_grid(metadata: &[(String, String)], pal: &Palette, gap: Pixels) -> Div {
+    // 固定标签列宽，值列可以折行显示完整路径。
+    div().flex().flex_col().gap(gap).text_size(px(12.5)).children(
+        metadata.iter().map(|(key, value)| {
+            div()
+                .flex()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .w(px(96.))
+                        .flex_none()
+                        .text_color(pal.muted)
+                        .child(key.clone()),
+                )
+                .child(div().flex_1().min_w_0().text_color(pal.fg).child(value.clone()))
+        }),
+    )
+}
+
+fn detail_card(label: &str, pal: &Palette, compact: bool) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .px(px(14.))
+        .py(px(if compact { 8. } else { 12. }))
+        .rounded(px(10.))
+        .bg(pal.card)
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(12.))
+                .text_color(pal.muted)
+                .child(label.to_owned()),
+        )
 }
 
 impl Launcher {
@@ -1825,6 +1943,7 @@ impl Launcher {
         let two_line = !item.subtitle.is_empty();
         div()
             .id(ElementId::Name(item.id.clone().into()))
+            .relative()
             .flex()
             .items_center()
             .gap(px(10.))
@@ -1839,6 +1958,29 @@ impl Launcher {
             .when(!on, |row| {
                 row.text_color(pal.fg).hover(|row| row.bg(pal.key_bg))
             })
+            .when(
+                self.scope_id() == Some(agents::SCOPE_ID)
+                    && item
+                        .completion
+                        .as_ref()
+                        .is_some_and(|completion| completion.unread),
+                |row| {
+                    row.child(
+                        div()
+                            .absolute()
+                            .left(px(2.))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(div().size(px(6.)).rounded_full().bg(if on {
+                                pal.selection_fg
+                            } else {
+                                pal.accent
+                            })),
+                    )
+                },
+            )
             .child(match &item.icon {
                 // 蓝色底块和选中行的底色几乎同色，选中时图标只剩一个白色符号、看不出底块：描一圈白边。
                 ItemIcon::Symbol {
@@ -2048,7 +2190,77 @@ impl Launcher {
             _ => None,
         });
         let state = text.map(|text| self.result_text_state(text, window, cx));
-        Some(render_detail(&detail, pal, state.as_ref()))
+        let agent_id = self
+            .selected_item()
+            .filter(|item| {
+                provider_of(&item.id) == Some(agents::SCOPE_ID)
+                    && item.detail.is_some()
+                    && self.result.as_ref().is_none_or(|result| item.id != result.item_id)
+            })
+            .map(|item| item.id.clone());
+        if self.expanded_agent_info != agent_id {
+            self.expanded_agent_info = None;
+        }
+        let agent_info = agent_id.map(|id| self.render_agent_info(&detail, id, pal, cx));
+        let item_id = self.selected_item().map_or("", |item| item.id.as_str());
+        Some(render_detail(&detail, pal, state.as_ref(), item_id, agent_info))
+    }
+
+    fn render_agent_info(
+        &self,
+        detail: &Detail,
+        id: String,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        use gpui_kit::component::{Icon, IconName};
+
+        let expanded = self.expanded_agent_info.as_ref() == Some(&id);
+        let chevron = if expanded {
+            IconName::ChevronDown
+        } else {
+            IconName::ChevronUp
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .mt_auto()
+            .pt(px(3.))
+            .border_t_1()
+            .border_color(pal.separator)
+            .when(expanded, |footer| {
+                footer.child(
+                    div()
+                        .id("agent-info-fields")
+                        .max_h(px(104.))
+                        .overflow_y_scroll()
+                        .px(px(4.))
+                        .py(px(3.))
+                        .child(metadata_grid(&detail.metadata, pal, px(4.))),
+                )
+            })
+            .child(
+                div()
+                    .id("agent-info-toggle")
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .h(px(24.))
+                    .px(px(4.))
+                    .rounded(px(5.))
+                    .text_size(px(12.))
+                    .text_color(pal.muted)
+                    .cursor_pointer()
+                    .hover(|row| row.bg(pal.key_bg).text_color(pal.fg))
+                    .child(Icon::new(chevron).text_color(pal.muted).size(px(12.)))
+                    .child(tr("会话信息", "Session Info"))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.expanded_agent_info = (this.expanded_agent_info.as_ref() != Some(&id))
+                            .then(|| id.clone());
+                        cx.notify();
+                    })),
+            )
     }
 
     /// 主结果文字的只读文本框；文字变了才重建（保留用户的选区）。
@@ -2355,11 +2567,15 @@ impl Render for Launcher {
         // 输入框等 GPUI Kit 组件跟随明暗（只在模式真的变化时切换全局主题）。
         crate::settings::sync_component_theme(window, cx);
         self.sync_form(window, cx);
+        self.sync_completion_view(cx);
         let pal = style::palette(window);
         let layout = self.layout();
 
         let body = match layout {
-            Layout::List => self.render_list(&pal, cx),
+            Layout::List => {
+                self.expanded_agent_info = None;
+                self.render_list(&pal, cx)
+            }
             Layout::Split => {
                 let list = self.render_list(&pal, cx);
                 let detail = self.render_current_detail(&pal, window, cx);

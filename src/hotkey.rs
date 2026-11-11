@@ -8,17 +8,17 @@
 //!   原因记成 [`Issue`]，设置窗口在对应行显示（同时写 stderr）。
 //! - 录制前的冲突判定（Helmp 自己的命令 / 系统快捷键 / 保留组合 / 其他 App）见 [`conflict`]。
 //!
-//! 事件在 Carbon 回调线程产生，这里用前台任务定时轮询 receiver，把命令投回 GPUI 主线程
-//! （Loungy 的做法）。菜单栏、面板通过 [`active`] / [`hint`] 读取真实生效的快捷键来显示。
+//! Carbon 回调通过异步通道唤醒 GPUI 主线程。菜单栏、面板通过 [`active`] / [`hint`] 读取真实生效的快捷键。
 
 pub mod conflict;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
+use futures_lite::future::race;
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use gpui_kit::*;
@@ -30,9 +30,12 @@ use crate::launcher::{Launcher, LauncherHandle};
 /// 唤起面板的默认快捷键，与 `config::General::default()` 一致。
 pub const DEFAULT_TOGGLE: &str = "alt-space";
 
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// 注册失败的绑定多少个轮询周期重试一次（50 ms × 60 = 3 秒）。
-const RETRY_EVERY: u32 = 60;
+const RETRY_INTERVAL: Duration = Duration::from_secs(3);
+
+enum Signal {
+    Pressed(u32),
+    Recheck,
+}
 
 /// 快捷键（或菜单项）触发的命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -751,7 +754,7 @@ fn report(problems: Vec<String>) {
     }
 }
 
-/// 注册全部快捷键并启动轮询任务。`manager` 归轮询任务所有、活到进程结束，
+/// 注册全部快捷键并启动事件任务。`manager` 归事件任务所有、活到进程结束，
 /// 否则 Carbon 侧的 handler 会被卸载。唤起快捷键一个都注册不上时返回错误。
 pub fn register_toggle(
     cx: &mut App,
@@ -791,55 +794,67 @@ pub fn register_toggle(
     }
     publish(&registry);
 
-    let (changed_tx, changed_rx) = mpsc::channel::<()>();
-    let _ = RECHECK.set(std::sync::Mutex::new(changed_tx.clone()));
-    crate::config::subscribe(move |_| {
-        // 接收端在轮询任务里，进程结束前一直存在；发送失败只可能发生在退出途中。
-        let _ = changed_tx.send(());
-    });
+    let (signals, receiver) = async_channel::unbounded();
+    let _ = RECHECK.set(signals.clone());
+    crate::config::subscribe(|_| recheck());
+    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+        if event.state == HotKeyState::Pressed {
+            let _ = signals.try_send(Signal::Pressed(event.id));
+        }
+    }));
 
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let receiver = GlobalHotKeyEvent::receiver();
-        let mut retry_ticks = 0u32;
+        let mut retry_at = retry_deadline(&registry);
         loop {
-            while let Ok(event) = receiver.try_recv() {
-                if event.state != HotKeyState::Pressed {
-                    continue;
+            let signal = match retry_at {
+                Some(at) => {
+                    let timer = cx
+                        .background_executor()
+                        .timer(at.saturating_duration_since(Instant::now()));
+                    race(receiver.recv(), async {
+                        timer.await;
+                        Ok(Signal::Recheck)
+                    })
+                    .await
                 }
-                match registry.command_for(event.id) {
-                    Some(command) => {
-                        crate::trace::log(format!("hotkey {command:?}"));
-                        cx.update(|cx| execute(command, cx));
+                None => receiver.recv().await,
+            };
+            match signal {
+                Ok(Signal::Pressed(id)) if SUSPENDED.load(Ordering::Relaxed) == 0 => {
+                    match registry.command_for(id) {
+                        Some(command) => {
+                            crate::trace::log(format!("hotkey {command:?}"));
+                            cx.update(|cx| execute(command, cx));
+                        }
+                        None => crate::trace::log(format!("hotkey id {id} 没有对应命令")),
                     }
-                    None => crate::trace::log(format!("hotkey id {} 没有对应命令", event.id)),
                 }
-            }
-            // 有绑定因被其他应用占用而没生效：每 3 秒重试一次，对方退出或换键后自动接管。
-            retry_ticks += 1;
-            let retry_due = retry_ticks >= RETRY_EVERY
-                && SUSPENDED.load(Ordering::Relaxed) == 0
-                && registry.has_unavailable();
-            if retry_due {
-                retry_ticks = 0;
-            }
-            if changed_rx.try_recv().is_ok() || retry_due {
-                while changed_rx.try_recv().is_ok() {}
-                let suspended = SUSPENDED.load(Ordering::Relaxed) > 0;
-                let wanted_now = wanted_while(suspended, &crate::config::get());
-                // 挂起只是临时让出组合，不代表问题解决了：设置窗口里别的行的警示保持不变。
-                let issues = suspended.then(|| registry.issues.clone());
-                report(registry.apply(&manager, &wanted_now));
-                if let Some(issues) = issues {
-                    registry.issues = issues;
+                Ok(Signal::Pressed(_)) => {}
+                Ok(Signal::Recheck) => {
+                    let suspended = SUSPENDED.load(Ordering::Relaxed) > 0;
+                    let wanted_now = wanted_while(suspended, &crate::config::get());
+                    // 录制期间保留设置窗口里的冲突警示。
+                    let issues = suspended.then(|| registry.issues.clone());
+                    report(registry.apply(&manager, &wanted_now));
+                    if let Some(issues) = issues {
+                        registry.issues = issues;
+                    }
+                    publish(&registry);
+                    retry_at = retry_deadline(&registry);
                 }
-                publish(&registry);
+                Err(_) => break,
             }
-            cx.background_executor().timer(POLL_INTERVAL).await;
         }
     })
     .detach();
 
     Ok(())
+}
+
+/// 有绑定被其他 App 占用时重试。正常运行时只等待事件。
+fn retry_deadline(registry: &Registry) -> Option<Instant> {
+    (SUSPENDED.load(Ordering::Relaxed) == 0 && registry.has_unavailable())
+        .then(|| Instant::now() + RETRY_INTERVAL)
 }
 
 /// 挂起时每条命令都要求「不绑定」，`apply` 才会真的注销（只传空列表的话什么都不会变）。
@@ -859,8 +874,7 @@ fn wanted_while(suspended: bool, config: &Config) -> Vec<Wanted> {
 /// 正在录制的录制框个数。用计数而不是开关：从一个录制框直接点到另一个时，
 /// 前一个失焦（恢复）和后一个开始（挂起）的先后不固定，开关会被后到的「恢复」打开。
 static SUSPENDED: AtomicUsize = AtomicUsize::new(0);
-static RECHECK: std::sync::OnceLock<std::sync::Mutex<mpsc::Sender<()>>> =
-    std::sync::OnceLock::new();
+static RECHECK: OnceLock<async_channel::Sender<Signal>> = OnceLock::new();
 
 /// 开始录制：挂起全部全局热键，并让系统快捷键（⌘Space、⇧⌘3 等）在 Helmp 前台时暂不生效，
 /// 录制框才收得到这些按键、能提示「已被系统使用」。必须和 [`resume`] 成对调用（主线程）。
@@ -886,7 +900,7 @@ pub fn resume() {
 
 fn recheck() {
     if let Some(tx) = RECHECK.get() {
-        let _ = tx.lock().expect("hotkey recheck poisoned").send(());
+        let _ = tx.try_send(Signal::Recheck);
     }
 }
 

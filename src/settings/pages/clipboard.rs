@@ -80,7 +80,7 @@ impl SettingsView {
                 let days = *days;
                 (
                     tr(zh, en).to_string(),
-                    clip.retention_days == days,
+                    clip.retention_days() == days,
                     self.setter(cx, move |c| c.clipboard.retention_days = days),
                 )
             })
@@ -120,10 +120,17 @@ impl SettingsView {
                     )
                     .into_any_element(),
                     widgets::row(
-                        widgets::label(tr("保留时长", "Keep history for"), pal),
+                        widgets::label_with_help(
+                            tr("保留时长", "Keep history for"),
+                            tr(
+                                "历史内容超过 50 MB 时，从三天前最旧的未置顶条目开始清理。单次复制超过 50 MB 只记日志。",
+                                "When saved content exceeds 50 MB, the oldest unpinned items over three days old are removed first. Copies over 50 MB are logged only.",
+                            ),
+                            pal,
+                        ),
                         widgets::popup(
                             "clip-retention",
-                            model::retention_label(clip.retention_days),
+                            model::retention_label(clip.retention_days()),
                             retention,
                         ),
                     )

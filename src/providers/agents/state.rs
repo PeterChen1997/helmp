@@ -31,7 +31,7 @@ impl Source {
     }
 }
 
-/// 统一状态机（调研 10 §5.1）。第一版没有「看过没看过」，所以 Claude 的 idle 不区分 Done。
+/// 统一状态机（调研 10 §5.1）。Claude 报告 idle，Codex 能明确报告 Done。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Running,
@@ -143,12 +143,23 @@ pub struct Session {
     pub branch: Option<String>,
     /// 毫秒时间戳。
     pub last_activity_ms: u64,
+    /// 状态所属的轮次或更新时间。与列表的最近活动时间分开，避免改标题等操作重置已读。
+    pub status_revision: String,
     /// 详情里「最后一条消息」：等你的会话是在等什么（要确认的命令、提的问题），否则是最后一段回复。
     pub last_message: Option<String>,
     pub jump: Jump,
 }
 
 impl Session {
+    pub fn completion_revision(&self) -> Option<String> {
+        let kind = match self.status {
+            Status::Done => "done",
+            Status::Idle => "idle",
+            _ => return None,
+        };
+        Some(format!("{kind}:{}", self.status_revision))
+    }
+
     /// 不含 provider 前缀的 domain id：`claude:<sessionId>` / `codex:<threadId>`。
     pub fn domain_id(&self) -> String {
         format!("{}:{}", self.source.key(), self.session_id)
@@ -362,6 +373,7 @@ mod tests {
             cwd: Some(PathBuf::from("/Users/me/code/helep")),
             branch: Some("master".into()),
             last_activity_ms,
+            status_revision: last_activity_ms.to_string(),
             last_message: None,
             jump: Jump::Pid(1),
         }

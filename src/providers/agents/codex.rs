@@ -46,6 +46,7 @@ pub struct TailState {
     pub last_user: Option<String>,
     /// 最后一条 agent 回复。
     pub last_message: Option<String>,
+    pub completed_turn: Option<String>,
     /// 还没被回答的 async 提问：「问题？（选项 A / 选项 B）」。
     pub question: Option<String>,
 }
@@ -65,6 +66,7 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
     let mut question: Option<String> = None;
     let mut last_user = None;
     let mut last_message = None;
+    let mut completed_turn = None;
     for line in lines {
         // 大部分行是 response_item（工具输出、推理），先粗筛再解析。
         if !contains(line, b"\"event_msg\"") {
@@ -81,11 +83,15 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
             }
             Some("task_complete") => {
                 edge = Some(Edge::Complete);
+                completed_turn = payload["turn_id"]
+                    .as_str()
+                    .or_else(|| value["timestamp"].as_str())
+                    .map(str::to_owned);
                 if let Some(text) = payload["last_agent_message"]
                     .as_str()
                     .filter(|t| !t.trim().is_empty())
                 {
-                    last_message = Some(state::one_line(text, 200));
+                    last_message = Some(text.to_owned());
                 }
             }
             Some("turn_aborted") => {
@@ -110,8 +116,8 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
                                     .map(|t| state::one_line(&t, 200))
                                     .unwrap_or_default(),
                             );
-                        } else if let Some(text) = text {
-                            last_message = Some(state::one_line(&text, 200));
+                        } else if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+                            last_message = Some(text);
                         }
                     }
                     _ => {}
@@ -134,6 +140,7 @@ pub fn parse_tail<'a>(lines: impl Iterator<Item = &'a [u8]>) -> TailState {
         status,
         last_user,
         last_message,
+        completed_turn,
     }
 }
 
@@ -170,7 +177,7 @@ fn item_text(item: &Value) -> Option<String> {
         .iter()
         .filter_map(|part| part["text"].as_str())
         .collect();
-    (!text.is_empty()).then(|| text.join(" "))
+    (!text.is_empty()).then(|| text.join("\n\n"))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -476,6 +483,11 @@ impl CodexScanner {
                         .or_else(|| c.meta.branch.clone()),
                     cwd,
                     last_activity_ms: c.sig.map(|(_, t)| to_ms(t)).unwrap_or(0),
+                    status_revision: c
+                        .tail
+                        .completed_turn
+                        .clone()
+                        .unwrap_or_else(|| c.sig.map(|(_, t)| to_ms(t)).unwrap_or(0).to_string()),
                     // 等你回答时展示问题本身，否则展示最后一条回复。
                     last_message: c
                         .tail
@@ -548,8 +560,11 @@ mod tests {
     fn completed_turn_is_done() {
         let state = tail(DONE);
         assert_eq!(state.status, Status::Done);
-        // 详情的「最后一条消息」取最后一条 agent 回复。
-        assert_eq!(state.last_message.as_deref(), Some("已检查完毕。"));
+        // 详情需要段落和列表的原始换行，压成一行就无法渲染 Markdown。
+        assert_eq!(
+            state.last_message.as_deref(),
+            Some("**已检查完毕。**\n\n1. 读取日志\n2. 核对结果")
+        );
     }
 
     #[test]

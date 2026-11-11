@@ -1,10 +1,7 @@
 //! 冻结屏幕：先把每块屏此刻的画面截成图，遮罩窗口铺满屏幕显示这张静止的图，用户在上面框选。
 //!
-//! 截图用系统自带的 `screencapture -x <文件1> <文件2> …`（一次调用、每块屏一个文件、不出声）：
-//! - macOS 15–27 都可用；`CGWindowListCreateImage` / `CGDisplayCreateImage` 在新 SDK 里已被废弃，
-//!   ScreenCaptureKit 要异步回调和额外依赖，换来的只是少起一个进程。
-//! - 子进程继承 Helmp 的录屏授权（TCC 按「负责的进程」算），和以前的 `screencapture -i` 一样。
-//! - 输出是原始像素分辨率（Retina 屏 2 倍），裁剪按像素进行，图不会变糊。
+//! macOS 26+ 通过 ScreenCaptureKit 直接取内存里的 CGImage，保留显示器的色彩空间和像素分辨率。
+//! 旧系统或框架取屏失败时，回退到继承 Helmp 录屏授权的 `screencapture -x`。
 //!
 //! 文件顺序与 `CGGetActiveDisplayList` 一致；换算时用图片宽高比与屏幕宽高比互相校验，对不上就报错，
 //! 绝不把 A 屏的图铺到 B 屏上。冻结图放在系统临时目录（`$TMPDIR/helmp-capture-<pid>/`），截图结束即删除。
@@ -12,15 +9,18 @@
 //! 测试接缝：`HELMP_CAPTURE_FIXTURE=<png>` 时不截屏，把这张图当成唯一一块屏的画面
 //! （`HELMP_CAPTURE_FIXTURE_SCALE` 指定像素 / 点的倍数，缺省 1），不需要录屏权限。
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result};
 use objc2::MainThreadMarker;
+use objc2::rc::autoreleasepool;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::NSScreen;
+use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{
-    CGDisplayBounds, CGGetActiveDisplayList, CGWindowListCopyWindowInfo, CGWindowListOption,
+    CGDisplayBounds, CGGetActiveDisplayList, CGImage, CGWindowListCopyWindowInfo, CGWindowListOption,
     kCGNullWindowID,
 };
 use objc2_foundation::{NSArray, NSRect};
@@ -41,16 +41,17 @@ pub struct Screen {
     pub frame: Rect,
     /// NSScreen.visibleFrame（AppKit 全局坐标，去掉菜单栏和程序坞）。
     pub visible: Rect,
+    pub scale: f64,
     /// 这块屏上的窗口（本屏坐标，从前到后），悬停高亮用。
     pub windows: Vec<Rect>,
 }
 
 /// 冻结下来的一块屏。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Frozen {
     pub screen: Screen,
-    /// 整屏截图（PNG）。
-    pub image: PathBuf,
+    /// 整屏图像，遮罩、裁剪和马赛克共用。
+    pub image: CFRetained<CGImage>,
     /// 截图的像素尺寸。
     pub pixels: (u32, u32),
     /// 像素 / 点（Retina 屏为 2）。
@@ -79,27 +80,20 @@ pub fn session_dir() -> PathBuf {
     std::env::temp_dir().join(format!("helmp-capture-{}", std::process::id()))
 }
 
-/// 主线程：各块屏的位置、编号和上面的窗口（在遮罩窗口出现之前取，免得取到自己）。
+/// 主线程：各块屏的位置和编号。
 pub fn screens(mtm: MainThreadMarker) -> Vec<Screen> {
-    let windows = window_list();
     NSScreen::screens(mtm)
         .iter()
         .filter_map(|screen| {
             let description = screen.deviceDescription();
             let number = object_for(&description, "NSScreenNumber")?;
             let id = double(&number)? as u32;
-            let cg = CGDisplayBounds(id);
-            let cg = Rect::new(cg.origin.x, cg.origin.y, cg.size.width, cg.size.height);
-            let windows = windows
-                .iter()
-                .map(|window| geometry::cg_to_local(cg, *window))
-                .filter(|window| window.intersect(&Rect::new(0.0, 0.0, cg.w, cg.h)).is_some())
-                .collect();
             Some(Screen {
                 id,
                 frame: rect(screen.frame()),
                 visible: rect(screen.visibleFrame()),
-                windows,
+                scale: screen.backingScaleFactor(),
+                windows: Vec::new(),
             })
         })
         .collect()
@@ -136,8 +130,20 @@ fn window_list() -> Vec<Rect> {
         .collect()
 }
 
-/// 后台线程：把 `screens` 每块屏截成一张 PNG，放进 `dir`。
+/// 后台线程：冻结所有显示器。
 pub fn grab(screens: Vec<Screen>, dir: &Path) -> Result<Vec<Frozen>> {
+    if fixture().is_none()
+        && let Some(result) = super::screen_capture_kit::grab(&screens)
+    {
+        match result {
+            Ok(frozen) => return Ok(frozen),
+            Err(err) => crate::trace::log(format!("capture: ScreenCaptureKit fallback: {err:#}")),
+        }
+    }
+    grab_from_disk(screens, dir)
+}
+
+fn grab_from_disk(mut screens: Vec<Screen>, dir: &Path) -> Result<Vec<Frozen>> {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir)
         .with_context(|| trf!("创建 {}", "Couldn't create {}", dir.display()))?;
@@ -152,12 +158,17 @@ pub fn grab(screens: Vec<Screen>, dir: &Path) -> Result<Vec<Frozen>> {
     let files: Vec<PathBuf> = (0..active.len())
         .map(|ix| dir.join(format!("screen-{ix}.png")))
         .collect();
-    let output = Command::new("screencapture")
+    let capture = Command::new("screencapture")
         .arg("-x")
         .args(["-t", "png"])
         .args(&files)
-        .output()
+        .stderr(Stdio::piped())
+        .spawn()
         .with_context(|| tr("启动 screencapture 失败", "Couldn't start screencapture"))?;
+    fill_windows(&mut screens);
+    let output = capture
+        .wait_with_output()
+        .context(tr("等待系统截图", "Couldn't wait for the screenshot"))?;
     let stderr = String::from_utf8_lossy(&output.stderr);
     anyhow::ensure!(
         output.status.success() && files.iter().all(|file| file.exists()),
@@ -188,10 +199,7 @@ pub fn grab(screens: Vec<Screen>, dir: &Path) -> Result<Vec<Frozen>> {
 
 /// 读出截图的像素尺寸并核对宽高比：对不上说明文件和屏幕的对应关系错了，必须报错而不是显示错位的画面。
 fn frozen(screen: Screen, image: PathBuf) -> Result<Frozen> {
-    let bytes = std::fs::read(&image)
-        .with_context(|| trf!("读取 {}", "Couldn't read {}", image.display()))?;
-    let pixels = png_size(&bytes)
-        .with_context(|| trf!("{} 不是 PNG 图片", "{} isn't a PNG image", image.display()))?;
+    let pixels = read_png_size(&image)?;
     let scale = backing_scale(pixels, (screen.frame.w, screen.frame.h)).with_context(|| {
         trf!(
             "截图（{}×{} 像素）和显示器（{}×{} 点）对不上",
@@ -204,7 +212,7 @@ fn frozen(screen: Screen, image: PathBuf) -> Result<Frozen> {
     })?;
     Ok(Frozen {
         screen,
-        image,
+        image: super::composite::load_image(&image)?,
         pixels,
         scale,
     })
@@ -215,14 +223,7 @@ fn from_fixture(fixture: &Path, main: Option<&Screen>, dir: &Path) -> Result<Vec
     let image = dir.join("screen-0.png");
     std::fs::copy(fixture, &image)
         .with_context(|| trf!("读取 {}", "Couldn't read {}", fixture.display()))?;
-    let bytes = std::fs::read(&image)?;
-    let pixels = png_size(&bytes).with_context(|| {
-        trf!(
-            "{} 不是 PNG 图片",
-            "{} isn't a PNG image",
-            fixture.display()
-        )
-    })?;
+    let pixels = read_png_size(&image)?;
     let scale: f64 = std::env::var("HELMP_CAPTURE_FIXTURE_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -239,12 +240,28 @@ fn from_fixture(fixture: &Path, main: Option<&Screen>, dir: &Path) -> Result<Vec
             id: main.map_or(0, |main| main.id),
             frame,
             visible: frame,
+            scale,
             windows: Vec::new(),
         },
-        image,
+        image: super::composite::load_image(&image)?,
         pixels,
         scale,
     }])
+}
+
+/// 抓图时枚举普通窗口，供鼠标悬停选区使用。
+pub(super) fn fill_windows(screens: &mut [Screen]) {
+    let windows = autoreleasepool(|_| window_list());
+    for screen in screens {
+        let cg = CGDisplayBounds(screen.id);
+        let cg = Rect::new(cg.origin.x, cg.origin.y, cg.size.width, cg.size.height);
+        let local = Rect::new(0.0, 0.0, cg.w, cg.h);
+        screen.windows = windows
+            .iter()
+            .map(|window| geometry::cg_to_local(cg, *window))
+            .filter(|window| window.intersect(&local).is_some())
+            .collect();
+    }
 }
 
 fn active_displays() -> Vec<u32> {
@@ -257,6 +274,15 @@ fn active_displays() -> Vec<u32> {
         return Vec::new();
     }
     ids[..count as usize].to_vec()
+}
+
+fn read_png_size(path: &Path) -> Result<(u32, u32)> {
+    let mut header = [0; 24];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
+    png_size(&header)
+        .with_context(|| trf!("{} 不是 PNG 图片", "{} isn't a PNG image", path.display()))
 }
 
 /// PNG 文件头里的宽高（IHDR 紧跟在 8 字节签名之后）。

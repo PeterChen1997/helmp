@@ -15,7 +15,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
-use super::store::{Entry, ImageFormat, Kind, Source};
+use super::store::{Entry, ImageFormat, Kind, MAX_BYTES, Source};
 use super::watcher::{Image, Pasteboard, TRANSIENT_TYPE};
 use crate::i18n::{tr, trf};
 
@@ -58,7 +58,7 @@ impl Pasteboard for SystemPasteboard {
         })
     }
 
-    fn image(&self) -> Option<Image> {
+    fn image(&self) -> Option<Result<Image, u64>> {
         autoreleasepool(|_| {
             let pasteboard = NSPasteboard::generalPasteboard();
             [
@@ -68,15 +68,19 @@ impl Pasteboard for SystemPasteboard {
             .into_iter()
             .find_map(|(ty, format)| {
                 let data = pasteboard.dataForType(ty)?;
+                let bytes = data.length() as u64;
+                if bytes > MAX_BYTES {
+                    return Some(Err(bytes));
+                }
                 let (width, height) = NSBitmapImageRep::imageRepWithData(&data)
                     .map(|rep| (pixels(rep.pixelsWide()), pixels(rep.pixelsHigh())))
                     .unwrap_or((0, 0));
-                Some(Image {
+                Some(Ok(Image {
                     bytes: data.to_vec(),
                     format,
                     width,
                     height,
-                })
+                }))
             })
         })
     }

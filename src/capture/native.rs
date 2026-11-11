@@ -2,17 +2,16 @@
 //! 并在 GPUI 视图下面垫一层 NSImageView 显示截图（整屏冻结图可能有 5K，交给 Core Animation 画，
 //! 不进 GPUI 的纹理图集；钉图同理）。GPUI 只画半透明的选区、工具栏这些内容。
 
-use std::path::Path;
-
 use gpui_kit::Window;
 use objc2::rc::Retained;
 use objc2::{AnyThread as _, MainThreadMarker};
 use objc2_app_kit::{
     NSColor, NSImage, NSImageScaling, NSImageView, NSPopUpMenuWindowLevel,
-    NSScreenSaverWindowLevel, NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode,
-    NSWindowStyleMask,
+    NSScreenSaverWindowLevel, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowLevel,
+    NSWindowOrderingMode, NSWindowStyleMask,
 };
-use objc2_foundation::{NSData, NSPoint, NSRect, NSSize, NSString};
+use objc2_core_graphics::CGImage;
+use objc2_foundation::{NSData, NSPoint, NSRect, NSSize};
 
 use super::geometry::Rect;
 
@@ -48,6 +47,10 @@ pub fn setup(window: &Window, kind: Kind, frame: Rect, offscreen: bool) {
         _ => NSPopUpMenuWindowLevel,
     };
     ns_window.setLevel(level);
+    if kind == Kind::Overlay {
+        // GPUI 的弹出窗口默认有 AppKit 工具窗口动画。截图遮罩就绪后立即显示。
+        ns_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    }
     ns_window.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary
@@ -110,18 +113,15 @@ pub fn set_visible(window: &Window, visible: bool, offscreen: bool) {
 }
 
 /// 在 GPUI 视图下面垫一层图片：`size` 是点尺寸，图片按它铺满（Retina 截图 2 倍像素正好清晰）。
-pub fn underlay_file(window: &Window, image: &Path, size: (f64, f64)) {
+pub fn underlay_image(window: &Window, image: &CGImage, size: (f64, f64)) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let path = NSString::from_str(&image.to_string_lossy());
-    match NSImage::initWithContentsOfFile(NSImage::alloc(), &path) {
-        Some(image) => underlay(window, &image, size, mtm),
-        None => eprintln!("helmp: 读不出截图 {}", image.display()),
-    }
+    let image = NSImage::initWithCGImage_size(NSImage::alloc(), image, NSSize::new(size.0, size.1));
+    underlay(window, &image, size, mtm);
 }
 
-/// 同 [`underlay_file`]，图片来自内存里的 PNG（钉图）。
+/// 钉图的图片来自已经编码的 PNG。
 pub fn underlay_png(window: &Window, png: &[u8], size: (f64, f64)) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;

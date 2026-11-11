@@ -109,9 +109,9 @@ fn redact_outcome(outcome: Outcome, secrets: &[String]) -> Outcome {
                     Block::Text(text) | Block::Code(text) | Block::Caption(text) => {
                         *text = redact(text, secrets)
                     }
-                    Block::Result { text, .. } | Block::Quote { text, .. } => {
-                        *text = redact(text, secrets)
-                    }
+                    Block::Result { text, .. }
+                    | Block::Quote { text, .. }
+                    | Block::Markdown { text, .. } => *text = redact(text, secrets),
                     Block::Image(_) => {}
                 }
             }
