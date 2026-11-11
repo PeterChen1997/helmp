@@ -6,7 +6,7 @@
 
 <p align="center">
   macOS 原生启动器，顺便告诉你哪个 coding agent 在等你。<br>
-  Rust + GPUI 编写，数据只在本机，不用登录，没有遥测。
+  用 Rust + <a href="https://www.gpui.rs">GPUI</a>（Zed 编辑器的 UI 框架）写的高性能原生应用，数据只在本机，不用登录，没有遥测。
 </p>
 
 <p align="center">
@@ -28,6 +28,12 @@ Helmp（读作 help me）是一个 Spotlight 式的 macOS 启动器：按 <kbd>�
 | ![Agent 会话](docs/images/screenshot-agents.png) | ![剪贴板历史](docs/images/screenshot-clipboard.png) |
 | **截图识别** | **翻译** |
 | ![截图识别](docs/images/screenshot-ocr.png) | ![翻译](docs/images/screenshot-translate.png) |
+
+## 用 GPUI 写的原生应用
+
+- [GPUI](https://www.gpui.rs) 是 Zed 编辑器自研的 Rust UI 框架。Helmp 的界面直接用 Metal 在 GPU 上绘制，没有 Electron，也没有 WebView。
+- 安装包约 14 MB，常驻内存约 60 MB（0.4.1 在 macOS 27 上实测）。
+- 目前只支持 macOS 15 及以上。GPUI 本身支持 macOS、Windows 和 Linux，界面部分理论上可以移植；但全局快捷键、截图与 OCR（Vision）、钥匙串、登录项这些系统集成用的是 macOS 专属接口，约占四分之一的源码，移植到其他平台需要逐一重写。
 
 ## 功能
 
@@ -277,6 +283,14 @@ cargo test --release
 ## 参与贡献
 
 欢迎提 issue 和 PR。动手之前请先看 [CONTRIBUTING.md](CONTRIBUTING.md)；[docs/architecture.md](docs/architecture.md)（英文）讲了各模块是怎么接进来的。
+
+## 请我喝杯果茶
+
+如果 Helmp 帮到了你，想请我喝杯果茶，欢迎扫码～
+
+<p align="center">
+  <img src="docs/images/wechat-pay.png" width="240" alt="微信赞赏码">
+</p>
 
 ## 协议
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   A native macOS launcher that also tells you which coding agent is waiting for you.<br>
-  Written in Rust with GPUI. Local-first, no account, no telemetry.
+  A fast native app written in Rust with <a href="https://www.gpui.rs">GPUI</a>, the UI framework behind the Zed editor. Local-first, no account, no telemetry.
 </p>
 
 <p align="center">
@@ -28,6 +28,12 @@ Helmp (read it as "help me") is a Spotlight-style launcher for macOS. Press <kbd
 | ![Agent sessions](docs/images/screenshot-agents.png) | ![Clipboard history](docs/images/screenshot-clipboard.png) |
 | **Screenshot OCR** | **Translate** |
 | ![Screenshot OCR](docs/images/screenshot-ocr.png) | ![Translate](docs/images/screenshot-translate.png) |
+
+## Built with GPUI
+
+- [GPUI](https://www.gpui.rs) is the Rust UI framework the Zed editor is built on. Helmp's interface is drawn on the GPU with Metal; there is no Electron and no WebView.
+- The download is about 14 MB, and Helmp uses about 60 MB of memory while running (measured with 0.4.1 on macOS 27).
+- Helmp runs on macOS 15 and later only. GPUI itself supports macOS, Windows and Linux, so the interface could in principle be ported, but the system integrations (global hotkeys, screenshots and OCR with Vision, the Keychain, login items) use macOS-only APIs, roughly a quarter of the source, and would have to be rewritten for each platform.
 
 ## Features
 
@@ -277,6 +283,14 @@ Ideas we want to get to. None of these exist yet, and the order may change.
 ## Contributing
 
 Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first; the architecture overview in [docs/architecture.md](docs/architecture.md) explains how modules plug in.
+
+## Buy Me a Fruit Tea
+
+If Helmp helps you and you'd like to buy me a fruit tea, scan the WeChat Pay code below. Thank you!
+
+<p align="center">
+  <img src="docs/images/wechat-pay.png" width="240" alt="WeChat Pay code">
+</p>
 
 ## License
 
