@@ -445,7 +445,6 @@ pub(crate) fn outcome_text(outcome: Outcome) -> String {
         Outcome::Message(message) => lines.push(message),
         Outcome::EnterScope(scope) => lines.push(format!("enter scope {scope}")),
         Outcome::EnterScopeWith(scope, text) => lines.push(format!("enter scope {scope}: {text}")),
-        Outcome::OpenSettings => lines.push("open settings".to_string()),
         Outcome::OpenSettingsPage(page) => lines.push(format!("open settings: {page:?}")),
         Outcome::Dismiss => lines.push("dismiss".to_string()),
         Outcome::Capture(mode) => lines.push(format!("open capture: {}", mode.name())),

@@ -426,6 +426,15 @@ fn gui_clipboard_selects_latest_and_esc_closes_the_panel() {
 
 #[test]
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
+fn gui_cmd_comma_leaves_the_panel_for_settings() {
+    // 面板右下角提示 ⌘, 打开 Helmp 设置（设置不再进搜索结果），这个键必须在面板里真的生效，否则提示是假的。
+    let out = clipboard_gui("cmd-,");
+    let pressed = gui_line(&out, "self-test key cmd-,:");
+    assert!(pressed.contains("visible=false"), "⌘, 应收起面板去开设置：{pressed}");
+}
+
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
 fn gui_double_click_on_a_clip_pastes_it() {
     // 双击一条剪贴板记录 = 粘贴它（收起面板、焦点还给原来的 App、按 ⌘V），不只是复制。
     // 双击的是「middle」那一行（不是默认选中的 fresh），粘贴的就得是它。

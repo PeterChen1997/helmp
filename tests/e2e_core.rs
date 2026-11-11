@@ -138,20 +138,17 @@ fn plugin_commands_do_not_fuzzy_match_unrelated_queries() {
 }
 
 #[test]
-fn system_settings_come_before_helmp_settings() {
-    // 打「设置 / settings」的人多半要 macOS 的系统设置；Helmp 自己的设置单独叫「Helmp 设置」，
-    // 排在后面，而且「系统设置」只出现一次（不能应用和系统命令各一条）。
+fn settings_query_only_lists_system_settings() {
+    // 打「设置 / settings」的人要的是 macOS 的系统设置。Helmp 自己的设置不进结果，免得两条混在一起点错
+    // （入口是面板右下角的 ⌘,）；「系统设置」也只出现一次（不能应用和系统命令各一条）。
     let h = Helmp::new();
     for query in ["settings", "setting", "设置"] {
         let rows = h.query(query);
-        let system = rows.iter().position(|r| r.id.ends_with("/System Settings.app"));
-        let helmp = rows.iter().position(|r| r.id == "builtin:settings");
-        assert!(system.is_some() && helmp.is_some(), "{query}: {rows:#?}");
-        assert!(system < helmp, "{query}: {rows:#?}");
         assert_eq!(rows.first().map(|r| r.id.ends_with("/System Settings.app")), Some(true), "{query}: {rows:#?}");
+        assert!(!rows.iter().any(|r| r.id == "builtin:settings"), "{query}: {rows:#?}");
         let system_rows = rows.iter().filter(|r| r.title == "系统设置" || r.title == "System Settings").count();
         assert_eq!(system_rows, 1, "{query}: {rows:#?}");
     }
     let rows = h.query("helmp settings");
-    assert_eq!(rows.first().map(|r| r.id.as_str()), Some("builtin:settings"), "{rows:#?}");
+    assert!(!rows.iter().any(|r| r.id == "builtin:settings"), "{rows:#?}");
 }

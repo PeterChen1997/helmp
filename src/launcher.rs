@@ -1125,12 +1125,6 @@ impl Launcher {
                             cx.notify();
                             return;
                         }
-                        Ok(Outcome::OpenSettings) => {
-                            this.executed = true;
-                            // 推迟到本次更新结束：设置窗口会读引擎等全局状态，不能在启动器更新中途打开。
-                            cx.defer(crate::settings::open);
-                            return;
-                        }
                         Ok(Outcome::OpenSettingsPage(page)) => {
                             this.executed = true;
                             cx.defer(move |cx| crate::settings::open_page(cx, page));
@@ -1281,6 +1275,16 @@ impl Launcher {
                 self.action_selected = 0;
                 cx.notify();
             }
+            cx.stop_propagation();
+            return;
+        }
+
+        // ⌘, 打开 Helmp 设置（面板右下角有提示）。菜单栏菜单的快捷键只在菜单展开时生效，面板里要自己接。
+        if key == "," && mods.platform && !mods.shift && !mods.alt && !mods.control {
+            self.executed = true;
+            self.hide(window, cx);
+            // 推迟到本次更新结束：设置窗口会读引擎等全局状态，不能在启动器更新中途打开。
+            cx.defer(crate::settings::open);
             cx.stop_propagation();
             return;
         }
@@ -2324,8 +2328,9 @@ impl Launcher {
             .text_size(px(12.))
             .text_color(pal.key_fg)
             .child(context);
+        let mut right = div().ml_auto().flex().items_center().gap(px(16.));
         if self.running {
-            footer = footer.child(div().ml_auto().text_color(pal.muted).child(tr("正在运行…", "Running…")));
+            right = right.child(div().text_color(pal.muted).child(tr("正在运行…", "Running…")));
         } else if let Some(item) = self.selected_item() {
             let primary = match self.result_actions().and_then(|actions| actions.first()) {
                 Some(action) => action.title.clone(),
@@ -2333,11 +2338,14 @@ impl Launcher {
                 None if item.action_title.is_empty() => tr("运行", "Run").to_string(),
                 None => item.action_title.clone(),
             };
-            footer = footer.child(div().ml_auto().child(hint(primary.into(), "↵".into())));
+            right = right.child(hint(primary.into(), "↵".into()));
             if !item.actions.is_empty() || self.result_actions().is_some() {
-                footer = footer.child(hint(tr("操作", "Actions").into(), "⌘K".into()));
+                right = right.child(hint(tr("操作", "Actions").into(), "⌘K".into()));
             }
         }
+        // Helmp 设置不进搜索结果（容易和系统设置混淆），入口提示常驻在右下角。
+        right = right.child(hint(tr("设置", "Settings").into(), "⌘,".into()));
+        footer = footer.child(right);
         footer.into_any_element()
     }
 }

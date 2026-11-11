@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- "Helmp Settings" no longer appears in search results, where it was easy to mistake for macOS System Settings. The bottom-right of the panel now shows <kbd>⌘,</kbd> to open Helmp's settings, and the shortcut works from the panel. The menu bar still has "Settings…".
+
+### 简体中文
+
+#### 变更
+
+- 「Helmp 设置」不再出现在搜索结果里，免得和 macOS 的「系统设置」混在一起。面板右下角常驻提示 <kbd>⌘,</kbd>，在面板里按它打开 Helmp 设置；菜单栏的「设置…」仍然可用。
+
 ## [0.4.2] - 2026-11-11
 
 ### Added

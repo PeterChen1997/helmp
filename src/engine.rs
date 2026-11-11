@@ -157,7 +157,9 @@ impl Engine {
             .enabled()
             .flat_map(|provider| provider.suggestions())
             .collect();
-        for entry in history::recent().into_iter().take(RECENT_ON_HOME) {
+        // 「Helmp 设置」已不在搜索结果里，旧的最近使用记录也别再露出来。
+        let recent = history::recent().into_iter().filter(|entry| entry.id != "builtin:settings");
+        for entry in recent.take(RECENT_ON_HOME) {
             let replayable = !(entry.query.is_empty() && entry.scope.is_none());
             let (title, subtitle) = tile_text(
                 &entry,
