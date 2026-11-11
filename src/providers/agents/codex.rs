@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{BufRead as _, BufReader};
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result};
 use serde_json::Value;
@@ -314,9 +314,20 @@ struct Cached {
     tail: TailState,
 }
 
+/// 活着、但元数据解析不出来的线程（sqlite 没这一行，`sessions/` 里也找不到 rollout，
+/// 比如开了还没发过消息的线程）隔多久再查一次。
+///
+/// 不能跟着轮询每秒重查：找 rollout 要遍历整棵 `sessions/YYYY/MM/DD`（本机 123 个目录、
+/// 442 个文件），每个这样的线程每秒走一遍，面板收起时后台也常驻 1%～3% CPU。
+/// 代价是这种线程等到能解析时，最多晚这么久出现在列表里——它还没开始干活，不会在等你。
+const UNRESOLVED_RETRY: Duration = Duration::from_secs(10);
+
 pub struct CodexScanner {
     home: PathBuf,
     cache: HashMap<String, Cached>,
+    /// 解析失败的活线程 → (上次尝试的时间, 当时的告警)。重试前每轮照旧报这条告警，
+    /// 这样 `Poller` 的去重仍然只打印一次。
+    unresolved: HashMap<String, (Instant, String)>,
 }
 
 impl CodexScanner {
@@ -327,6 +338,7 @@ impl CodexScanner {
         Self {
             home,
             cache: HashMap::new(),
+            unresolved: HashMap::new(),
         }
     }
 
@@ -337,10 +349,17 @@ impl CodexScanner {
     pub fn scan(&mut self, warnings: &mut Warnings) -> Vec<Session> {
         let alive = self.alive_threads(warnings);
         self.cache.retain(|id, _| alive.contains(id));
+        self.unresolved.retain(|id, _| alive.contains(id));
 
         // 新出现的线程，或 rollout 有变化的线程（标题可能刚被改），才去查 sqlite / 重读尾部。
         let mut changed = Vec::new();
         for id in &alive {
+            if let Some((at, warning)) = self.unresolved.get(id)
+                && at.elapsed() < UNRESOLVED_RETRY
+            {
+                warnings.push(warning.clone());
+                continue;
+            }
             let sig = self
                 .cache
                 .get(id)
@@ -371,7 +390,9 @@ impl CodexScanner {
                     None => match meta_from_rollout(&self.home.join("sessions"), &id) {
                         Ok(meta) => meta,
                         Err(err) => {
-                            warnings.push(format!("{err:#}"));
+                            let warning = format!("{err:#}");
+                            warnings.push(warning.clone());
+                            self.unresolved.insert(id, (Instant::now(), warning));
                             continue;
                         }
                     },
@@ -384,10 +405,13 @@ impl CodexScanner {
             let tail = match read_tail(&rollout, TAIL_BYTES) {
                 Ok((bytes, truncated)) => parse_tail(tail_lines(&bytes, truncated)),
                 Err(err) => {
-                    warnings.push(format!("读取 {} 失败：{err}", rollout.display()));
+                    let warning = format!("读取 {} 失败：{err}", rollout.display());
+                    warnings.push(warning.clone());
+                    self.unresolved.insert(id, (Instant::now(), warning));
                     continue;
                 }
             };
+            self.unresolved.remove(&id);
             self.cache.insert(id, Cached { meta, sig, tail });
         }
         self.sessions()
@@ -593,6 +617,58 @@ mod tests {
         assert!(writer_alive(&lock).unwrap());
         drop(holder);
         assert!(!writer_alive(&lock).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unresolved_thread_is_retried_on_backoff_not_every_poll() {
+        // 活着但 sqlite / rollout 都查不到的线程，每秒重查就要每秒遍历整棵 sessions/，
+        // 菜单栏常驻程序后台因此一直占 CPU。所以失败后 UNRESOLVED_RETRY 内不再查，到点再查、查到就列出。
+        let dir = std::env::temp_dir().join(format!("helmp-codex-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let id = "01a1c84b-0000-7000-8000-00000000abcd";
+        let locks = dir.join("thread-writer-locks");
+        let day = dir.join("sessions/2026/11/05");
+        std::fs::create_dir_all(&locks).unwrap();
+        std::fs::create_dir_all(&day).unwrap();
+        let lock = locks.join(format!("{id}.lock"));
+        std::fs::write(&lock, b"").unwrap();
+        let holder = File::open(&lock).unwrap();
+        // SAFETY: holder 存活期间 fd 有效。
+        assert_eq!(
+            unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut scanner = CodexScanner {
+            home: dir.clone(),
+            cache: HashMap::new(),
+            unresolved: HashMap::new(),
+        };
+
+        assert!(scanner.scan(&mut Warnings::new()).is_empty());
+        let unresolved_warning = scanner.unresolved.get(id).unwrap().1.clone();
+
+        // rollout 出现了，但还在退避期内：不重新遍历，所以还看不到；告警照旧报，去重才不会反复打印。
+        let meta_line = SESSION_META.lines().next().unwrap();
+        std::fs::write(
+            day.join(format!("rollout-2026-11-05T06-33-12-{id}.jsonl")),
+            format!("{meta_line}\n"),
+        )
+        .unwrap();
+        let mut warnings = Warnings::new();
+        assert!(scanner.scan(&mut warnings).is_empty());
+        assert_eq!(warnings, vec![unresolved_warning]);
+
+        // 退避到点：重查，查到就列出，不再记为解析失败。
+        for (at, _) in scanner.unresolved.values_mut() {
+            *at = at.checked_sub(UNRESOLVED_RETRY).unwrap();
+        }
+        let sessions = scanner.scan(&mut Warnings::new());
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions.first().map(|s| s.session_id.as_str()), Some(id));
+        assert!(scanner.unresolved.is_empty());
+
+        drop(holder);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
