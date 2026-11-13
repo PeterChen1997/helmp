@@ -85,14 +85,19 @@ fn ended_sessions_are_not_listed() {
 }
 
 fn codex_reply(h: &Helmp, id: &str, title: &str, turn: &str) {
+    codex_session(
+        h, id, title,
+        json!({"type": "task_complete", "turn_id": turn, "last_agent_message": "**完成。**\n\n1. 查看结果"}),
+    );
+}
+
+fn codex_session(h: &Helmp, id: &str, title: &str, status_event: serde_json::Value) {
     let events = [
         json!({"type": "session_meta", "payload": {"originator": "Codex Desktop"}}),
         json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {
             "type": "UserMessage", "content": [{"text": title}]
         }}}),
-        json!({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn,
-            "last_agent_message": "**完成。**\n\n1. 查看结果"
-        }}),
+        json!({"type": "event_msg", "payload": status_event}),
     ];
     let body = events
         .iter()
@@ -139,4 +144,45 @@ fn completed_sessions_move_back_until_the_next_turn_finishes() {
     // 同一个会话完成了新一轮，旧回执不再适用。
     codex_reply(&h, newer, "Session B", "two");
     assert_eq!(titles(), ["Session B", "Session B (earlier)"]);
+}
+
+#[test]
+fn action_required_and_completed_stay_ahead_of_running_even_when_searching() {
+    let h = Helmp::new();
+    let _writers = [codex_writer(&h, "running"), codex_writer(&h, "completed"), codex_writer(&h, "waiting")];
+    codex_session(&h, "running", "Session", json!({"type": "task_started"}));
+    codex_reply(&h, "completed", "Session completed", "one");
+    codex_session(&h, "waiting", "Session waiting", json!({"type": "item_completed", "item": {
+        "type": "AgentMessage", "delivery": "async", "content": [{"text": "Choose one"}]
+    }}));
+
+    for query in ["", "Session"] {
+        let badges: Vec<_> = h.query_in("agents", query).into_iter().map(|row| row.badge).collect();
+        assert_eq!(badges, ["Waiting for You", "Recently Completed", "In Progress"]);
+    }
+}
+
+#[test]
+fn codex_read_receipts_demote_only_the_completed_turn_the_ide_saw() {
+    let h = Helmp::new();
+    let _writers = [codex_writer(&h, "first"), codex_writer(&h, "second")];
+    codex_reply(&h, "first", "Session A", "one");
+    codex_reply(&h, "second", "Session A (earlier)", "one");
+    let db = rusqlite::Connection::open(h.root.join("codex/state_5.sqlite")).unwrap();
+    // 模拟 IDE 只更新 SQLite 的 WAL，会话日志不变。
+    db.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA wal_autocheckpoint=0;
+         CREATE TABLE thread_read_receipts (
+            thread_id TEXT PRIMARY KEY, first_unread_turn TEXT, last_published_turn TEXT
+         );",
+    ).unwrap();
+    let titles = || {
+        h.query_in("agents", "Session A").into_iter().map(|row| row.title).collect::<Vec<_>>()
+    };
+    assert_eq!(titles(), ["Session A", "Session A (earlier)"]);
+    db.execute("INSERT INTO thread_read_receipts VALUES ('first', NULL, 'one')", []).unwrap();
+    assert_eq!(titles(), ["Session A (earlier)", "Session A"]);
+    codex_reply(&h, "first", "Session A", "two");
+    assert_eq!(titles(), ["Session A", "Session A (earlier)"]);
 }

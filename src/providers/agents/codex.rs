@@ -3,6 +3,7 @@
 //! - 判活：`$CODEX_HOME/thread-writer-locks/<threadId>.lock` 用 `flock(LOCK_SH|LOCK_NB)` 试锁；
 //!   拿到锁说明没有活写者（立刻释放），拿不到才算活。文件存在不代表在跑。
 //! - 元数据：`state_5.sqlite` 以 `?mode=ro&immutable=1` 只读打开，取 `threads` 表的标题 / cwd / 分支 / 来源。
+//! - 已读：每轮扫描只读 `thread_read_receipts`，包括 WAL 中尚未合并的回执。
 //! - 状态：只读 rollout 尾部 ≤ 64 KB，找最后一个 turn 边界（`task_started` / `task_complete` / `turn_aborted`）
 //!   和 async 提问（`item_completed{AgentMessage, delivery:"async"}`）。
 
@@ -206,7 +207,7 @@ pub fn clean_title(name: &str, title: &str, first_user_message: &str) -> Option<
         .or_else(|| pick(first_user_message))
 }
 
-fn sqlite_uri(path: &Path) -> String {
+fn sqlite_uri(path: &Path, immutable: bool) -> String {
     let mut uri = String::from("file:");
     for ch in path.to_string_lossy().chars() {
         match ch {
@@ -217,18 +218,25 @@ fn sqlite_uri(path: &Path) -> String {
             other => uri.push(other),
         }
     }
-    uri.push_str("?mode=ro&immutable=1");
+    uri.push_str("?mode=ro");
+    if immutable {
+        uri.push_str("&immutable=1");
+    }
     uri
+}
+
+fn open_db(path: &Path, immutable: bool) -> Result<rusqlite::Connection> {
+    use rusqlite::{Connection, OpenFlags};
+    Connection::open_with_flags(
+        sqlite_uri(path, immutable),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("只读打开 {}", path.display()))
 }
 
 /// 从 `state_5.sqlite` 只读批量取元数据。查不到的 id 不在返回值里。
 pub fn load_meta(db: &Path, ids: &[String]) -> Result<HashMap<String, ThreadMeta>> {
-    use rusqlite::{Connection, OpenFlags};
-    let conn = Connection::open_with_flags(
-        sqlite_uri(db),
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .with_context(|| format!("只读打开 {}", db.display()))?;
+    let conn = open_db(db, true)?;
     let mut stmt = conn.prepare(
         "SELECT rollout_path, cwd, coalesce(name, ''), title, first_user_message, git_branch, \
          originator, source, thread_source, archived FROM threads WHERE id = ?1",
@@ -257,6 +265,38 @@ pub fn load_meta(db: &Path, ids: &[String]) -> Result<HashMap<String, ThreadMeta
         );
     }
     Ok(out)
+}
+
+fn read_completed_turns<'a>(
+    db: &Path,
+    completed: impl Iterator<Item = (&'a String, &'a str)>,
+) -> Result<HashSet<&'a String>> {
+    let mut completed = completed.peekable();
+    if completed.peek().is_none() || !db.is_file() {
+        return Ok(HashSet::new());
+    }
+    // 点开会话可能只改 WAL，不改 rollout。不能用 immutable，也不能依赖 rollout 的修改时间。
+    let conn = open_db(db, false)?;
+    conn.busy_timeout(Duration::from_millis(100))?;
+    let supported: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'thread_read_receipts')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !supported {
+        return Ok(HashSet::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT EXISTS(SELECT 1 FROM thread_read_receipts
+         WHERE thread_id = ?1 AND first_unread_turn IS NULL AND last_published_turn = ?2)",
+    )?;
+    let mut read = HashSet::new();
+    for (id, turn) in completed {
+        if stmt.query_row([id.as_str(), turn], |row| row.get(0))? {
+            read.insert(id);
+        }
+    }
+    Ok(read)
 }
 
 /// sqlite 里还没有的线程（刚建）：在 `sessions/YYYY/MM/DD/` 里按文件名找 rollout，读首行 `session_meta`。
@@ -378,7 +418,7 @@ impl CodexScanner {
             }
         }
         if changed.is_empty() {
-            return self.sessions();
+            return self.sessions(warnings);
         }
 
         let db = self.home.join("state_5.sqlite");
@@ -421,7 +461,7 @@ impl CodexScanner {
             self.unresolved.remove(&id);
             self.cache.insert(id, Cached { meta, sig, tail });
         }
-        self.sessions()
+        self.sessions(warnings)
     }
 
     fn alive_threads(&self, warnings: &mut Warnings) -> HashSet<String> {
@@ -456,7 +496,17 @@ impl CodexScanner {
         alive
     }
 
-    fn sessions(&self) -> Vec<Session> {
+    fn sessions(&self, warnings: &mut Warnings) -> Vec<Session> {
+        let completed = self.cache.iter().filter_map(|(id, cached)| {
+            let turn = cached.tail.completed_turn.as_deref()?;
+            (cached.tail.status == Status::Done && !cached.meta.archived && !cached.meta.subagent)
+                .then_some((id, turn))
+        });
+        let read = read_completed_turns(&self.home.join("state_5.sqlite"), completed)
+            .unwrap_or_else(|err| {
+                warnings.push(format!("读取 Codex 已读回执失败：{err:#}"));
+                HashSet::new()
+            });
         self.cache
             .iter()
             .filter(|(_, c)| !c.meta.subagent && !c.meta.archived)
@@ -488,6 +538,7 @@ impl CodexScanner {
                         .completed_turn
                         .clone()
                         .unwrap_or_else(|| c.sig.map(|(_, t)| to_ms(t)).unwrap_or(0).to_string()),
+                    read_in_source: read.contains(id),
                     // 等你回答时展示问题本身，否则展示最后一条回复。
                     last_message: c
                         .tail
@@ -690,7 +741,7 @@ mod tests {
     #[test]
     fn sqlite_uri_escapes_special_chars() {
         assert_eq!(
-            sqlite_uri(Path::new("/a b/c?#%.sqlite")),
+            sqlite_uri(Path::new("/a b/c?#%.sqlite"), true),
             "file:/a%20b/c%3f%23%25.sqlite?mode=ro&immutable=1"
         );
     }

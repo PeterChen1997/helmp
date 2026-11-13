@@ -393,6 +393,7 @@ fn to_session(cached: &Cached) -> Session {
             .or(entry.updated_at)
             .unwrap_or(last_activity_ms)
             .to_string(),
+        read_in_source: false,
         last_message,
         jump,
     }

@@ -569,6 +569,17 @@ impl Launcher {
             .is_some_and(|(id, revision)| agents::mark_read(id, revision))
     }
 
+    fn mark_list_read(&mut self, cx: &mut Context<Self>) {
+        let unread = self.items.iter().filter_map(|item| {
+            let completion = item.completion.as_ref().filter(|completion| completion.unread)?;
+            Some((item.id.clone(), completion.revision.clone()))
+        });
+        if agents::mark_read_batch(unread) {
+            self.viewed_completion = None;
+            self.refresh(cx);
+        }
+    }
+
     fn sync_completion_view(&mut self, cx: &mut Context<Self>) {
         let item = self.selected_item().filter(|_| {
             self.visible && !self.fresh_list && self.scope_id() == Some(agents::SCOPE_ID)
@@ -2097,13 +2108,20 @@ impl Launcher {
         let mut row_children = vec![0; self.items.len()];
         let mut last_badge: Option<&str> = None;
         let items: Vec<(usize, Item)> = self.items.iter().cloned().enumerate().collect();
+        let has_unread = self.scope_id() == Some(agents::SCOPE_ID)
+            && self.items.iter().any(|item| {
+                item.completion.as_ref().is_some_and(|completion| completion.unread)
+            });
         let mut i = 0;
         while i < items.len() {
             let (ix, item) = &items[i];
             if last_badge != Some(item.badge.as_str()) && !item.badge.is_empty() {
                 children.push(
                     div()
+                        .flex()
                         .flex_none()
+                        .items_center()
+                        .justify_between()
                         .px(px(12.))
                         .pt(px(10.))
                         .pb(px(4.))
@@ -2116,6 +2134,29 @@ impl Launcher {
                             format!("{} · {count}", item.badge)
                         } else {
                             item.badge.clone()
+                        })
+                        .when(has_unread && item.completion.is_some(), |heading| {
+                            heading.child(
+                                div()
+                                    .id("mark-completed-read")
+                                    .px(px(6.))
+                                    .rounded(px(4.))
+                                    .text_size(px(11.))
+                                    .text_color(pal.accent)
+                                    .cursor_pointer()
+                                    .hover(|button| button.bg(pal.key_bg))
+                                    .tooltip(|window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(tr(
+                                            "将当前列表中的完成会话标为已读",
+                                            "Mark completed sessions in this list as read",
+                                        ))
+                                        .build(window, cx)
+                                    })
+                                    .child(tr("全部标为已读", "Mark All Read"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.mark_list_read(cx);
+                                    })),
+                            )
                         })
                         .into_any_element(),
                 );

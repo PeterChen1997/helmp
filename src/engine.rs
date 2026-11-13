@@ -141,7 +141,9 @@ impl Engine {
                 .filter(|provider| provider.scope().is_some_and(|s| s.id == scope))
                 .flat_map(|provider| provider.query_scoped(query, filter))
                 .collect();
-            group_ranked(items, &[], scope == crate::providers::agents::SCOPE_ID)
+            let agent_sections = (scope == crate::providers::agents::SCOPE_ID)
+                .then(crate::providers::agents::scoped_sections);
+            group_ranked(items, &[], agent_sections.as_ref().map(|sections| sections.as_slice()))
         })
     }
 
@@ -330,10 +332,10 @@ fn group(items: Vec<Item>) -> Vec<Item> {
 /// 只在同一档内调整：字面前缀永远压过拼音模糊之类的档位规则不变，
 /// 但打 `term` 时常用的「终端」会排在没用过的 Termius 前面。
 fn group_preferring(items: Vec<Item>, recent: &[String]) -> Vec<Item> {
-    group_ranked(items, recent, false)
+    group_ranked(items, recent, None)
 }
 
-fn group_ranked(mut items: Vec<Item>, recent: &[String], demote_read: bool) -> Vec<Item> {
+fn group_ranked(mut items: Vec<Item>, recent: &[String], fixed_sections: Option<&[&str]>) -> Vec<Item> {
     let used = |item: &Item| {
         recent
             .iter()
@@ -346,7 +348,11 @@ fn group_ranked(mut items: Vec<Item>, recent: &[String], demote_read: bool) -> V
             .then_with(|| used(a).cmp(&used(b)))
             .then_with(|| a.title.cmp(&b.title))
     });
-    let mut order: Vec<String> = Vec::new();
+    let mut order: Vec<String> = fixed_sections
+        .unwrap_or_default()
+        .iter()
+        .map(|section| (*section).to_owned())
+        .collect();
     for item in &items {
         if !order.contains(&item.badge) {
             order.push(item.badge.clone());
@@ -356,7 +362,7 @@ fn group_ranked(mut items: Vec<Item>, recent: &[String], demote_read: bool) -> V
     items.sort_by_key(|item| {
         (
             order.iter().position(|badge| badge == &item.badge),
-            demote_read
+            fixed_sections.is_some()
                 && item
                     .completion
                     .as_ref()

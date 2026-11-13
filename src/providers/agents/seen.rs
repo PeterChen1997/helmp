@@ -41,12 +41,22 @@ pub fn is_read(id: &str, revision: &str) -> bool {
 }
 
 pub fn mark_read(id: String, revision: String) -> bool {
+    mark_read_batch([(id, revision)])
+}
+
+pub fn mark_read_batch(completions: impl IntoIterator<Item = (String, String)>) -> bool {
     let Some(seen) = SEEN.get() else { return false };
     let mut seen = seen.lock().expect("Agent 已读记录锁中毒");
-    if seen.get(&id) == Some(&revision) {
+    let mut changed = false;
+    for (id, revision) in completions {
+        if seen.get(&id) != Some(&revision) {
+            seen.insert(id, revision);
+            changed = true;
+        }
+    }
+    if !changed {
         return false;
     }
-    seen.insert(id, revision);
     if let Err(err) = save(&seen) {
         eprintln!("helmp: 保存 Agent 已读记录失败：{err:#}");
     }

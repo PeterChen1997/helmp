@@ -93,16 +93,25 @@ impl Status {
         self.tag().1
     }
 
-    /// 范围视图里的分组（设计稿 Agents：等你处理 / 进行中 / 最近完成）和组的基础分。
-    /// 分组的先后由组内最高分决定，基础分保证这个顺序。
+    /// 范围视图里的分组和组的基础分。
     fn section(&self) -> (&'static str, u32) {
-        match self {
-            Status::NeedsYou(_) => (waiting_section(), 900),
-            Status::Running => (tr("进行中", "In Progress"), 800),
-            Status::Done | Status::Idle => (tr("最近完成", "Recently Completed"), 700),
-            Status::Interrupted(_) | Status::Unknown => (tr("其他", "Other"), 600),
-        }
+        let index = match self {
+            Status::NeedsYou(_) => 0,
+            Status::Done | Status::Idle => 1,
+            Status::Running => 2,
+            Status::Interrupted(_) | Status::Unknown => 3,
+        };
+        (scoped_sections()[index], 900 - index as u32 * 100)
     }
+}
+
+pub(crate) fn scoped_sections() -> [&'static str; 4] {
+    [
+        waiting_section(),
+        tr("最近完成", "Recently Completed"),
+        tr("进行中", "In Progress"),
+        tr("其他", "Other"),
+    ]
 }
 
 /// `NeedsYou` 的中文短标签 → 当前语言的说明（详情标签用）。认不出的原样返回。
@@ -145,6 +154,8 @@ pub struct Session {
     pub last_activity_ms: u64,
     /// 状态所属的轮次或更新时间。与列表的最近活动时间分开，避免改标题等操作重置已读。
     pub status_revision: String,
+    /// 来源确认已读的当前轮次，例如 Codex 桌面端写入的回执。
+    pub read_in_source: bool,
     /// 详情里「最后一条消息」：等你的会话是在等什么（要确认的命令、提的问题），否则是最后一段回复。
     pub last_message: Option<String>,
     pub jump: Jump,
@@ -245,7 +256,7 @@ pub fn rank(sessions: &[Session], query: &str, home: Option<&Path>) -> Vec<(usiz
 }
 
 /// 范围视图（`ag `）：只看 `only` 来源的会话，返回 `(下标, 分数, 分组名)`。
-/// 空查询列出全部，按 等你处理 / 进行中 / 最近完成 / 其他 分组，组内最近活动在前；
+/// 空查询列出全部，按 等你处理 / 最近完成 / 进行中 / 其他 分组，组内最近活动在前；
 /// 有查询时只留命中的，分数是匹配分，分组仍按状态。
 pub fn rank_scoped(
     sessions: &[Session],
@@ -374,6 +385,7 @@ mod tests {
             branch: Some("master".into()),
             last_activity_ms,
             status_revision: last_activity_ms.to_string(),
+            read_in_source: false,
             last_message: None,
             jump: Jump::Pid(1),
         }
@@ -532,7 +544,7 @@ mod tests {
 
     #[test]
     fn scope_lists_by_status_section_then_recency() {
-        // 设计稿 Agents：进入范围后按 等你处理 / 进行中 / 最近完成 分组，最要紧的在最上面。
+        // 要确认的排在前面，其次是完成的，运行中的排在两者后面。
         let sessions = vec![
             session("完成", Status::Done, 9_000, Source::Codex),
             session("空闲", Status::Idle, 8_000, Source::Claude),
@@ -561,9 +573,9 @@ mod tests {
             [
                 ("等你新".to_string(), waiting_section()),
                 ("等你旧".to_string(), waiting_section()),
-                ("在跑".to_string(), "进行中"),
                 ("完成".to_string(), "最近完成"),
                 ("空闲".to_string(), "最近完成"),
+                ("在跑".to_string(), "进行中"),
                 ("中断".to_string(), "其他"),
             ]
         );

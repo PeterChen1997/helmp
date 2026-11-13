@@ -52,7 +52,8 @@ fn global_section() -> &'static str {
     tr("Agent 会话", "Agent Sessions")
 }
 pub(crate) const SCOPE_ID: &str = "agents";
-pub(crate) use seen::mark_read;
+pub(crate) use seen::{mark_read, mark_read_batch};
+pub(crate) use state::scoped_sections;
 
 /// 一轮扫描里遇到的问题。每条只在首次出现时打印到 stderr，避免每秒刷屏。
 type Warnings = Vec<String>;
@@ -208,7 +209,7 @@ impl Agents {
         let (tag, tone) = session.status.tag();
         let id = format!("agents:{}", session.domain_id());
         let completion = session.completion_revision().map(|revision| Completion {
-            unread: !seen::is_read(&id, &revision),
+            unread: !session.read_in_source && !seen::is_read(&id, &revision),
             revision,
         });
         Item {
@@ -352,6 +353,7 @@ mod tests {
             branch: Some("main".into()),
             last_activity_ms: now_ms() - 10 * 60_000,
             status_revision: "fixture".into(),
+            read_in_source: false,
             last_message: Some("需要你确认：是否允许运行 npm test？".into()),
             jump: Jump::DeepLink("claude://claude.ai/epitaxy/x".into()),
         }
