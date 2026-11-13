@@ -2,7 +2,10 @@
 //!
 //! 标题「识别到 N 行 · 语言」、二维码链接、语言名都复用面板详情的同一套函数（`providers::screenshot`）。
 //! 非空的结果自动复制到剪贴板（和以前一样），窗口里写明「已自动复制」；什么都没识别到时明确说出来。
-//! 回车复制并关闭，⌘T 带着文字进翻译，⌘O 打开二维码链接，Esc 关闭。文字可以选中一部分 ⌘C 复制。
+//! 回车复制并关闭，⌘T 带着文字进翻译，⌘O 打开二维码链接，Esc / ⌘W 关闭。文字可以选中一部分 ⌘C 复制。
+//!
+//! 窗口一出现就是 key window、键盘焦点在结果上（别的 App 在前台时先激活 Helmp），不用先点一下；
+//! 关闭后焦点还给用户原来所在的 App。
 
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -87,6 +90,17 @@ pub fn open(shot: Shot, cx: &mut App) {
         native::present(window, true, offscreen);
     });
     set_result(Some((handle, view.clone())), cx);
+    // 从截图界面识别时，遮罩窗口要到这一轮更新结束才真正关掉：关掉 key window 时 AppKit 可能把
+    // key 交给别的窗口。等它关完再确认一次结果窗口是 key window、焦点在结果上。
+    let refocus = view.clone();
+    cx.defer(move |cx| {
+        let _ = handle.update(cx, |_, window, cx| {
+            if !offscreen && !native::is_key(window) {
+                native::present(window, true, offscreen);
+            }
+            refocus.update(cx, |view, cx| view.focus.focus(window, cx));
+        });
+    });
     log(cx, "recognizing".into());
     let languages = screenshot::languages();
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -163,6 +177,11 @@ impl ResultView {
         }
     }
 
+    /// 自检用：键盘焦点是否在结果窗口上（回车、⌘T、Esc 直接生效）。
+    pub fn focused(&self, window: &Window, cx: &App) -> bool {
+        self.focus.is_focused(window) || self.focus.contains_focused(window, cx)
+    }
+
     /// 自检用：标题和文字。
     pub fn summary(&self) -> String {
         let body = match &self.phase {
@@ -224,7 +243,7 @@ impl ResultView {
         let m = &keystroke.modifiers;
         let plain = !m.platform && !m.control && !m.alt && !m.shift;
         match keystroke.key.as_str() {
-            "escape" => cx.defer(close),
+            _ if super::is_close_key(keystroke) => cx.defer(close),
             "enter" if plain => self.copy_and_close(cx),
             "t" if m.platform => self.translate(cx),
             "o" if m.platform => self.open_link(cx),

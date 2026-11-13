@@ -270,6 +270,8 @@ pub struct ScreenshotConfig {
     /// 「截图并保存」的目录；None = `<data_dir>/screenshots`。
     pub save_dir: Option<String>,
     pub ocr_languages: Vec<String>,
+    /// 截图历史：记下最近 10 张完成的截图（`<data_dir>/capture-history/`，见 `capture::history`）。默认开。
+    pub history: bool,
 }
 
 impl Default for ScreenshotConfig {
@@ -277,6 +279,7 @@ impl Default for ScreenshotConfig {
         Self {
             save_dir: None,
             ocr_languages: vec!["zh-Hans".into(), "en-US".into()],
+            history: true,
         }
     }
 }

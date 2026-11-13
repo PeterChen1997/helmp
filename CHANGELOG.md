@@ -6,15 +6,35 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Screenshot History keeps the final image of your last 10 screenshots that you copied, saved, pinned or recognized (annotations included). Search "Screenshot History" to pin one again, copy it, save it, recognize its text, show it in Finder or delete it. Images are stored locally in `capture-history/` in the data folder; turn the history off in Settings › Screenshot, which also deletes it.
+- Scroll over a pinned screenshot to zoom it around the pointer, from 10% to 800%. Trackpad scrolling and pinching zoom smoothly, and the zoom level appears briefly.
+
+### Changed
+
+- <kbd>⌘W</kbd> closes the screenshot selection screen, a pinned screenshot or the text recognition window, just like <kbd>esc</kbd>.
+
 ### Fixed
 
+- The text recognition window takes the keyboard as soon as it appears, even when another app was in front, so <kbd>↵</kbd>, <kbd>⌘T</kbd> and <kbd>esc</kbd> work without clicking it first. Closing it returns focus to the app you were using, including when you recognize text from a pinned screenshot.
 - The launcher panel no longer has a title bar, so macOS can't show close, minimize, and zoom buttons in its top-left corner. Chinese input methods, the glass background, and rounded corners work as before.
 - Pasting from clipboard history no longer fails silently. Without Accessibility permission, Helmp still copies the item, explains why it couldn't paste, and offers a button that opens the Accessibility pane in System Settings. Helmp also waits for the app you were using to return to the front before it presses <kbd>⌘V</kbd>. If that app doesn't come back within 1.5 seconds, Helmp reports the problem instead of sending the keystroke to the wrong app or to itself.
 
 ### 简体中文
 
+#### 新增
+
+- 截图历史：保留最近 10 张复制、保存、钉图或识别过文字的截图的最终图（含标注）。搜「截图历史」可以再钉到屏幕上、复制、另存为、识别文字、在访达中显示或删除。图片只存在本机数据目录的 `capture-history/` 里；可在「设置 › 截图」里关掉，关掉时一并删除。
+- 在钉图上滚动滚轮以光标为中心缩放，范围 10%–800%。触控板滚动和捏合连续缩放，并短暂显示缩放比例。
+
+#### 变更
+
+- <kbd>⌘W</kbd> 和 <kbd>esc</kbd> 一样可以关闭截图界面、钉图和识别结果窗口。
+
 #### 修复
 
+- 识别结果窗口出现后立即接收键盘，别的 App 在前台时也一样，<kbd>↵</kbd>、<kbd>⌘T</kbd>、<kbd>esc</kbd> 不用先点一下就能用。关闭后焦点回到原来的 App，从钉图上识别文字时也是。
 - 启动器面板去掉了标题栏，左上角不会再出现关闭、最小化、缩放按钮。中文输入法、毛玻璃背景和圆角都不受影响。
 - 从剪贴板历史粘贴不再悄悄失败。没有辅助功能权限时仍会复制，并说明没能粘贴的原因，提供直达「系统设置 › 辅助功能」的按钮。按 <kbd>⌘V</kbd> 前会等原来的 App 回到前台；1.5 秒内没回来就报错，不会把按键发给别的 App 或 Helmp 自己。
 

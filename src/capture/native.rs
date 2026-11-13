@@ -165,6 +165,55 @@ pub fn frame(window: &Window) -> Option<Rect> {
     ))
 }
 
+/// 移动 / 缩放窗口到 `frame`（AppKit 全局坐标）。钉图缩放用：垫在下面的图片随 contentView 一起缩放。
+///
+/// 放到 GPUI 的更新之外再改：改 frame 时 GPUI 同步收到尺寸变化并要借用整个 App 去更新视口大小，
+/// 要是此刻还在 App 的更新里（滚轮事件、`cx.defer` 都是），借用失败、只记一行日志，布局和悬停、
+/// 滚动的响应区域就停在旧尺寸。所以交给前台任务，在主线程空下来时执行。
+pub fn set_frame_later(window: &Window, frame: Rect, cx: &mut gpui_kit::App) {
+    let Some(ns_window) = crate::panel::ns_window(window) else {
+        return;
+    };
+    cx.spawn(async move |_: &mut gpui_kit::AsyncApp| {
+        ns_window.setFrame_display(ns_rect(frame), true);
+        ns_window.invalidateShadow();
+    })
+    .detach();
+}
+
+/// 窗口是不是 key window（键盘落在它上面）。
+pub fn is_key(window: &Window) -> bool {
+    crate::panel::ns_window(window).is_some_and(|ns_window| ns_window.isKeyWindow())
+}
+
+/// Helmp 此刻是不是前台 App。
+pub fn app_is_active() -> bool {
+    MainThreadMarker::new()
+        .is_some_and(|mtm| objc2_app_kit::NSApplication::sharedApplication(mtm).isActive())
+}
+
+/// README 配图 / 自检：GPUI 的离屏渲染只有 GPUI 画的那层，垫在下面的截图（NSImageView）要另外用
+/// AppKit 画出来存成 PNG，才能看到钉图缩放后图片本身的样子。
+#[cfg(feature = "readme-shots")]
+pub fn snapshot_underlay(window: &Window, path: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use objc2_app_kit::NSBitmapImageFileType;
+    use objc2_foundation::NSDictionary;
+    let ns_window = crate::panel::ns_window(window).context("取不到 NSWindow")?;
+    let content = ns_window.contentView().context("没有 contentView")?;
+    let bounds = content.bounds();
+    let rep = content
+        .bitmapImageRepForCachingDisplayInRect(bounds)
+        .context("建不出位图")?;
+    content.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+    // SAFETY: 空字典是合法的属性参数。
+    let data = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+    .context("编码 PNG 失败")?;
+    std::fs::write(path, data.to_vec()).with_context(|| format!("写入 {}", path.display()))
+}
+
 /// 鼠标此刻的位置（AppKit 全局坐标）：遮罩出现时让鼠标所在屏的那块成为 key window。
 pub fn mouse_location() -> (f64, f64) {
     let p = objc2_app_kit::NSEvent::mouseLocation();

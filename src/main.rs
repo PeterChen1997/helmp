@@ -415,8 +415,11 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                 if let Some(name) = token.strip_prefix("snap:") {
                     let dir = std::env::var_os("HELMP_SNAPSHOT_DIR").unwrap_or_else(|| ".".into());
                     let path = std::path::Path::new(&dir).join(format!("{name}.png"));
+                    // 截图窗口（钉图等）：立即截，不等——缩放百分比这类提示一秒内就会消失。
+                    let capture_window = on_other_window
+                        && cx.update(capture::self_test_target) == Some(target);
                     // 面板在屏幕外时系统不驱动重绘：手动画几帧，让图标（先生成 PNG、再异步解码）加载出来再截。
-                    for _ in 0..2 {
+                    for _ in 0..if capture_window { 0 } else { 2 } {
                         target
                             .update(cx, |_, window, cx| {
                                 // 把鼠标「挪」出窗口，免得启动时光标所在的那一行带着悬停高亮
@@ -433,9 +436,23 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         cx.background_executor().timer(settle).await;
                     }
                     target
-                        .update(cx, move |_, window, cx| match panel::snapshot(window, cx, &path) {
-                            Ok(()) => println!("self-test snap {}", path.display()),
-                            Err(err) => println!("self-test snap {} 失败：{err:#}", path.display()),
+                        .update(cx, move |_, window, cx| {
+                            match panel::snapshot(window, cx, &path) {
+                                Ok(()) => println!("self-test snap {}", path.display()),
+                                Err(err) => println!("self-test snap {} 失败：{err:#}", path.display()),
+                            }
+                            // GPUI 只画得出它自己那层：截图窗口垫在下面的图片另存为 `<名字>-underlay.png`。
+                            #[cfg(feature = "readme-shots")]
+                            if capture_window {
+                                let underlay = path.with_file_name(format!(
+                                    "{}-underlay.png",
+                                    path.file_stem().unwrap_or_default().to_string_lossy()
+                                ));
+                                match capture::snapshot_underlay(window, &underlay) {
+                                    Ok(()) => println!("self-test snap {}", underlay.display()),
+                                    Err(err) => println!("self-test snap {} 失败：{err:#}", underlay.display()),
+                                }
+                            }
                         })
                         .expect("launcher window gone");
                     continue;

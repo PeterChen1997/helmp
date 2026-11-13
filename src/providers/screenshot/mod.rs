@@ -30,12 +30,13 @@ use std::sync::Mutex;
 use anyhow::{Context as _, Result};
 use objc2_foundation::{NSDate, NSDateFormatter, NSLocale, NSString};
 
+use crate::capture::history;
 use crate::engine::commands_section;
 use crate::i18n::{tr, trf};
 use crate::matcher;
 use crate::paths;
 use crate::provider::{
-    Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Tint, Tone,
+    Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint, Tone,
 };
 
 fn badge() -> &'static str {
@@ -202,6 +203,14 @@ impl Provider for Screenshot {
             })
             .collect();
         items.extend(ocr_file_item(query));
+        // 「截图历史」入口：只认它自己的名字（含「截图」这类前缀），不做文件读写（query 不做 IO）。
+        if let Some(score) = HISTORY_KEYWORDS
+            .iter()
+            .filter_map(|keyword| matcher::score(query, keyword))
+            .max()
+        {
+            items.push(history_entry(score));
+        }
         items
     }
 
@@ -212,7 +221,262 @@ impl Provider for Screenshot {
             .map(|cmd| command_item(cmd, OCR_SUGGESTION_SCORE, commands_section()))
             .collect()
     }
+
+    fn command_scope(&self, id: &str) -> Option<Scope> {
+        (id == HISTORY_SCOPE).then(history_scope)
+    }
+
+    fn query_command(&self, id: &str, query: &str) -> Vec<Item> {
+        if id != HISTORY_SCOPE {
+            return Vec::new();
+        }
+        match history::dir() {
+            Ok(dir) => history_items(&dir, history::enabled(), query, chrono::Local::now()),
+            Err(err) => vec![Item {
+                id: format!("{HISTORY_SCOPE}:error"),
+                title: tr("读不到截图历史", "Couldn't read the screenshot history").into(),
+                subtitle: format!("{err:#}"),
+                badge: history_badge().into(),
+                icon: Icon::Symbol {
+                    name: "shield-alert",
+                    tint: Tint::Orange,
+                },
+                action: Action::new(move || Err(anyhow::anyhow!("{err:#}"))),
+                ..Item::blank()
+            }],
+        }
+    }
 }
+
+/// 「截图历史」命令范围的 id，也是入口结果的 id。
+pub(crate) const HISTORY_SCOPE: &str = "screenshot:history";
+/// 能搜到「截图历史」入口的词（与界面语言无关）。
+const HISTORY_KEYWORDS: [&str; 7] = [
+    "截图历史",
+    "历史截图",
+    "截图记录",
+    "jtls",
+    "screenshot history",
+    "capture history",
+    "recent screenshots",
+];
+
+fn history_badge() -> &'static str {
+    tr("最近截图", "Recent Screenshots")
+}
+
+/// 全局搜索里的「截图历史」入口：Tab / 回车进入它的范围。
+fn history_entry(score: u32) -> Item {
+    Item {
+        id: HISTORY_SCOPE.into(),
+        title: tr("截图历史", "Screenshot History").into(),
+        subtitle: trf!(
+            "最近 {} 张截图：再钉到屏幕上、复制、另存为、识别文字",
+            "Your last {} screenshots: pin again, copy, save or recognize text",
+            history::KEEP
+        ),
+        badge: badge().into(),
+        score,
+        icon: Icon::Symbol {
+            name: "images",
+            tint: TINT,
+        },
+        action: Action::enter_scope(HISTORY_SCOPE),
+        action_title: tr("打开", "Open").into(),
+        opens_scope: Some(HISTORY_SCOPE.into()),
+        ..Item::blank()
+    }
+}
+
+fn history_scope() -> Scope {
+    Scope {
+        id: HISTORY_SCOPE.into(),
+        label: tr("截图历史", "Screenshot History").into(),
+        tint: TINT,
+        // 命令范围不靠打字前缀进入（见 `Provider::command_scope`）。
+        prefixes: Vec::new(),
+        placeholder: tr(
+            "回车再钉到屏幕上 · ⌘K 复制、另存为、识别文字、删除",
+            "Return pins it again · ⌘K to copy, save, recognize text or delete",
+        )
+        .into(),
+        filters: Vec::new(),
+    }
+}
+
+/// 截图历史范围里的结果：最新的在前。关掉了历史或者还没有截图时给一条说明，而不是空白。
+fn history_items(
+    dir: &Path,
+    enabled: bool,
+    query: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Vec<Item> {
+    if !enabled {
+        return vec![Item {
+            id: format!("{HISTORY_SCOPE}:off"),
+            title: tr("截图历史已关闭", "Screenshot history is off").into(),
+            subtitle: tr(
+                "到设置 › 截图里打开后，会保留最近 10 张截图",
+                "Turn it on in Settings › Screenshot to keep your last 10 screenshots",
+            )
+            .into(),
+            badge: history_badge().into(),
+            icon: Icon::Symbol {
+                name: "image-off",
+                tint: Tint::Gray,
+            },
+            action: Action::new(|| {
+                Ok(Outcome::OpenSettingsPage(crate::settings::Page::Screenshot))
+            }),
+            action_title: tr("打开设置", "Open Settings").into(),
+            ..Item::blank()
+        }];
+    }
+    let entries = history::list(dir);
+    if entries.is_empty() {
+        return vec![Item {
+            id: format!("{HISTORY_SCOPE}:empty"),
+            title: tr("还没有截图历史", "No screenshots yet").into(),
+            subtitle: tr(
+                "截图后复制、保存、钉图或识别文字，最近 10 张会出现在这里",
+                "Copy, save, pin or recognize text in a screenshot and your last 10 show up here",
+            )
+            .into(),
+            badge: history_badge().into(),
+            icon: Icon::Symbol {
+                name: "images",
+                tint: Tint::Gray,
+            },
+            action: Action::new(capture_and_copy),
+            action_title: tr("截图", "Capture").into(),
+            ..Item::blank()
+        }];
+    }
+    let query = query.trim();
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, entry)| {
+            let item = history_item(dir, entry, now);
+            if query.is_empty() {
+                // 最新的分数最高：列表按时间倒序。
+                return Some(Item {
+                    score: 1000 - ix as u32,
+                    ..item
+                });
+            }
+            let score = [&item.title, &item.subtitle]
+                .into_iter()
+                .filter_map(|text| matcher::score(query, text))
+                .max()?;
+            Some(Item { score, ..item })
+        })
+        .collect()
+}
+
+fn history_item(dir: &Path, entry: &history::Entry, now: chrono::DateTime<chrono::Local>) -> Item {
+    use crate::capture::{Reopen, Request};
+    let id = entry.id;
+    let path = entry.png(dir);
+    let reopen =
+        move |reopen| Action::new(move || Ok(Outcome::Capture(Request::History(reopen, id))));
+    let size = format!("{} × {} px", entry.width, entry.height);
+    let copy = {
+        let path = path.clone();
+        Action::new(move || {
+            if let Some(outcome) = crate::effects::dry("screenshot", &format!("copy history {id}"))
+            {
+                return Ok(outcome);
+            }
+            let png = std::fs::read(&path)
+                .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
+            pasteboard::write_png(&pasteboard::general(), &png)?;
+            Ok(Outcome::Done)
+        })
+    };
+    let delete = {
+        let dir = dir.to_path_buf();
+        // 删除后面板不隐藏、原地刷新列表。
+        Action::new(move || {
+            history::delete(&dir, id)?;
+            Ok(Outcome::Done)
+        })
+        .keep_open()
+    };
+    Item {
+        id: format!("{HISTORY_SCOPE}:{id}"),
+        title: history_time(id, now, false),
+        subtitle: format!("{} · {size}", entry.ended.label()),
+        badge: history_badge().into(),
+        icon: Icon::Image(path.clone()),
+        action: reopen(Reopen::Pin),
+        action_title: tr("钉到屏幕上", "Pin to Screen").into(),
+        actions: vec![
+            NamedAction::new(tr("复制", "Copy"), Some("⌘C"), copy),
+            NamedAction::new(tr("另存为…", "Save As…"), Some("⌘S"), reopen(Reopen::Save)),
+            NamedAction::new(
+                tr("识别文字", "Recognize Text"),
+                Some("⌘R"),
+                reopen(Reopen::Recognize),
+            ),
+            NamedAction::new(
+                tr("在访达中显示", "Show in Finder"),
+                Some("⌘↵"),
+                Action::reveal(path.display().to_string()),
+            ),
+            NamedAction::new(tr("删除", "Delete"), Some("⌘⌫"), delete),
+        ],
+        detail: Some(Detail {
+            icon: Icon::None,
+            title: String::new(),
+            tag: None,
+            blocks: vec![Block::Image(path)],
+            metadata: vec![
+                (tr("截图于", "Captured").into(), history_time(id, now, true)),
+                (tr("尺寸", "Size").into(), size),
+                (tr("用途", "Used for").into(), entry.ended.label().into()),
+            ],
+            actions: Vec::new(),
+        }),
+        ..Item::blank()
+    }
+}
+
+/// 历史里的时间：今天的只写时刻，今年的写月日，更早的带年份。`full` 时总是写到秒。
+fn history_time(id: u64, now: chrono::DateTime<chrono::Local>, full: bool) -> String {
+    use chrono::{Datelike as _, TimeZone as _};
+    let Some(at) = i64::try_from(id)
+        .ok()
+        .and_then(|ms| chrono::Local.timestamp_millis_opt(ms).single())
+    else {
+        return id.to_string();
+    };
+    let time = at.format("%H:%M:%S");
+    if full {
+        return at.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    if at.date_naive() == now.date_naive() {
+        trf!("今天 {time}", "Today {time}")
+    } else if at.year() == now.year() {
+        trf!(
+            "{}月{}日 {time}",
+            "{} {} {time}",
+            if crate::i18n::is_en() {
+                MONTHS[at.month0() as usize].to_string()
+            } else {
+                at.month().to_string()
+            },
+            at.day()
+        )
+    } else {
+        at.format("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+/// 英文日期用的月份缩写。
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 fn command_item(cmd: &Cmd, score: u32, badge: &str) -> Item {
     let id = format!("screenshot:{}", cmd.key);
@@ -350,7 +614,7 @@ fn open_capture(has_access: bool, mode: crate::capture::Mode) -> Result<Outcome>
     if !has_access && crate::capture::fixture().is_none() {
         return Ok(Outcome::Show(permission_detail()));
     }
-    Ok(Outcome::Capture(mode))
+    Ok(Outcome::Capture(mode.into()))
 }
 
 fn ocr_clipboard() -> Result<Outcome> {
@@ -1038,10 +1302,10 @@ mod tests {
     fn capture_commands_open_the_frozen_screen_overlay() {
         // 三个截图命令都打开冻结屏幕的选区界面，回车的默认动作各自保留旧命令的含义：
         // 「截图」复制（旧的「截图到剪贴板」）、「截图并保存」保存、「截图识别文字」松手即识别。
-        use crate::capture::{Mode, Primary};
+        use crate::capture::{Mode, Primary, Request};
         assert_eq!(
             open_capture(true, Mode::Capture(Primary::Copy)).unwrap(),
-            Outcome::Capture(Mode::Capture(Primary::Copy))
+            Outcome::Capture(Request::Select(Mode::Capture(Primary::Copy)))
         );
         let ids = [
             ("screenshot:clipboard", Mode::Capture(Primary::Copy)),
@@ -1052,7 +1316,7 @@ mod tests {
             let item = Screenshot.query("截图").into_iter().find(|item| item.id == id).unwrap();
             // 本机有没有录屏权限不由测试决定：有就直接打开界面，没有就给「前往授权」，两种都不能是别的。
             match item.action.run().unwrap() {
-                Outcome::Capture(got) => assert_eq!(got, mode, "{id}"),
+                Outcome::Capture(got) => assert_eq!(got, Request::Select(mode), "{id}"),
                 Outcome::Show(detail) => assert_eq!(detail.title, "需要录屏权限", "{id}"),
                 other => panic!("{id} 应打开截图界面：{other:?}"),
             }
@@ -1181,7 +1445,7 @@ mod tests {
         let names = COMMANDS
             .iter()
             .map(|cmd| cmd.symbol)
-            .chain(["file-image", "scan-text", "shield-alert"]);
+            .chain(["file-image", "scan-text", "shield-alert", "images", "image-off"]);
         for name in names {
             let path = format!("icons/{name}.svg");
             assert!(
@@ -1189,6 +1453,118 @@ mod tests {
                 "缺少图标 {path}"
             );
         }
+    }
+
+    /// 按截图历史的文件格式写一条（`capture::history` 写的就是这个样子）。
+    fn write_history(dir: &Path, id: u64, ended: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(format!("{id}.png")), b"png").unwrap();
+        let meta = serde_json::json!({
+            "id": id, "width": 200, "height": 100, "ended": ended,
+            "rect": [0.0, 0.0, 100.0, 50.0],
+            "screen": [0.0, 0.0, 1512.0, 982.0],
+            "visible": [0.0, 37.0, 1512.0, 880.0],
+        });
+        std::fs::write(dir.join(format!("{id}.json")), meta.to_string()).unwrap();
+    }
+
+    #[test]
+    fn history_entry_opens_its_own_scope() {
+        // 「截图历史」是个命令范围：搜得到、Tab / 回车进去；不靠打字前缀（免得日常搜索误进），
+        // 搜「截图」时也不能压过主命令「截图」。
+        let found = Screenshot.query("截图历史");
+        let entry = found.iter().find(|item| item.id == HISTORY_SCOPE).unwrap();
+        assert_eq!(entry.opens_scope.as_deref(), Some(HISTORY_SCOPE));
+        assert_eq!(
+            entry.action.run().unwrap(),
+            Outcome::EnterScope(HISTORY_SCOPE.into())
+        );
+        assert!(ids("screenshot history").contains(&HISTORY_SCOPE.to_string()));
+        assert!(ids("jtls").contains(&HISTORY_SCOPE.to_string()));
+        let items = Screenshot.query("截图");
+        let main = items.iter().find(|item| item.id == "screenshot:clipboard").unwrap();
+        let history = items.iter().find(|item| item.id == HISTORY_SCOPE).unwrap();
+        assert!(history.score < main.score);
+        let scope = Screenshot.command_scope(HISTORY_SCOPE).unwrap();
+        assert_eq!((scope.id.as_str(), scope.label.as_str()), (HISTORY_SCOPE, "截图历史"));
+        assert!(scope.prefixes.is_empty());
+        assert!(Screenshot.command_scope("screenshot:other").is_none());
+        assert!(Screenshot.query_command("screenshot:other", "").is_empty());
+    }
+
+    #[test]
+    fn history_scope_lists_newest_first_with_preview_and_actions() {
+        // 和剪贴板历史一样一眼认出是哪张：最新的在前，缩略图、时间、怎么用掉的和尺寸；
+        // 回车再钉到屏幕上，⌘K 里能复制、另存为、识别文字、在访达中显示、删除。
+        use crate::capture::{Reopen, Request};
+        let dir = TempDir::new("history");
+        let now = chrono::Local::now();
+        let newest = u64::try_from(now.timestamp_millis()).unwrap();
+        write_history(&dir.0, newest - 2000, "copied");
+        write_history(&dir.0, newest, "pinned");
+        let items = history_items(&dir.0, true, "", now);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, format!("screenshot:history:{newest}"));
+        assert!(items[0].score > items[1].score, "最新的排前");
+        assert!(items[0].title.starts_with("今天 "), "{}", items[0].title);
+        assert_eq!(items[0].subtitle, "已钉图 · 200 × 100 px");
+        assert_eq!(items[1].subtitle, "已复制 · 200 × 100 px");
+        let png = dir.0.join(format!("{newest}.png"));
+        assert_eq!(items[0].icon, Icon::Image(png.clone()));
+        let detail = items[0].detail.as_ref().unwrap();
+        assert_eq!(detail.blocks, [Block::Image(png)]);
+        assert!(detail.metadata.iter().any(|(k, v)| k == "尺寸" && v == "200 × 100 px"));
+        assert_eq!(
+            items[0].action.run().unwrap(),
+            Outcome::Capture(Request::History(Reopen::Pin, newest))
+        );
+        let titles: Vec<&str> = items[0].actions.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(titles, ["复制", "另存为…", "识别文字", "在访达中显示", "删除"]);
+        assert_eq!(
+            items[0].actions[2].action.run().unwrap(),
+            Outcome::Capture(Request::History(Reopen::Recognize, newest))
+        );
+        // 搜索：按「怎么用掉的」也能找。
+        let copied = history_items(&dir.0, true, "已复制", now);
+        assert_eq!(copied.len(), 1);
+        assert_eq!(copied[0].id, format!("screenshot:history:{}", newest - 2000));
+        // 删除：面板不收起、原地刷新，文件真的没了。
+        let delete = &items[0].actions[4].action;
+        assert!(delete.keeps_open());
+        assert_eq!(delete.run().unwrap(), Outcome::Done);
+        assert!(!dir.0.join(format!("{newest}.png")).exists());
+        assert_eq!(history_items(&dir.0, true, "", now).len(), 1);
+    }
+
+    #[test]
+    fn history_scope_explains_when_off_or_empty() {
+        // 关掉了或还没有截图时，范围里不能是一片空白：说清楚为什么，并给出下一步。
+        let dir = TempDir::new("history-empty");
+        let now = chrono::Local::now();
+        let empty = history_items(&dir.0, true, "", now);
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].id, "screenshot:history:empty");
+        write_history(&dir.0, 1, "saved");
+        let off = history_items(&dir.0, false, "", now);
+        assert_eq!(off.len(), 1, "关掉时不列出旧的");
+        assert_eq!(
+            off[0].action.run().unwrap(),
+            Outcome::OpenSettingsPage(crate::settings::Page::Screenshot)
+        );
+    }
+
+    #[test]
+    fn history_times_are_short_for_today_and_dated_otherwise() {
+        use chrono::TimeZone as _;
+        let now = chrono::Local.with_ymd_and_hms(2026, 11, 13, 15, 0, 0).unwrap();
+        let ms = |y, mo, d, h, mi, s| {
+            let at = chrono::Local.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap();
+            u64::try_from(at.timestamp_millis()).unwrap()
+        };
+        assert_eq!(history_time(ms(2026, 11, 13, 9, 5, 7), now, false), "今天 09:05:07");
+        assert_eq!(history_time(ms(2026, 3, 2, 9, 5, 7), now, false), "3月2日 09:05:07");
+        assert_eq!(history_time(ms(2025, 3, 2, 9, 5, 7), now, false), "2025-03-02 09:05");
+        assert_eq!(history_time(ms(2026, 11, 13, 9, 5, 7), now, true), "2026-11-13 09:05:07");
     }
 
     #[test]

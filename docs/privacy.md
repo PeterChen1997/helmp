@@ -19,6 +19,7 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 | `clipboard-images/` | Images you copied, named by content hash | Removed with the clipboard history |
 | `screenshots/` | Output of "Capture and save" (you can choose another folder) | Delete the files |
 | `ocr/` | The last few images shown next to OCR results in the panel; older ones are deleted automatically | Delete the folder |
+| `capture-history/` | Screenshot History: the final image (with annotations) of your **last 10** screenshots that you copied, saved, pinned or recognized, each as `<time>.png` plus a small `<time>.json` (time, pixel size, how it was used, where it was on screen). Older ones are deleted as new ones arrive; cancelled selections are not kept | Delete items from Screenshot History, or turn off Settings › Screenshot › Keep screenshot history (this also deletes the folder) |
 | `scripts/` | Your script commands | Yours to manage |
 | `icon-cache/` | PNG renderings of app and file icons | Safe to delete at any time |
 | `fx.json` | The last ECB exchange rates (date and rate table) used for currency conversion | Safe to delete; downloaded again when online |
@@ -67,7 +68,7 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 - **Other MCP clients' settings.** Only when you click "Import from Claude Code / Codex / Cursor" in Settings › MCP (or run `helmp mcp-client import`): `~/.claude.json` (and `$CLAUDE_CONFIG_DIR/.claude.json`), `$CODEX_HOME/config.toml` or `~/.codex/config.toml`, `~/.cursor/mcp.json`, and the `.mcp.json` / `.cursor/mcp.json` of a project folder you name. Read-only; Helmp only copies the servers you tick.
 - **Keyboard shortcut settings.** While you record a hotkey in Settings, Helmp reads `~/Library/Preferences/com.apple.symbolichotkeys.plist` (read-only) to find system shortcuts that would conflict.
 - **Images for OCR.** Screenshots, clipboard images and files you pass to `ocr` are processed on your Mac with Apple Vision, including QR code and barcode detection.
-- **Frozen screen.** While you select a screenshot, the image of every display is kept in the system temporary folder (`$TMPDIR/helmp-capture-<pid>/`) and deleted when the selection screen closes. Pinned images live only in memory.
+- **Frozen screen.** While you select a screenshot, the image of every display is kept in the system temporary folder (`$TMPDIR/helmp-capture-<pid>/`) and deleted when the selection screen closes. Pinned images live only in memory; the final image of a completed screenshot is also kept in Screenshot History (`capture-history/`, see above) unless you turn it off.
 - **Clipboard.** Polled every 300 ms to build the history (see the rules above). Turn the history off in Settings › Clipboard.
 
 ## Network
