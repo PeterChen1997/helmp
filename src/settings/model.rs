@@ -199,11 +199,14 @@ impl Page {
                 "语言",
                 "保存",
                 "目录",
+                "历史",
+                "截图历史",
                 "screenshot",
                 "text recognition",
                 "language",
                 "save",
                 "folder",
+                "history",
             ],
             Page::Appearance => &[
                 "深色",
@@ -876,6 +879,7 @@ mod tests {
         // 用户记得的是设置项名字而不是它在哪一页，搜不到就只能逐页翻。
         assert!(Page::General.matches("快捷键"));
         assert!(Page::Screenshot.matches("OCR"));
+        assert!(Page::Screenshot.matches("截图历史"));
         assert!(Page::Appearance.matches("深色"));
         assert!(!Page::About.matches("快捷键"));
         assert!(Page::ALL.iter().all(|page| page.matches("  ")));

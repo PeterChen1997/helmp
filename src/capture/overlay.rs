@@ -10,7 +10,7 @@ use super::annotation::{BLOCK_SIZES, Tool, WIDTHS};
 use super::geometry::{self, Handle, Hit, Rect};
 use super::selector::{Effect, Selector, State};
 use super::toolbar::{self, Edit};
-use super::{Act, Mode, Primary, Session, act};
+use super::{Act, Mode, Primary, Session, act, is_close_key};
 use crate::i18n::tr;
 use crate::style::{self, Palette};
 
@@ -263,7 +263,8 @@ impl Overlay {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.hex.focus_handle(cx).is_focused(window) && event.keystroke.key != "escape" {
+        // 在 HEX 颜色框里打字时按键归输入框，但 Esc / ⌘W 照样关掉截图界面。
+        if self.hex.focus_handle(cx).is_focused(window) && !is_close_key(&event.keystroke) {
             return;
         }
         let keystroke = &event.keystroke;
@@ -280,7 +281,7 @@ impl Overlay {
             return;
         }
         let action = match keystroke.key.as_str() {
-            "escape" => Act::Close,
+            _ if is_close_key(keystroke) => Act::Close,
             "enter" => self.primary(cx),
             "c" if command => Act::Copy,
             "s" if command => Act::Save,

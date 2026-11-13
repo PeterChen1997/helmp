@@ -281,3 +281,246 @@ fn gui_rightmost_capture_button_copies() {
     assert!(copied.contains("overlays=0"), "{out}");
     assert!(copied.contains("[dry-run] copy image 1076x208"), "{out}");
 }
+
+/// 截图历史目录里的元数据（`<id>.json`），按 id 从旧到新。
+fn history(h: &Helmp) -> Vec<serde_json::Value> {
+    let dir = h.data_file("capture-history");
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<serde_json::Value> = read
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+        .collect();
+    entries.sort_by_key(|entry| entry["id"].as_u64());
+    entries
+}
+
+/// 往截图历史里放一张（夹具图，1200×320 像素 = 600×160 点），返回 id。
+fn seed_history(h: &Helmp, id: u64, ended: &str) -> u64 {
+    let dir = h.data_file("capture-history");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(fixture(), dir.join(format!("{id}.png"))).unwrap();
+    let meta = serde_json::json!({
+        "id": id, "width": 1200, "height": 320, "ended": ended,
+        "rect": [40.0, 40.0, 600.0, 160.0],
+        "screen": [0.0, 0.0, 1512.0, 982.0],
+        "visible": [0.0, 37.0, 1512.0, 880.0],
+    });
+    std::fs::write(dir.join(format!("{id}.json")), meta.to_string()).unwrap();
+    id
+}
+
+#[test]
+fn screenshot_history_scope_lists_reopens_and_deletes() {
+    // 「截图历史」命令范围：最新的在前；回车再钉到屏幕上（交给截图界面），⌘K「删除」真的删掉文件。
+    let h = Helmp::new();
+    let entry = h.find("screenshot history", |r| r.id == "screenshot:history");
+    assert_eq!(entry.title, "Screenshot History");
+    let scope = "screenshot:history";
+    let empty = h.query_in(scope, "");
+    assert_eq!(empty.len(), 1, "{empty:?}");
+    assert_eq!(empty[0].title, "No screenshots yet");
+
+    let old = seed_history(&h, 1_700_000_000_000, "copied");
+    let new = seed_history(&h, 1_700_000_100_000, "recognized");
+    let rows = h.query_in(scope, "");
+    let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [format!("{scope}:{new}"), format!("{scope}:{old}")],
+        "最新的在前：{rows:?}"
+    );
+    assert_eq!(rows[0].subtitle, "Text recognized · 1200 × 320 px");
+
+    let id = format!("{scope}:{new}");
+    assert_eq!(
+        h.run_in(scope, &id, "", &[]).trim(),
+        format!("open capture: history-pin {new}")
+    );
+    assert_eq!(
+        h.run_in(scope, &id, "", &["--action", "Recognize Text"])
+            .trim(),
+        format!("open capture: history-recognize {new}")
+    );
+    // 复制在演练模式下只回报，不碰用户剪贴板。
+    let copied = h.run_in(scope, &id, "", &["--action", "Copy"]);
+    assert!(copied.contains("[dry-run]"), "{copied}");
+    h.run_in(scope, &id, "", &["--action", "Delete"]);
+    let dir = h.data_file("capture-history");
+    assert!(!dir.join(format!("{new}.png")).exists());
+    assert!(!dir.join(format!("{new}.json")).exists());
+    assert_eq!(h.query_in(scope, "").len(), 1);
+
+    // 设置里关掉了：说清楚，不列出旧的。
+    let off = Helmp::new().config(|c| c["screenshot"] = serde_json::json!({"history": false}));
+    seed_history(&off, 1, "copied");
+    let rows = off.query_in(scope, "");
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].title, "Screenshot history is off");
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_completed_captures_are_kept_in_history() {
+    // 复制、钉图之后，最终图（Retina 原始像素）记进截图历史，元数据写明怎么用掉的；
+    // 只是关掉截图界面（Esc / ⌘W）的不记。
+    let keys = "drag:12,6,550,110 click:531,135";
+    let h = capture_env(Helmp::new(), "screenshot-capture", keys);
+    let out = gui(&h);
+    let entries = history(&h);
+    assert_eq!(entries.len(), 1, "{out}");
+    assert_eq!(entries[0]["ended"], "copied");
+    assert_eq!(
+        (entries[0]["width"].as_u64(), entries[0]["height"].as_u64()),
+        (Some(1076), Some(208))
+    );
+    let png = h
+        .data_file("capture-history")
+        .join(format!("{}.png", entries[0]["id"]));
+    assert_eq!(png_size(&png), (1076, 208));
+    assert!(out.contains("history Copied 1076x208"), "{out}");
+
+    let keys = "drag:100,10,400,100 click:355,125";
+    let h = capture_env(Helmp::new(), "screenshot-capture", keys);
+    let out = gui(&h);
+    let entries = history(&h);
+    assert_eq!(entries.len(), 1, "{out}");
+    assert_eq!(entries[0]["ended"], "pinned");
+
+    let keys = "drag:100,10,400,100 cmd-w";
+    let h = capture_env(Helmp::new(), "screenshot-capture", keys);
+    let out = gui(&h);
+    let closed = line(&out, "self-test key cmd-w:");
+    assert!(
+        closed.contains("overlays=0") && closed.contains("\"cancel\""),
+        "⌘W 应和 Esc 一样关掉截图界面：{closed}"
+    );
+    assert!(history(&h).is_empty(), "取消的截图不记：{out}");
+
+    // 设置里关掉了截图历史：什么都不记。
+    let h = capture_env(
+        Helmp::new().config(|c| c["screenshot"] = serde_json::json!({"history": false})),
+        "screenshot-capture",
+        "drag:12,6,550,110 click:531,135",
+    );
+    let out = gui(&h);
+    assert!(out.contains("[dry-run] copy image 1076x208"), "{out}");
+    assert!(!h.data_file("capture-history").exists(), "{out}");
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_pin_zooms_with_the_wheel_and_closes_with_cmd_w() {
+    // 钉图 300×90 点：往上滚放大、往下滚缩小。触控板滚 120 点 ≈ ×1.43，滚回去回到原大小；
+    // 最大 800%；缩小时最短边不小于 16 点（这张 90 点高，最小 18%，比 10% 的下限先到）。
+    // ⌘W 和 Esc 一样关掉钉图。缩小后滚轮要落在钉图里面才算（左上角附近，缩到多小都还在窗口里）；
+    // 每步的尺寸后面若多出「gpui=…」，说明 GPUI 的视口没跟上窗口大小，工具栏和滚动区域会停在旧尺寸。
+    let keys = concat!(
+        "drag:100,10,400,100 click:355,125 scroll:150,45,120 ",
+        "scroll:150,45,-120 scroll:5,5,-5000 scroll:5,5,-5000 scroll:5,5,-5000 ",
+        "scroll:5,5,-5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 ",
+        "scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 cmd-w"
+    );
+    let h = capture_env(Helmp::new(), "screenshot-capture", keys);
+    let out = gui(&h);
+    let zoomed = line(&out, "self-test key scroll:150,45,120:");
+    assert!(zoomed.contains("pin_sizes=[\"430x129@143%\"]"), "{zoomed}");
+    let back = line(&out, "self-test key scroll:150,45,-120:");
+    assert!(back.contains("pin_sizes=[\"300x90@100%\"]"), "{back}");
+    let sizes: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("self-test key scroll:"))
+        .collect();
+    assert_eq!(sizes.len(), 13, "{out}");
+    assert!(
+        sizes[5].contains("pin_sizes=[\"53x16@18%\"]"),
+        "{}",
+        sizes[5]
+    );
+    assert!(
+        sizes[12].contains("pin_sizes=[\"2400x720@800%\"]"),
+        "{}",
+        sizes[12]
+    );
+    let closed = line(&out, "self-test key cmd-w:");
+    assert!(closed.contains("pins=0"), "{closed}");
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_ocr_result_has_the_keyboard_right_away() {
+    // 识别结果窗口一出现键盘焦点就在它上面：不用先点一下，回车、⌘T、⌘W 立刻生效（⌘W 在「识别中」就能关）。
+    // 识别要等 Vision，机器忙时会慢，所以多等一会儿。
+    let keys = "drag:0,0,600,160 wait:20 enter";
+    let h = capture_env(Helmp::new(), "screenshot", keys);
+    let out = gui(&h);
+    let opened = line(&out, "self-test key drag:");
+    assert!(opened.contains("result_focused=Some(true)"), "{opened}");
+    let entered = line(&out, "self-test key enter:");
+    assert!(entered.contains("result=None"), "回车复制并关闭：{entered}");
+    assert_eq!(
+        entered.matches("[dry-run] copy text").count(),
+        2,
+        "自动复制一次、回车再复制一次：{entered}"
+    );
+    let entries = history(&h);
+    assert_eq!(entries.len(), 1, "{out}");
+    assert_eq!(entries[0]["ended"], "recognized");
+
+    let h = capture_env(Helmp::new(), "screenshot", "drag:0,0,600,160 cmd-w");
+    let out = gui(&h);
+    let closed = line(&out, "self-test key cmd-w:");
+    assert!(closed.contains("result=None"), "{closed}");
+
+    let h = capture_env(Helmp::new(), "screenshot", "drag:0,0,600,160 wait:20 cmd-t");
+    let out = gui(&h);
+    let translated = line(&out, "self-test key cmd-t:");
+    assert!(
+        translated.contains("scope=Some(\"translate\")") && translated.contains("result=None"),
+        "⌘T 带着文字进翻译：{translated}"
+    );
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_history_reopens_as_a_pin_or_recognizes_text() {
+    // 从面板的「截图历史」里：回车把那张图再钉到屏幕上（原始大小 600×160 点），⌘R 识别文字。
+    let h = Helmp::new();
+    let id = seed_history(&h, 1_700_000_000_000, "copied");
+    let h = h
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "Screenshot History")
+        .env("HELMP_SELF_TEST_KEYS", "tab enter");
+    let out = gui(&h);
+    let entered = line(&out, "self-test key tab:");
+    assert!(
+        entered.contains("scope=Some(\"screenshot:history\")"),
+        "{entered}"
+    );
+    assert!(
+        entered.contains(&format!("selected=\"screenshot:history:{id}\"")),
+        "{entered}"
+    );
+    let pinned = line(&out, "self-test key enter:");
+    assert!(pinned.contains("pins=1"), "{pinned}");
+    assert!(pinned.contains("pin_sizes=[\"600x160@100%\"]"), "{pinned}");
+    assert!(
+        pinned.contains(&format!("reopen history-pin {id}")),
+        "{pinned}"
+    );
+    assert_eq!(history(&h).len(), 1, "再钉一次不再新记一条：{out}");
+
+    let h = Helmp::new();
+    seed_history(&h, 1_700_000_000_000, "copied");
+    let h = h
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "Screenshot History")
+        .env("HELMP_SELF_TEST_KEYS", "tab cmd-r wait:20");
+    let out = gui(&h);
+    let done = line(&out, "self-test key wait:20");
+    for expected in ["你好", "Huan", "quick brown fox"] {
+        assert!(done.contains(expected), "识别结果缺少 {expected:?}：{done}");
+    }
+}

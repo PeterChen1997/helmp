@@ -4,9 +4,11 @@
 //! 每块屏一个铺满整屏的遮罩窗口（[`overlay`]），显示冻结的画面、选区外压暗。
 //! - 截图模式：松开鼠标后选区留在原地，可拖控制点调整、在里面拖动平移；选区右下角外侧是工具栏
 //!   可标注和打马赛克，操作按钮依次是「保存、钉图、识别文字、关闭、复制」。回车 / 选区里双击 = 默认动作（复制；「截图并保存」是保存），
-//!   ⌘C 复制，⌘S 保存，Esc 关闭，右键取消选区（没有选区时右键关闭）。
+//!   ⌘C 复制，⌘S 保存，Esc / ⌘W 关闭，右键取消选区（没有选区时右键关闭）。
 //! - 识别文字模式：松开鼠标立即识别，结果显示在选区旁的浮窗里（[`result`]），文字自动复制。
-//! - 钉图（[`pin`]）：把选区原地变成置顶的无边框小窗，可拖动，悬停出工具栏，Esc / 双击关闭，可以钉多张。
+//! - 钉图（[`pin`]）：把选区原地变成置顶的无边框小窗，可拖动、滚轮缩放，悬停出工具栏，Esc / ⌘W / 双击关闭，可以钉多张。
+//! - 截图历史（[`history`]）：复制、保存、钉图、识别文字之后的最终图记进最近 10 张的历史，
+//!   启动器里的「截图历史」可以再钉到屏幕上、复制、另存为、识别文字（[`Request::History`]）。
 //!
 //! 所有窗口都用 orderFrontRegardless 前置：别的 App 在前台时也一定看得到反馈。遮罩和结果窗口激活 Helmp
 //! 拿键盘，关闭后把焦点还给截图前的 App（`panel::app_to_return_to` / `panel::return_focus`）。
@@ -18,6 +20,8 @@ mod annotation;
 mod composite;
 mod freeze;
 mod geometry;
+/// 启动器的「截图历史」（`providers::screenshot`）也读它。
+pub mod history;
 mod native;
 mod overlay;
 mod pin;
@@ -67,6 +71,54 @@ impl Mode {
             Mode::Capture(Primary::Save) => "save",
             Mode::Ocr => "ocr",
         }
+    }
+}
+
+/// 从截图历史里重新打开一张时做什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reopen {
+    Pin,
+    Recognize,
+    Save,
+}
+
+/// `Outcome::Capture` 要截图界面做的事：冻结屏幕后框选，或者把截图历史里的一张（按 id）重新打开。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Request {
+    Select(Mode),
+    History(Reopen, u64),
+}
+
+impl From<Mode> for Request {
+    fn from(mode: Mode) -> Self {
+        Request::Select(mode)
+    }
+}
+
+impl Request {
+    /// 命令行、日志里的名字（`helmp run` 打印「open capture: <名字>」）。
+    pub fn name(self) -> String {
+        match self {
+            Request::Select(mode) => mode.name().to_string(),
+            Request::History(reopen, id) => {
+                let act = match reopen {
+                    Reopen::Pin => "pin",
+                    Reopen::Recognize => "recognize",
+                    Reopen::Save => "save",
+                };
+                format!("history-{act} {id}")
+            }
+        }
+    }
+}
+
+/// 截图界面、钉图、识别结果窗口共用的「关闭」键：Esc，或者和普通窗口一样的 ⌘W。
+pub fn is_close_key(keystroke: &Keystroke) -> bool {
+    let m = &keystroke.modifiers;
+    match keystroke.key.as_str() {
+        "escape" => true,
+        "w" => m.platform && !m.control && !m.alt && !m.shift,
+        _ => false,
     }
 }
 
@@ -165,7 +217,7 @@ struct Captures {
     /// 正在冻结屏幕（截图进程还没返回）：这期间再按快捷键不重复开。
     opening: bool,
     result: Option<(AnyWindowHandle, Entity<result::ResultView>)>,
-    pins: Vec<AnyWindowHandle>,
+    pins: Vec<(AnyWindowHandle, Entity<pin::Pin>)>,
     /// 关闭截图界面后把焦点还给谁（截图前的前台 App）。
     return_to: i32,
     /// 自检用：做过的事（复制了什么、存到哪）。
@@ -192,8 +244,15 @@ fn log(cx: &mut App, line: String) {
     state(cx).log.push(line);
 }
 
-/// 打开截图界面。已经在截图时不重复打开。
-pub fn open(mode: Mode, panel_hidden_at: Option<Instant>, cx: &mut App) {
+/// 打开截图界面（已经在截图时不重复打开），或者重新打开截图历史里的一张。
+pub fn open(request: Request, panel_hidden_at: Option<Instant>, cx: &mut App) {
+    let mode = match request {
+        Request::Select(mode) => mode,
+        Request::History(reopen, id) => {
+            reopen_history(reopen, id, cx);
+            return;
+        }
+    };
     let captures = state(cx);
     if captures.session.is_some() || captures.opening {
         return;
@@ -434,18 +493,23 @@ pub fn act(action: Act, cx: &mut App) {
                 screen: frozen.screen.frame,
                 visible: frozen.visible(),
             };
+            // 「保存」在另存为面板真的存好之后才记进历史（取消了就不算完成），见 `finish_save`。
             match action {
                 Act::Copy => {
                     close_session(true, cx);
-                    copy(&shot, cx);
+                    if copy(&shot, cx) {
+                        record_history(&shot, history::Ended::Copied, cx);
+                    }
                 }
                 Act::Save => save(shot, true, cx),
                 Act::Pin => {
                     close_session(true, cx);
+                    record_history(&shot, history::Ended::Pinned, cx);
                     pin::open(shot, cx);
                 }
                 Act::Recognize => {
                     close_session(false, cx);
+                    record_history(&shot, history::Ended::Recognized, cx);
                     result::open(shot, cx);
                 }
                 Act::Close => {}
@@ -455,8 +519,8 @@ pub fn act(action: Act, cx: &mut App) {
     .detach();
 }
 
-/// 复制图片并提示「已复制」。演练模式下只记日志，不碰用户剪贴板。
-pub fn copy(shot: &Shot, cx: &mut App) {
+/// 复制图片并提示「已复制」，返回是否复制成了。演练模式下只记日志，不碰用户剪贴板。
+pub fn copy(shot: &Shot, cx: &mut App) -> bool {
     let (w, h) = shot.pixels;
     if crate::effects::dry_run() {
         log(cx, format!("[dry-run] copy image {w}x{h}"));
@@ -464,11 +528,114 @@ pub fn copy(shot: &Shot, cx: &mut App) {
         screenshot::pasteboard::write_png(&screenshot::pasteboard::general(), &shot.png)
     {
         fail(err, cx);
-        return;
+        return false;
     } else {
         log(cx, format!("copy image {w}x{h}"));
     }
     toast::show(tr("已复制到剪贴板", "Copied to Clipboard"), shot, cx);
+    true
+}
+
+/// 把截图界面里完成的一张记进截图历史（后台写文件）。设置里关掉了就不记。
+/// 记不下来不影响这次截图本身，但要大声说出来（stderr 和自检日志）。
+fn record_history(shot: &Shot, ended: history::Ended, cx: &mut App) {
+    if !history::enabled() {
+        return;
+    }
+    let shot = shot.clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let recorded = cx
+            .background_spawn(async move {
+                let record = history::Record {
+                    png: &shot.png,
+                    pixels: shot.pixels,
+                    rect: shot.rect,
+                    screen: shot.screen,
+                    visible: shot.visible,
+                    ended,
+                };
+                history::record(&history::dir()?, &record, history::now_ms())
+            })
+            .await;
+        cx.update(|cx| match recorded {
+            Ok(entry) => log(
+                cx,
+                format!("history {ended:?} {}x{}", entry.width, entry.height),
+            ),
+            Err(err) => {
+                eprintln!("helmp: 记录截图历史失败：{err:#}");
+                log(cx, format!("history error {err:#}"));
+            }
+        });
+    })
+    .detach();
+}
+
+/// 截图历史里的一张重新打开：钉到屏幕上、识别文字或另存为。读文件放后台，读不到（已被删除）就在面板里说出来。
+fn reopen_history(reopen: Reopen, id: u64, cx: &mut App) {
+    log(
+        cx,
+        format!("reopen {}", Request::History(reopen, id).name()),
+    );
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        return;
+    };
+    let screens: Vec<(Rect, Rect)> = freeze::screens(mtm)
+        .into_iter()
+        .map(|screen| (screen.frame, screen.visible))
+        .collect();
+    let mouse = native::mouse_location();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let loaded = cx
+            .background_spawn(async move {
+                let dir = history::dir()?;
+                let entry = history::load_entry(&dir, id)?;
+                let path = entry.png(&dir);
+                let png = std::fs::read(&path)
+                    .with_context(|| trf!("读取 {}", "Couldn't read {}", path.display()))?;
+                anyhow::Ok((entry, png))
+            })
+            .await;
+        cx.update(|cx| {
+            let (entry, png) = match loaded {
+                Ok(loaded) => loaded,
+                Err(err) => {
+                    fail(err, cx);
+                    return;
+                }
+            };
+            let (screen, visible, rect) = history::placement(&entry, &screens, mouse);
+            let shot = Shot {
+                png: Arc::new(png),
+                pixels: (entry.width, entry.height),
+                rect,
+                screen,
+                visible,
+            };
+            match reopen {
+                Reopen::Pin => pin::open(shot, cx),
+                Reopen::Recognize => {
+                    remember_return_app(true, cx);
+                    result::open(shot, cx);
+                }
+                Reopen::Save => {
+                    remember_return_app(true, cx);
+                    save(shot, false, cx);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// 不经截图界面、直接打开要键盘的窗口（钉图或截图历史上的识别文字、另存为）之前：记下关掉后焦点还给谁。
+/// Helmp 不在前台时就是此刻前台的 App；Helmp 在前台（比如识别结果窗口还开着）时沿用之前记下的。
+/// `from_launcher`：从面板里执行的，面板刚收起、前台可能还是 Helmp，按面板收起时还回去的那个 App 算。
+fn remember_return_app(from_launcher: bool, cx: &mut App) {
+    if offscreen() || (!from_launcher && native::app_is_active()) {
+        return;
+    }
+    state(cx).return_to = crate::panel::app_to_return_to();
 }
 
 /// 另存为 PNG：弹出另存为面板（默认目录是设置里的截图目录、文件名带时间），存好后提示。
@@ -535,6 +702,7 @@ fn finish_save(shot: &Shot, path: Option<PathBuf>, from_overlay: bool, cx: &mut 
     log(cx, format!("saved {}", path.display()));
     if from_overlay {
         close_session(true, cx);
+        record_history(shot, history::Ended::Saved, cx);
     } else {
         give_focus_back(cx);
     }
@@ -583,7 +751,13 @@ pub fn self_test_target(cx: &mut App) -> Option<AnyWindowHandle> {
         .result
         .as_ref()
         .map(|(handle, _)| *handle)
-        .or_else(|| captures.pins.last().copied())
+        .or_else(|| captures.pins.last().map(|(handle, _)| *handle))
+}
+
+/// README 配图 / 自检：截图窗口里垫在 GPUI 下面的截图（钉图的图片、遮罩的冻结画面）另存一张 PNG。
+#[cfg(feature = "readme-shots")]
+pub fn snapshot_underlay(window: &Window, path: &std::path::Path) -> anyhow::Result<()> {
+    native::snapshot_underlay(window, path)
 }
 
 /// 图形自检：截图界面此刻的状态，一行打印。
@@ -604,9 +778,26 @@ pub fn debug_state(cx: &mut App) -> String {
     };
     let result = state(cx).result.as_ref().map(|(_, view)| view.clone());
     let result = result.map(|view| view.read(cx).summary());
+    // 识别结果窗口里键盘焦点是否在结果上（回车、⌘T 不用先点一下就能用）。
+    let result_focused = state(cx).result.clone().and_then(|(handle, view)| {
+        handle
+            .update(cx, |_, window, cx| view.read(cx).focused(window, cx))
+            .ok()
+    });
+    // 每张钉图「宽x高@缩放」，最新的在后。
+    let pins: Vec<String> = state(cx)
+        .pins
+        .clone()
+        .into_iter()
+        .filter_map(|(handle, pin)| {
+            handle
+                .update(cx, |_, window, cx| pin.read(cx).summary(window))
+                .ok()
+        })
+        .collect();
     let captures = state(cx);
     format!(
-        "overlays={overlays} selection={selection:?} busy={busy} result={result:?} pins={} log={:?}",
+        "overlays={overlays} selection={selection:?} busy={busy} result={result:?} result_focused={result_focused:?} pins={} pin_sizes={pins:?} log={:?}",
         captures.pins.len(),
         captures.log
     )
@@ -683,5 +874,24 @@ mod tests {
         assert_eq!(Mode::Capture(Primary::Copy).name(), "copy");
         assert_eq!(Mode::Capture(Primary::Save).name(), "save");
         assert_eq!(Mode::Ocr.name(), "ocr");
+        assert_eq!(Request::from(Mode::Ocr).name(), "ocr");
+        assert_eq!(
+            Request::History(Reopen::Pin, 1731480000123).name(),
+            "history-pin 1731480000123"
+        );
+    }
+
+    #[test]
+    fn escape_and_cmd_w_close_capture_windows() {
+        // 截图窗口和普通窗口一样认 ⌘W：用户习惯了 ⌘W 关窗口，按了没反应就像卡住了。
+        // 但只认单纯的 ⌘W：⌘⇧W、⌃W 这些不是「关闭」，光按 W 也不是（遮罩里字母键是标注工具）。
+        let close = |spec: &'static str| is_close_key(&Keystroke::parse(spec).unwrap());
+        assert!(close("escape"));
+        assert!(close("cmd-w"));
+        assert!(!close("w"));
+        assert!(!close("cmd-shift-w"));
+        assert!(!close("ctrl-w"));
+        assert!(!close("cmd-c"));
+        assert!(!close("enter"));
     }
 }

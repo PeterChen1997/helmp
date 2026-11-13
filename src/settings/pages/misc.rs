@@ -287,6 +287,34 @@ impl SettingsView {
                             )),
                     )
                     .into_any_element(),
+                    // 截图历史：只留最近 10 张；关掉时不再记录，并删掉已经记下的。
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("保留截图历史", "Keep screenshot history"),
+                            tr(
+                                "记下最近 10 张截图，可在「截图历史」里再钉图、复制、识别文字。关闭后不再记录，并删除已保存的历史。",
+                                "Keeps your last 10 screenshots so you can pin, copy or recognize them again from Screenshot History. Turning it off stops recording and deletes the saved history.",
+                            ),
+                            pal,
+                        ),
+                        widgets::switch(
+                            "shot-history",
+                            shot.history,
+                            tr("保留截图历史", "Keep screenshot history"),
+                            pal,
+                            cx.listener(|this, on: &bool, _, cx| {
+                                let on = *on;
+                                this.save(cx, |c| c.screenshot.history = on);
+                                if !on
+                                    && let Err(err) = crate::capture::history::dir()
+                                        .and_then(|dir| crate::capture::history::clear(&dir))
+                                {
+                                    eprintln!("helmp: 清空截图历史失败：{err:#}");
+                                }
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
                 ]).collect(),
                 pal,
             ))
