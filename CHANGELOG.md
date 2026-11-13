@@ -38,7 +38,6 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - 启动器面板去掉了标题栏，左上角不会再出现关闭、最小化、缩放按钮。中文输入法、毛玻璃背景和圆角都不受影响。
 - 从剪贴板历史粘贴不再悄悄失败。没有辅助功能权限时仍会复制，并说明没能粘贴的原因，提供直达「系统设置 › 辅助功能」的按钮。按 <kbd>⌘V</kbd> 前会等原来的 App 回到前台；1.5 秒内没回来就报错，不会把按键发给别的 App 或 Helmp 自己。
 
-
 ## [0.4.4] - 2026-11-11
 
 ### Added
