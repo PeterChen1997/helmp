@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-13
+
 ### Added
 
 - Screenshot History keeps the final image of your last 10 screenshots that you copied, saved, pinned or recognized (annotations included). Search "Screenshot History" to pin one again, copy it, save it, recognize its text, show it in Finder or delete it. Images are stored locally in `capture-history/` in the data folder; turn the history off in Settings › Screenshot, which also deletes it.
@@ -330,7 +332,9 @@ Helmp 的第一个公开构建：已用 Developer ID 签名并通过 Apple 公�
 
 - 旧的开发版存在钥匙串里的 API Key，正式签名的版本可能读不出来。现在会说明原因；到「设置 › 模型」重新保存一次 Key，会先删掉旧的钥匙串条目再新建。
 
-[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/PeterChen1997/helmp/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/PeterChen1997/helmp/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/PeterChen1997/helmp/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/PeterChen1997/helmp/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/PeterChen1997/helmp/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/PeterChen1997/helmp/compare/v0.4.0...v0.4.1
