@@ -100,6 +100,9 @@ impl Helmp {
             .env("CLAUDE_CONFIG_DIR", self.root.join("claude"))
             .env("CODEX_HOME", self.root.join("codex"))
             .env("HELMP_DRY_RUN", "1")
+            // 粘贴类动作要看辅助功能权限：默认按已授权算，结果不随跑测试的终端有没有授权而变；
+            // 测未授权时用例自己设成 0。
+            .env("HELMP_ACCESSIBILITY_TRUSTED", "1")
             .env("HELMP_SCRIPT_DIRS", self.root.join("scripts"))
             .env_remove("HELMP_TRACE");
         for (key, value) in &self.envs {

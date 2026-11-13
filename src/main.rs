@@ -165,6 +165,8 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     if let Some(message) = launcher.message() {
                         println!("  message: {message}");
                     }
+                    // 面板不能有标题栏和红绿灯按钮（见 panel::panel_style_mask）。
+                    println!("self-test panel-chrome {label}: {}", panel::chrome_state(window));
                 })
                 .expect("launcher window gone");
         };
