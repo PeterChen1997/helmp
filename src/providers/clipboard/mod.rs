@@ -28,7 +28,9 @@ use anyhow::{Context as _, Result};
 use crate::config::ClipboardConfig;
 use crate::engine::{MAX_RESULTS, commands_section};
 use crate::i18n::{Lang, tr, trf};
-use crate::provider::{Action, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint};
+use crate::provider::{
+    Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint,
+};
 use present::{Clock, TextKind};
 use store::{Added, Entry, Kind, MAX_BYTES, NewClip, Source, Store};
 use watcher::Read;
@@ -62,6 +64,8 @@ const BODY_TIER: u32 = 600;
 const SUGGESTION_SCORE: u32 = 700;
 /// 覆盖 `clipboard.auto_paste`：`0` 只复制不粘贴（端到端测试用，免得往前台 App 里乱贴），`1` 强制粘贴。
 const AUTOPASTE_ENV: &str = "HELMP_CLIPBOARD_AUTOPASTE";
+/// 覆盖辅助功能权限的判断：`0` 未授权、`1` 已授权。端到端测试用，结果不随跑测试的终端有没有授权而变。
+const ACCESSIBILITY_ENV: &str = "HELMP_ACCESSIBILITY_TRUSTED";
 /// 过期清理的间隔；保留天数改了会立即清理一次。
 const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
 const DAY_MS: i64 = 86_400_000;
@@ -431,8 +435,9 @@ struct View {
 
 impl View {
     fn now() -> Self {
-        let action_title = if will_autopaste(&crate::config::get().clipboard) {
-            // 面板是非激活面板，前台应用就是用户正在用的 App。
+        // 按用户的设置写主操作：要粘贴却没有辅助功能权限时，执行后会说明并给出授权入口（见 `after_copy`）。
+        let action_title = if paste_wanted(&crate::config::get().clipboard) {
+            // 面板收起后焦点会还给唤起前的 App，就是这里取到的前台应用。
             match macos::frontmost_app() {
                 Some(app) => trf!("粘贴到{}", "Paste to {}", app.name),
                 None => tr("粘贴到前台应用", "Paste to Frontmost App").into(),
@@ -597,10 +602,18 @@ impl Inner {
         Ok(removed)
     }
 
-    /// 选中某条：写回系统剪贴板、移到最前；需要粘贴且有辅助功能权限时再模拟 ⌘V。
+    /// 选中某条：写回系统剪贴板、移到最前；需要粘贴时再模拟 ⌘V（没有辅助功能权限时说明并给出授权入口）。
     fn paste(&self, id: i64, mode: PasteMode) -> Result<Outcome> {
+        let next = after_copy(
+            mode != PasteMode::Copy && paste_wanted(&crate::config::get().clipboard),
+            accessibility_trusted(),
+        );
         if let Some(outcome) = crate::effects::dry("paste", &format!("{id} {mode:?}")) {
-            return Ok(outcome);
+            // 演练不写剪贴板，但「没权限所以不会粘贴」照样要报出来。
+            return Ok(match next {
+                AfterCopy::NeedsAccessibility => Outcome::Show(accessibility_detail()),
+                AfterCopy::Done | AfterCopy::Paste => outcome,
+            });
         }
         let (entry, image_path) = {
             let guard = self.store.lock().expect("clipboard store poisoned");
@@ -621,12 +634,16 @@ impl Inner {
             let path = self::image_path(store, &touched);
             self.move_to_front(&touched, path);
         }
-        if mode != PasteMode::Copy && will_autopaste(&crate::config::get().clipboard) {
-            // 等启动器面板隐藏、键盘焦点回到原来的 App。
-            std::thread::sleep(Duration::from_millis(80));
-            macos::send_paste()?;
+        match next {
+            AfterCopy::Done => Ok(Outcome::Done),
+            AfterCopy::NeedsAccessibility => Ok(Outcome::Show(accessibility_detail())),
+            AfterCopy::Paste => {
+                // 等启动器面板隐藏、键盘焦点回到原来的 App（send_paste 还会确认前台已经换过去）。
+                std::thread::sleep(Duration::from_millis(80));
+                macos::send_paste()?;
+                Ok(Outcome::Done)
+            }
         }
-        Ok(Outcome::Done)
     }
 }
 
@@ -669,8 +686,12 @@ pub fn paste_text_then(text: &str, left: usize) -> Result<Outcome> {
     } else {
         text.to_string()
     };
+    let next = after_copy(paste_wanted(&crate::config::get().clipboard), accessibility_trusted());
     if let Some(outcome) = crate::effects::dry("paste", &detail) {
-        return Ok(outcome);
+        return Ok(match next {
+            AfterCopy::NeedsAccessibility => Outcome::Show(accessibility_detail()),
+            AfterCopy::Done | AfterCopy::Paste => outcome,
+        });
     }
     let _pause = pause_recording(Duration::from_secs(3));
     let previous = {
@@ -684,12 +705,18 @@ pub fn paste_text_then(text: &str, left: usize) -> Result<Outcome> {
         if plain_only { pasteboard.text() } else { None }
     };
     macos::write_text(text)?;
-    if !will_autopaste(&crate::config::get().clipboard) {
-        return Ok(Outcome::Message(tr(
-            "已复制到剪贴板（没有辅助功能权限或关闭了自动粘贴，没有自动粘贴）",
-            "Copied to the clipboard (not pasted: Accessibility permission is missing or auto-paste is off)",
-        )
-        .into()));
+    match next {
+        AfterCopy::Done => {
+            return Ok(Outcome::Message(
+                tr(
+                    "已复制到剪贴板（关闭了自动粘贴，没有自动粘贴）",
+                    "Copied to the clipboard (not pasted: auto-paste is off)",
+                )
+                .into(),
+            ));
+        }
+        AfterCopy::NeedsAccessibility => return Ok(Outcome::Show(accessibility_detail())),
+        AfterCopy::Paste => {}
     }
     // 等启动器面板隐藏、键盘焦点回到原来的 App。
     std::thread::sleep(Duration::from_millis(80));
@@ -735,10 +762,74 @@ fn reveal_in_finder(path: &str) -> Result<Outcome> {
     Ok(Outcome::Done)
 }
 
-/// 自动粘贴开关：环境变量优先，其次配置；没有辅助功能权限时事件会被系统静默丢弃，所以也算关。
-fn will_autopaste(config: &ClipboardConfig) -> bool {
+/// 写回剪贴板之后做什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterCopy {
+    /// 只要复制（「复制」操作，或关了自动粘贴）。
+    Done,
+    /// 替用户按 ⌘V。
+    Paste,
+    /// 要粘贴，但没有辅助功能权限：系统会把模拟的 ⌘V 静默丢掉。不能假装粘贴过，要说明并给出授权入口。
+    NeedsAccessibility,
+}
+
+fn after_copy(wanted: bool, trusted: bool) -> AfterCopy {
+    match (wanted, trusted) {
+        (false, _) => AfterCopy::Done,
+        (true, true) => AfterCopy::Paste,
+        (true, false) => AfterCopy::NeedsAccessibility,
+    }
+}
+
+/// 用户要不要自动粘贴：环境变量优先，其次配置。
+fn paste_wanted(config: &ClipboardConfig) -> bool {
     autopaste_wanted(config, std::env::var(AUTOPASTE_ENV).ok().as_deref())
-        && macos::accessibility_trusted()
+}
+
+/// 辅助功能权限（模拟按键要用），见 [`ACCESSIBILITY_ENV`]。
+fn accessibility_trusted() -> bool {
+    match std::env::var(ACCESSIBILITY_ENV).as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => macos::accessibility_trusted(),
+    }
+}
+
+/// 已复制、但因为没有辅助功能权限没能粘贴：说明原因，按钮直达那一页系统设置。
+fn accessibility_detail() -> Detail {
+    Detail {
+        icon: Icon::Symbol {
+            name: "shield-alert",
+            tint: Tint::Orange,
+        },
+        title: tr("需要辅助功能权限", "Accessibility Permission Needed").into(),
+        tag: None,
+        blocks: vec![
+            Block::Text(
+                tr(
+                    "已复制到剪贴板，但没有自动粘贴：替你按 ⌘V 要用 macOS 的辅助功能权限。现在可以手动按 ⌘V 粘贴。",
+                    "Copied to the clipboard but not pasted: pressing ⌘V for you needs macOS Accessibility permission. You can press ⌘V yourself now.",
+                )
+                .into(),
+            ),
+            Block::Text(
+                tr(
+                    "在「系统设置 › 隐私与安全性 › 辅助功能」里打开 Helmp，之后就会自动粘贴。",
+                    "Turn on Helmp in System Settings › Privacy & Security › Accessibility to paste automatically.",
+                )
+                .into(),
+            ),
+        ],
+        metadata: Vec::new(),
+        actions: vec![
+            NamedAction::new(
+                tr("打开辅助功能设置", "Open Accessibility Settings"),
+                None,
+                Action::open(crate::providers::window::ACCESSIBILITY_URL),
+            ),
+            NamedAction::new(tr("取消", "Cancel"), Some("Esc"), Action::dismiss()),
+        ],
+    }
 }
 
 fn autopaste_wanted(config: &ClipboardConfig, env: Option<&str>) -> bool {
@@ -1519,6 +1610,25 @@ mod tests {
         assert!(!autopaste_wanted(&on, Some("0")));
         assert!(autopaste_wanted(&off, Some("1")));
         assert!(autopaste_wanted(&on, Some("garbage")));
+    }
+
+    #[test]
+    fn missing_accessibility_is_reported_not_silently_copied() {
+        // 用户要粘贴、却没有辅助功能权限时，系统会把模拟的 ⌘V 静默丢掉：以前这里悄悄只复制，
+        // 用户只看到「剪贴板换了、没粘贴」。现在必须单独走「说明 + 授权入口」这一支。
+        assert_eq!(after_copy(true, true), AfterCopy::Paste);
+        assert_eq!(after_copy(true, false), AfterCopy::NeedsAccessibility);
+        // 用户只想复制（「复制」操作或关了自动粘贴）时，有没有权限都不该打扰。
+        assert_eq!(after_copy(false, true), AfterCopy::Done);
+        assert_eq!(after_copy(false, false), AfterCopy::Done);
+        let detail = accessibility_detail();
+        assert!(
+            detail
+                .actions
+                .first()
+                .is_some_and(|action| action.title == tr("打开辅助功能设置", "Open Accessibility Settings")),
+            "第一个操作（回车）要直达辅助功能设置"
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use objc2::rc::{Retained, autoreleasepool};
@@ -19,16 +20,30 @@ use super::store::{Entry, ImageFormat, Kind, MAX_BYTES, Source};
 use super::watcher::{Image, Pasteboard, TRANSIENT_TYPE};
 use crate::i18n::{tr, trf};
 
+/// 换掉系统剪贴板：`HELMP_PASTEBOARD=<名字>` 时剪贴板历史改读写这个名字的私有 pasteboard。
+/// 端到端测试用——真按 ⌘V 走完「收起面板 → 焦点还回去 → 粘贴」整条链路，又不碰用户的系统剪贴板。
+const PASTEBOARD_ENV: &str = "HELMP_PASTEBOARD";
+
+/// 剪贴板历史读写的 pasteboard：平时是 `generalPasteboard`，见 [`PASTEBOARD_ENV`]。
+fn pasteboard() -> Retained<NSPasteboard> {
+    match std::env::var(PASTEBOARD_ENV) {
+        Ok(name) if !name.is_empty() => {
+            NSPasteboard::pasteboardWithName(&NSString::from_str(&name))
+        }
+        _ => NSPasteboard::generalPasteboard(),
+    }
+}
+
 pub struct SystemPasteboard;
 
 impl Pasteboard for SystemPasteboard {
     fn change_count(&self) -> isize {
-        autoreleasepool(|_| NSPasteboard::generalPasteboard().changeCount())
+        autoreleasepool(|_| pasteboard().changeCount())
     }
 
     fn types(&self) -> Vec<String> {
         autoreleasepool(|_| {
-            NSPasteboard::generalPasteboard()
+            pasteboard()
                 .types()
                 .map(|types| types.iter().map(|ty| ty.to_string()).collect())
                 .unwrap_or_default()
@@ -37,7 +52,7 @@ impl Pasteboard for SystemPasteboard {
 
     fn file_paths(&self) -> Vec<PathBuf> {
         autoreleasepool(|_| {
-            let Some(items) = NSPasteboard::generalPasteboard().pasteboardItems() else {
+            let Some(items) = pasteboard().pasteboardItems() else {
                 return Vec::new();
             };
             items
@@ -52,7 +67,7 @@ impl Pasteboard for SystemPasteboard {
 
     fn text(&self) -> Option<String> {
         autoreleasepool(|_| {
-            NSPasteboard::generalPasteboard()
+            pasteboard()
                 .stringForType(string_type())
                 .map(|text| text.to_string())
         })
@@ -60,7 +75,7 @@ impl Pasteboard for SystemPasteboard {
 
     fn image(&self) -> Option<Result<Image, u64>> {
         autoreleasepool(|_| {
-            let pasteboard = NSPasteboard::generalPasteboard();
+            let pasteboard = pasteboard();
             [
                 (png_type(), ImageFormat::Png),
                 (tiff_type(), ImageFormat::Tiff),
@@ -119,7 +134,7 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
         _ => None,
     };
     autoreleasepool(|_| {
-        let pasteboard = NSPasteboard::generalPasteboard();
+        let pasteboard = pasteboard();
         pasteboard.clearContents();
         let written = match (entry.kind, &image) {
             (Kind::Text, _) => {
@@ -177,7 +192,7 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
 /// 把一段纯文本写进系统剪贴板，打上 TransientType 标记（剪贴板历史不记录它）。片段粘贴用。
 pub fn write_text(text: &str) -> Result<()> {
     autoreleasepool(|_| {
-        let pasteboard = NSPasteboard::generalPasteboard();
+        let pasteboard = pasteboard();
         pasteboard.clearContents();
         ensure!(
             pasteboard.setString_forType(&NSString::from_str(text), string_type()),
@@ -268,26 +283,81 @@ fn send_command_key(keycode: u16) -> Result<()> {
     send_key(keycode, FLAG_COMMAND)
 }
 
-/// 面板收起后要等焦点真的回到原来的 App 再发键，否则 ⌘V 会落回 Helmp 自己
-/// （面板唤起时会激活 Helmp，收起时才把前台还回去，这是异步的）。最多等 0.6 秒。
-fn wait_until_helmp_not_frontmost() {
-    let me = std::process::id();
-    for _ in 0..30 {
-        let front = autoreleasepool(|_| {
-            NSWorkspace::sharedWorkspace()
-                .frontmostApplication()
-                .map(|app| app.processIdentifier())
-        });
-        if front.and_then(|pid| u32::try_from(pid).ok()) != Some(me) {
-            return;
+/// 等焦点回到别的 App 最多等多久。
+const FOCUS_TIMEOUT: Duration = Duration::from_millis(1500);
+/// 前台刚换过去时再等一会儿：系统先把前台记到对方名下，对方的窗口成为 key window 还要处理完激活事件。
+const FOCUS_SETTLE: Duration = Duration::from_millis(60);
+
+/// 发键前看一眼前台：该发、再等等，还是放弃。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    Send,
+    Wait,
+    GiveUp,
+}
+
+/// 面板唤起时会激活 Helmp，收起时才把前台还回去（异步）。前台还是 Helmp（或暂时没有前台 App）时发出的
+/// ⌘V 会落回 Helmp 自己、什么都不发生；前台是用户刚点过去的别的 App 时，⌘V 会贴进不相干的地方。
+/// 所以：知道面板把焦点还给了谁（`target`）就等到它回到前台才发，不知道时至少等前台不是 Helmp；
+/// 等不到就放弃并报错，绝不在超时后照发（以前就是这样悄悄丢掉粘贴的）。
+fn gate(front: Option<i32>, me: i32, target: Option<i32>, waited: Duration) -> Gate {
+    let ready = match (front, target) {
+        (Some(pid), Some(target)) => pid == target,
+        (Some(pid), None) => pid != me,
+        (None, _) => false,
+    };
+    if ready {
+        Gate::Send
+    } else if waited >= FOCUS_TIMEOUT {
+        Gate::GiveUp
+    } else {
+        Gate::Wait
+    }
+}
+
+fn frontmost_pid() -> Option<i32> {
+    autoreleasepool(|_| {
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|app| app.processIdentifier())
+    })
+}
+
+/// 等到该收键的 App 在前台（见 [`gate`]），等不到时返回错误：调用方把它显示出来，用户知道没粘贴上。
+fn wait_for_target_app() -> Result<()> {
+    let me = i32::try_from(std::process::id()).unwrap_or(i32::MAX);
+    let target = crate::panel::take_paste_target();
+    let started = Instant::now();
+    let mut switched = false;
+    loop {
+        let front = frontmost_pid();
+        match gate(front, me, target, started.elapsed()) {
+            Gate::Send => {
+                if switched {
+                    std::thread::sleep(FOCUS_SETTLE);
+                }
+                crate::trace::log(format!(
+                    "发键：前台 pid {front:?}（目标 {target:?}），等了 {} ms",
+                    started.elapsed().as_millis()
+                ));
+                return Ok(());
+            }
+            Gate::Wait => {
+                switched = true;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Gate::GiveUp => bail!(trf!(
+                "等了 {} 秒，焦点还没回到原来的 App，没有发送按键（内容已在剪贴板，可以手动 ⌘V）",
+                "Focus didn’t return to your app within {} s, so no keystroke was sent (the content is on the clipboard; press ⌘V yourself)",
+                FOCUS_TIMEOUT.as_secs_f32()
+            )),
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 
 /// 发送一个键（按下、抬起），修饰键固定为 `flags`（不继承用户此刻按着的修饰键）。
 fn send_key(keycode: u16, flags: u64) -> Result<()> {
-    wait_until_helmp_not_frontmost();
+    wait_for_target_app()?;
     post_key_now(keycode, flags)
 }
 
@@ -318,5 +388,43 @@ pub fn post_key_now(keycode: u16, flags: u64) -> Result<()> {
         }
         CFRelease(source);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ME: i32 = 100;
+
+    const TARGET: i32 = 42;
+    const OTHER: i32 = 77;
+    const SOON: Duration = Duration::from_millis(200);
+
+    #[test]
+    fn waits_for_the_app_the_panel_returned_focus_to() {
+        // 从面板里粘贴：⌘V 必须落到唤起面板前的那个 App。
+        assert_eq!(gate(Some(TARGET), ME, Some(TARGET), Duration::ZERO), Gate::Send);
+        // 前台还是 Helmp（面板刚收起、激活还没切过去）或暂时没有前台 App：等。
+        assert_eq!(gate(Some(ME), ME, Some(TARGET), SOON), Gate::Wait);
+        assert_eq!(gate(None, ME, Some(TARGET), SOON), Gate::Wait);
+        // 用户这时点进了别的 App：不能把 ⌘V 贴进去，等原来的 App 回来，等不到就放弃。
+        assert_eq!(gate(Some(OTHER), ME, Some(TARGET), SOON), Gate::Wait);
+        assert_eq!(gate(Some(OTHER), ME, Some(TARGET), FOCUS_TIMEOUT), Gate::GiveUp);
+    }
+
+    #[test]
+    fn without_a_known_target_only_avoids_helmp_itself() {
+        // 不是从面板里执行的（全局快捷键取词）：前台就是用户正在用的 App，不是 Helmp 就发。
+        assert_eq!(gate(Some(OTHER), ME, None, Duration::ZERO), Gate::Send);
+        assert_eq!(gate(Some(ME), ME, None, SOON), Gate::Wait);
+    }
+
+    #[test]
+    fn gives_up_loudly_instead_of_pasting_into_helmp() {
+        // 超时后照发等于把 ⌘V 发给 Helmp 自己：用户只看到剪贴板变了、却没粘贴上。必须放弃并报错。
+        assert_eq!(gate(Some(ME), ME, None, FOCUS_TIMEOUT), Gate::GiveUp);
+        assert_eq!(gate(Some(ME), ME, Some(TARGET), FOCUS_TIMEOUT), Gate::GiveUp);
+        assert_eq!(gate(None, ME, None, FOCUS_TIMEOUT), Gate::GiveUp);
     }
 }

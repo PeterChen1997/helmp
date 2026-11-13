@@ -29,7 +29,7 @@ use geometry::{Layout, Rect, Screen};
 
 const PROVIDER_ID: &str = "window";
 const FIXTURE_ENV: &str = "HELMP_WINDOW_FIXTURE";
-const ACCESSIBILITY_URL: &str =
+pub(crate) const ACCESSIBILITY_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 /// 只打「窗口」这类泛称时，所有命令都列出来，但分数压低，让具体命令名的命中排前。
 const GENERIC_KEYWORDS: [&str; 4] = ["窗口", "窗口管理", "window", "window management"];
