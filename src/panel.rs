@@ -210,15 +210,59 @@ fn input_context_state(ns_window: &NSWindow) -> String {
 /// 豆包、系统拼音等输入法却只会把字母原样上屏，打不出中文（实测：同一面板里的原生
 /// NSTextField 也一样，去掉这个样式后组字恢复正常）。Alfred、Raycast 这类启动器也是唤起时
 /// 激活自己、收起时把焦点还给原来的 App——见 [`remember_previous_app`] / [`restore_previous_app`]。
-/// 在面板创建后调用一次；授权浮窗不需要打字，仍保持非激活。
+/// 在面板创建后调用一次；授权浮窗不需要打字，仍保持非激活。同时去掉标题栏，见 [`panel_style_mask`]。
 pub fn make_activating(window: &Window) {
     let Some(ns_window) = ns_window(window) else {
         eprintln!("helmp: 无法取得 NSWindow，面板保持非激活（中文输入法可能无法组字）");
         return;
     };
-    let mut mask = ns_window.styleMask();
-    mask.remove(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel);
-    ns_window.setStyleMask(mask);
+    ns_window.setStyleMask(panel_style_mask(ns_window.styleMask()));
+    ns_window.invalidateShadow();
+}
+
+/// 面板的窗口样式：去掉 NonactivatingPanel（见 [`make_activating`]），也去掉标题栏。
+///
+/// GPUI 的 `titlebar: None` 并不是无边框：窗口仍是 Titled，只是标题栏透明、标题隐藏，顶上 32 pt
+/// 留着一整套 AppKit 标题栏视图。面板成为激活 App 的 key window 后，系统可以随时在那里放出
+/// 红绿灯按钮（用户实际看到了面板左上角的关闭 / 最小化 / 缩放）。启动器面板不需要标题栏：
+/// 去掉 Titled 后 AppKit 根本不建标题栏，也就不可能再长出按钮。键盘焦点不受影响——GPUI 的面板类
+/// 自己声明能成为 key window（截图遮罩同样是无边框窗口，照样收键盘）；圆角和毛玻璃由
+/// [`install_glass`] 的视图提供，不依赖标题栏。
+pub fn panel_style_mask(mask: objc2_app_kit::NSWindowStyleMask) -> objc2_app_kit::NSWindowStyleMask {
+    use objc2_app_kit::NSWindowStyleMask as M;
+    let mut mask = mask;
+    mask.remove(
+        M::NonactivatingPanel | M::Titled | M::Closable | M::Miniaturizable | M::Resizable,
+    );
+    mask
+}
+
+/// 自检报告：面板有没有标题栏、是不是激活型面板、有哪些红绿灯按钮看得见。
+pub fn chrome_state(window: &Window) -> String {
+    use objc2_app_kit::{NSWindowButton, NSWindowStyleMask};
+    let Some(ns_window) = ns_window(window) else {
+        return "no-ns-window".into();
+    };
+    let mask = ns_window.styleMask();
+    let buttons: Vec<&str> = [
+        (NSWindowButton::CloseButton, "close"),
+        (NSWindowButton::MiniaturizeButton, "minimize"),
+        (NSWindowButton::ZoomButton, "zoom"),
+    ]
+    .into_iter()
+    .filter(|(kind, _)| {
+        ns_window
+            .standardWindowButton(*kind)
+            .is_some_and(|button| !button.isHiddenOrHasHiddenAncestor())
+    })
+    .map(|(_, name)| name)
+    .collect();
+    format!(
+        "titled={} nonactivating={} buttons=[{}]",
+        mask.contains(NSWindowStyleMask::Titled),
+        mask.contains(NSWindowStyleMask::NonactivatingPanel),
+        buttons.join(",")
+    )
 }
 
 /// 唤起前的前台 App（不是 Helmp 自己时）的 pid：收起时把焦点还给它。
@@ -269,7 +313,29 @@ pub fn app_to_return_to() -> i32 {
 fn restore_previous_app(panel: &NSWindow) {
     let pid = PREVIOUS_APP.swap(0, Ordering::Relaxed);
     LAST_RETURNED.store(pid, Ordering::Relaxed);
+    if pid != 0 {
+        *PASTE_TARGET.lock().expect("paste target poisoned") = Some((pid, std::time::Instant::now()));
+    }
     return_focus(pid, Some(panel));
+}
+
+/// 面板收起时把焦点还给了谁、什么时候。面板里执行的粘贴类动作（剪贴板、片段、表情、替换译文）
+/// 发 ⌘V 前要等的就是这个 App 回到前台；不能只看「前台不是 Helmp」——用户这时点了别的 App，
+/// ⌘V 就会贴进不相干的地方。
+static PASTE_TARGET: std::sync::Mutex<Option<(i32, std::time::Instant)>> = std::sync::Mutex::new(None);
+/// 面板收起后多久内发的键算「从面板里执行的动作」发的（剪贴板粘贴从收起到发键约 0.1 秒）。过期后
+/// （跑得久的插件脚本、全局快捷键取词）不再认这个目标，退回「前台不是 Helmp 就发」。取短一些：Esc 收起后
+/// 马上换到别的 App 按取词快捷键时，过期前只会报「焦点没回来」，不会发错地方。
+const PASTE_TARGET_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// 刚从面板里执行的动作要把按键发给哪个 App（取走，只用一次）。超过 [`PASTE_TARGET_TTL`] 或面板没还过焦点时为 None。
+pub fn take_paste_target() -> Option<i32> {
+    PASTE_TARGET
+        .lock()
+        .expect("paste target poisoned")
+        .take()
+        .filter(|(_, at)| at.elapsed() < PASTE_TARGET_TTL)
+        .map(|(pid, _)| pid)
 }
 
 /// 关掉一个 Helmp 窗口后把焦点还给 `pid`：还有别的 Helmp 窗口（设置、欢迎页）开着时只激活那个 App，
@@ -477,6 +543,20 @@ mod tests {
         assert!((top - expected_top).abs() <= 0.5, "top={top}");
         assert!(origin.x >= visible.origin.x);
         assert!(origin.x + size.width <= visible.origin.x + visible.size.width);
+    }
+
+    #[test]
+    fn panel_mask_has_no_title_bar_and_activates_the_app() {
+        // GPUI 给 PopUp 窗口的样式（Titled | FullSizeContentView | NonactivatingPanel）：
+        // 留着 Titled，系统就能在面板左上角放出红绿灯；留着 NonactivatingPanel，中文输入法就组不了字。
+        use objc2_app_kit::NSWindowStyleMask as M;
+        let gpui_popup = M::Titled | M::FullSizeContentView | M::NonactivatingPanel;
+        let mask = panel_style_mask(gpui_popup);
+        assert!(!mask.contains(M::Titled), "面板不能有标题栏");
+        assert!(!mask.contains(M::NonactivatingPanel), "面板必须激活 App，输入法才能组字");
+        // 哪怕以后 GPUI 带上了可关闭 / 最小化 / 缩放，这些会长出按钮的样式也都去掉。
+        let mask = panel_style_mask(gpui_popup | M::Closable | M::Miniaturizable | M::Resizable);
+        assert_eq!(mask & (M::Closable | M::Miniaturizable | M::Resizable | M::Titled), M::Borderless);
     }
 
     #[test]

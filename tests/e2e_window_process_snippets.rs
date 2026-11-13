@@ -388,6 +388,31 @@ fn clipboard_primary_action_pastes_not_just_copies() {
     assert_eq!(h.run("clipboard:2", "cb ", &[]).trim(), "[dry-run] paste 2 Paste");
 }
 
+#[test]
+fn clipboard_paste_without_accessibility_explains_and_opens_settings() {
+    // 没有辅助功能权限时系统会把模拟的 ⌘V 静默丢掉。以前这里悄悄只复制：用户看到剪贴板换了、却没粘贴上，
+    // 不知道为什么。现在要说明原因，确认后直达辅助功能那一页系统设置。
+    let h = Helmp::new().env("HELMP_ACCESSIBILITY_TRUSTED", "0");
+    let t = now_ms();
+    seed_clipboard(&h, &[("first", t - 2000), ("second", t - 1000)]);
+    let out = h.run("clipboard:2", "cb ", &["--then", "Open Accessibility Settings"]);
+    assert!(out.contains("Accessibility Permission Needed"), "{out}");
+    assert!(out.contains("press ⌘V yourself"), "要告诉用户内容已在剪贴板、可以手动粘贴：{out}");
+    assert!(
+        out.contains(
+            "[dry-run] open x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ),
+        "{out}"
+    );
+    // 只想复制（「复制」操作、关了自动粘贴）时用不着权限，不能拿授权说明打扰用户。
+    assert_eq!(
+        h.run("clipboard:2", "cb ", &["--action", "Copy"]).trim(),
+        "[dry-run] paste 2 Copy"
+    );
+    let h = h.env("HELMP_CLIPBOARD_AUTOPASTE", "0");
+    assert_eq!(h.run("clipboard:2", "cb ", &[]).trim(), "[dry-run] paste 2 Paste");
+}
+
 fn gui_line<'a>(out: &'a str, prefix: &str) -> &'a str {
     out.lines()
         .find(|line| line.starts_with(prefix))
@@ -444,4 +469,34 @@ fn gui_double_click_on_a_clip_pastes_it() {
     assert!(clicked.contains("visible=true") && clicked.contains(r#"result="""#), "{clicked}");
     let pasted = gui_line(&out, "self-test key dclick:");
     assert!(pasted.contains("[dry-run] paste 2 Paste"), "双击应粘贴而不只是复制：{pasted}");
+}
+
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
+fn gui_panel_has_no_title_bar_or_window_buttons() {
+    // 面板是类 Spotlight 的启动器，左上角不该出现红绿灯。GPUI 的 `titlebar: None` 仍是带标题栏（Titled）的窗口，
+    // 系统随时可能在那里放出按钮；所以面板必须是无标题栏的窗口——同时仍是激活型面板（中文输入法才能组字）。
+    // 开过设置窗口、收起后再唤起，也都不能变回来。
+    let h = Helmp::new()
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_SETTINGS", "General")
+        .env("HELMP_SELF_TEST_RESHOW", "1");
+    let out = h.cli(&[]);
+    let chrome: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("self-test panel-chrome "))
+        .collect();
+    for label in ["initial", "after-show", "after-hide"] {
+        assert!(
+            chrome.iter().any(|line| line.starts_with(&format!("self-test panel-chrome {label}:"))),
+            "缺少 {label} 的面板样式报告：\n{out}"
+        );
+    }
+    for line in chrome {
+        assert!(
+            line.ends_with(": titled=false nonactivating=false buttons=[]"),
+            "面板不能有标题栏 / 红绿灯，且必须是激活型面板：{line}"
+        );
+    }
 }
