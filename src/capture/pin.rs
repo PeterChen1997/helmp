@@ -1,7 +1,7 @@
 //! 钉图：选区原地变成一张置顶的无边框小窗，只用 AppKit 的窗口阴影。
 //! 图片的位置、大小和选区完全一样，可以钉很多张。
 //!
-//! 拖动窗口任意处移动它；鼠标移上去时右下角出现工具栏（保存、识别文字、关闭、复制）；
+//! 拖动窗口任意处移动它；鼠标移上去时右下角出现工具栏（关闭 | 保存、识别文字、复制）；
 //! Esc、⌘W 或双击关闭；获得焦点后 ⌘C 复制、⌘S 保存。点它不会激活 Helmp，不打断用户在别的 App 里的输入。
 //!
 //! 在钉图上滚动滚轮缩放（往上滚放大、往下滚缩小；触控板双指滚动按距离连续缩放，捏合也行），
@@ -14,7 +14,7 @@ use std::time::Duration;
 use gpui_kit::*;
 
 use super::geometry::{self, Rect};
-use super::toolbar::{ActionButton, button_row};
+use super::toolbar::{ActionButton, COPY, RECOGNIZE, SAVE, button_row};
 use super::{Act, Shot, log, native, offscreen, state};
 use crate::i18n::tr;
 use crate::style;
@@ -45,13 +45,8 @@ pub struct Pin {
     zoom_label: bool,
 }
 
-/// 钉图的工具栏按钮（遮罩工具栏去掉「钉图」）。
-const BUTTONS: [ActionButton; 4] = [
-    super::toolbar::ACTIONS[0],
-    super::toolbar::ACTIONS[2],
-    super::toolbar::ACTIONS[3],
-    super::toolbar::ACTIONS[4],
-];
+/// 钉图的工具栏按钮（遮罩工具栏去掉「钉图」；关闭由 [`button_row`] 放在最左）。
+const BUTTONS: [ActionButton; 3] = [SAVE, RECOGNIZE, COPY];
 
 /// 钉图窗口的位置：就是选区原来的位置（AppKit 全局坐标）。
 pub fn frame(shot: &Shot) -> Rect {
@@ -339,6 +334,13 @@ mod tests {
 
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn pin_buttons_are_save_recognize_copy() {
+        // 钉图窗口不该出现「钉图」，复制（主操作）在最右；遮罩工具栏重排时这里不能跟着悄悄变。
+        let acts: Vec<Act> = BUTTONS.iter().map(|button| button.0).collect();
+        assert_eq!(acts, [Act::Save, Act::Recognize, Act::Copy]);
+    }
 
     #[test]
     fn pin_frame_is_the_selection_frame() {

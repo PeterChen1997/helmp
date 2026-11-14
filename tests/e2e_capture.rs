@@ -174,12 +174,12 @@ fn gui_ocr_mode_recognizes_on_release_and_copies() {
 #[test]
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_capture -- --ignored"]
 fn gui_pin_then_copy_and_close() {
-    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始，「钉图」在 (355,125)。
+    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始，「钉图」在 (418,125)。
     // 钉住后 ⌘C 复制钉图（600×180 像素），Esc 关掉钉图；Esc 也能直接关掉截图界面。
-    let keys = "drag:100,10,400,100 click:355,125 cmd-c escape";
+    let keys = "drag:100,10,400,100 click:418,125 cmd-c escape";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
-    let pinned = line(&out, "self-test key click:355,125:");
+    let pinned = line(&out, "self-test key click:418,125:");
     assert!(
         pinned.contains("overlays=0") && pinned.contains("pins=1"),
         "{pinned}"
@@ -217,9 +217,9 @@ fn gui_annotations_are_baked_into_the_saved_retina_png() {
 
     // 选区 (12,6)–(550,110)，主工具栏下方只有一排的空间，选项排到主工具栏上面。
     let keys = concat!(
-        "drag:12,6,550,110 click:135,135 click:250,92 drag:32,24,80,48 ",
+        "drag:12,6,550,110 click:165,135 click:250,92 drag:32,24,80,48 ",
         "click:389,92 cmd-a ~B2285C enter drag:90,24,130,48 ",
-        "click:315,135 drag:150,24,198,54 cmd-z cmd-shift-z cmd-s"
+        "click:345,135 drag:150,24,198,54 cmd-z cmd-shift-z cmd-s"
     );
     let shots = h.root.join("shots");
     let shots_for_config = shots.display().to_string();
@@ -382,7 +382,7 @@ fn gui_completed_captures_are_kept_in_history() {
     assert_eq!(png_size(&png), (1076, 208));
     assert!(out.contains("history Copied 1076x208"), "{out}");
 
-    let keys = "drag:100,10,400,100 click:355,125";
+    let keys = "drag:100,10,400,100 click:418,125";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
     let entries = history(&h);
@@ -418,7 +418,7 @@ fn gui_pin_zooms_with_the_wheel_and_closes_with_cmd_w() {
     // ⌘W 和 Esc 一样关掉钉图。缩小后滚轮要落在钉图里面才算（左上角附近，缩到多小都还在窗口里）；
     // 每步的尺寸后面若多出「gpui=…」，说明 GPUI 的视口没跟上窗口大小，工具栏和滚动区域会停在旧尺寸。
     let keys = concat!(
-        "drag:100,10,400,100 click:355,125 scroll:150,45,120 ",
+        "drag:100,10,400,100 click:418,125 scroll:150,45,120 ",
         "scroll:150,45,-120 scroll:5,5,-5000 scroll:5,5,-5000 scroll:5,5,-5000 ",
         "scroll:5,5,-5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 ",
         "scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 cmd-w"

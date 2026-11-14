@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- The screenshot toolbar is easier to scan. Close sits on the far left, set apart by a divider, and Copy stays on the far right with Pin just before it. The order is now Close | selection and annotation tools | Undo, Redo | Save, Recognize Text, Pin, Copy. A pinned screenshot's toolbar follows the same rule: Close | Save, Recognize Text, Copy. Shortcuts are unchanged.
+
+### 简体中文
+
+#### 变更
+
+- 截图工具栏重新排了顺序，不容易点错。关闭放到最左边，用分隔线隔开；复制仍在最右边，钉住紧挨在它左边。现在的顺序是：关闭 | 调整选区和标注工具 | 撤销、重做 | 保存、识别文字、钉住、复制。钉图窗口的按钮按同样的规则排：关闭 | 保存、识别文字、复制。快捷键不变。
+
 ## [0.4.5] - 2026-11-13
 
 ### Added

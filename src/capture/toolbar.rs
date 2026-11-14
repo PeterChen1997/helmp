@@ -21,19 +21,21 @@ const DIVIDER: f32 = 1.;
 const OPTIONS_GAP: f32 = 4.;
 const ROW_HEIGHT: f32 = BUTTON + PAD * 2. + 2.;
 
-pub const ACTIONS: [ActionButton; 5] = [
-    (Act::Save, "download", "保存", "Save", "⌘S"),
-    (Act::Pin, "pin", "钉在屏幕上", "Pin to Screen", ""),
-    (
-        Act::Recognize,
-        "scan-text",
-        "识别文字",
-        "Recognize Text",
-        "",
-    ),
-    (Act::Close, "x", "关闭", "Close", "Esc"),
-    (Act::Copy, "copy", "复制", "Copy", "⌘C"),
-];
+pub const SAVE: ActionButton = (Act::Save, "download", "保存", "Save", "⌘S");
+pub const RECOGNIZE: ActionButton = (
+    Act::Recognize,
+    "scan-text",
+    "识别文字",
+    "Recognize Text",
+    "",
+);
+pub const PIN: ActionButton = (Act::Pin, "pin", "钉在屏幕上", "Pin to Screen", "");
+pub const COPY: ActionButton = (Act::Copy, "copy", "复制", "Copy", "⌘C");
+/// 关闭不在 [`ACTIONS`] 里：它固定在工具栏最左边，用分隔线和其他按钮隔开。
+const CLOSE: ActionButton = (Act::Close, "x", "关闭", "Close", "Esc");
+
+/// 遮罩工具栏右侧的操作，复制（主操作）在最右。
+pub const ACTIONS: [ActionButton; 4] = [SAVE, RECOGNIZE, PIN, COPY];
 
 const TOOLS: [(Option<Tool>, &str, &str, &str, &str); 8] = [
     (None, "move", "调整选区", "Adjust Selection", "v"),
@@ -92,8 +94,11 @@ pub fn key_tool(key: &str) -> Option<Edit> {
 }
 
 pub fn size() -> (f64, f64) {
-    let buttons = (TOOLS.len() + 2 + ACTIONS.len()) as f32;
-    let width = buttons * BUTTON + (buttons + 1.) * GAP + 2. * (PAD + DIVIDER + 1.);
+    // 关闭 | 工具 | 撤销 重做 | 操作：三条分隔线。
+    let buttons = (1 + TOOLS.len() + 2 + ACTIONS.len()) as f32;
+    let dividers = 3.;
+    let width =
+        buttons * BUTTON + (buttons + dividers - 1.) * GAP + dividers * DIVIDER + 2. * (PAD + 1.);
     (f64::from(width), f64::from(ROW_HEIGHT))
 }
 
@@ -204,8 +209,12 @@ fn action_buttons(
         .collect()
 }
 
+/// 关闭在最左，后面一条分隔线，再接 `buttons`。
 pub fn button_row(buttons: &[ActionButton], primary: Act, pal: &Palette, on_press: OnPress) -> Div {
-    row(pal).children(action_buttons(buttons, primary, pal, &on_press))
+    row(pal)
+        .children(action_buttons(&[CLOSE], primary, pal, &on_press))
+        .child(divider(pal))
+        .children(action_buttons(buttons, primary, pal, &on_press))
 }
 
 fn divider(pal: &Palette) -> Div {
@@ -366,6 +375,8 @@ pub fn editor_toolbar(
         .relative()
         .child(
             row(pal)
+                .children(action_buttons(&[CLOSE], primary, pal, &on_press))
+                .child(divider(pal))
                 .children(tools)
                 .child(divider(pal))
                 .child(undo)
