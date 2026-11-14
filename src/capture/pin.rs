@@ -6,10 +6,12 @@
 //!
 //! 在钉图上滚动滚轮缩放（往上滚放大、往下滚缩小；触控板双指滚动按距离连续缩放，捏合也行），
 //! 以光标为中心：光标下的那一点不动。范围 [`MIN_ZOOM`]–[`MAX_ZOOM`]，缩放时中间短暂显示百分比。
+//! 连续滚动时窗口每帧最多改一次大小（滚动事件比屏幕刷新密得多，逐个改 frame 会排起长队、越滚越落后）；
+//! 鼠标滚轮一格一格的跳变用 [`EASE`] 缓动补平，触控板本身就连续，直接跟手。
 //! 图片一直是原始分辨率的那张（NSImageView 随窗口缩放），放大不会糊成缩略图。
 
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 
@@ -29,6 +31,10 @@ const MIN_SIDE: f64 = 16.0;
 const WHEEL_STEP: f64 = 1.1;
 /// 触控板等精确滚动：每滚动 1 点的缩放指数，滚 100 点约放大 1.35 倍。
 const PIXEL_RATE: f64 = 0.003;
+/// 鼠标滚轮缩放的缓动时间常数：每过这么久，离目标大小的距离（按倍数算）缩到 1/e，约 0.15 秒滚完。
+const EASE: Duration = Duration::from_millis(35);
+/// 缩放时改窗口大小的间隔，约 120 帧每秒。
+const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 /// 百分比提示显示多久。
 const ZOOM_LABEL_FOR: Duration = Duration::from_millis(900);
 
@@ -38,8 +44,16 @@ pub struct Pin {
     hovered: bool,
     /// 钉上时的大小（点），缩放以它为 100%。
     base: (f64, f64),
-    /// 当前缩放倍数。
+    /// 窗口此刻的缩放倍数。
     pub zoom: f64,
+    /// 要缩放到的倍数：滚动只改它，由 [`Pin::animate`] 每帧把窗口推过去。
+    target: f64,
+    /// 缩放中心（AppKit 全局坐标）：滚动时光标所在的那一点。
+    anchor: (f64, f64),
+    /// 鼠标滚轮按格滚动：缓动过去；触控板：一帧到位。
+    smooth: bool,
+    /// [`Pin::animate`] 正在跑。
+    animating: bool,
     /// 百分比提示：每缩放一次加一，提示只在最后一次缩放后的 [`ZOOM_LABEL_FOR`] 内显示。
     zoom_flash: u64,
     zoom_label: bool,
@@ -61,6 +75,17 @@ pub fn zoom_factor(delta: ScrollDelta) -> f64 {
         ScrollDelta::Pixels(pixels) => (f64::from(pixels.y) * PIXEL_RATE).exp(),
     };
     factor.clamp(0.5, 2.0)
+}
+
+/// 缓动一帧：从 `zoom` 向 `target` 走过 `elapsed` 时间后的倍数（按倍数的对数指数逼近，放大缩小一样快）。
+/// 只差不到 0.2% 时直接到位，不在最后几个像素上磨蹭。
+pub fn ease_zoom(zoom: f64, target: f64, elapsed: Duration) -> f64 {
+    let gap = (target / zoom).ln();
+    if gap.abs() < 0.002 {
+        return target;
+    }
+    let k = 1.0 - (-elapsed.as_secs_f64() / EASE.as_secs_f64()).exp();
+    zoom * (gap * k).exp()
 }
 
 /// 把缩放倍数限制在 [`MIN_ZOOM`]–[`MAX_ZOOM`]，并且缩小后最短边不小于 [`MIN_SIDE`] 点
@@ -148,6 +173,10 @@ impl Pin {
             focus,
             hovered: false,
             zoom: 1.0,
+            target: 1.0,
+            anchor: (0.0, 0.0),
+            smooth: false,
+            animating: false,
             zoom_flash: 0,
             zoom_label: false,
         }
@@ -179,22 +208,30 @@ impl Pin {
         text
     }
 
-    /// 以 `anchor`（窗口坐标，左上角为原点）为中心把缩放倍数乘上 `factor`。
+    /// 以 `anchor`（窗口坐标，左上角为原点）为中心把缩放倍数乘上 `factor`。`smooth`：缓动过去。
     fn zoom_by(
         &mut self,
         factor: f64,
         anchor: Point<Pixels>,
+        smooth: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let zoom = clamp_zoom(self.zoom * factor, self.base);
-        if (zoom - self.zoom).abs() > f64::EPSILON
-            && let Some(frame) = native::frame(window)
+        self.target = clamp_zoom(self.target * factor, self.base);
+        if let Some(frame) = native::frame(window) {
+            // 记成全局坐标：缩放途中窗口在变，光标在屏幕上的位置不变。
+            self.anchor = (
+                frame.x + f64::from(anchor.x),
+                frame.y + frame.h - f64::from(anchor.y),
+            );
+        }
+        self.smooth = smooth;
+        if !self.animating
+            && (self.target - self.zoom).abs() > f64::EPSILON
+            && let Some(handle) = native::FrameHandle::of(window)
         {
-            let size = (self.base.0 * zoom, self.base.1 * zoom);
-            let anchor = (f64::from(anchor.x), f64::from(anchor.y));
-            native::set_frame_later(window, zoomed_frame(frame, size, anchor), cx);
-            self.zoom = zoom;
+            self.animating = true;
+            Self::animate(handle, cx);
         }
         // 到了上下限也提示一下当前百分比：用户知道不是没反应，而是到头了。
         self.zoom_flash += 1;
@@ -213,15 +250,49 @@ impl Pin {
         .detach();
     }
 
+    /// 把窗口一帧一帧推向 [`Pin::target`]，到了就停。期间来的滚动只改目标，不另起任务，
+    /// 窗口每帧最多改一次大小。改 frame 在 GPUI 的更新之外做（见 [`native::FrameHandle`]）。
+    fn animate(handle: native::FrameHandle, cx: &mut Context<Self>) {
+        cx.spawn(async move |pin, cx: &mut AsyncApp| {
+            let mut last = Instant::now();
+            loop {
+                let elapsed = last.elapsed();
+                last = Instant::now();
+                let step = pin.update(cx, |pin, cx| {
+                    if (pin.target - pin.zoom).abs() <= f64::EPSILON {
+                        pin.animating = false;
+                        return None;
+                    }
+                    pin.zoom = if pin.smooth {
+                        ease_zoom(pin.zoom, pin.target, elapsed.max(FRAME_INTERVAL))
+                    } else {
+                        pin.target
+                    };
+                    cx.notify();
+                    Some(((pin.base.0 * pin.zoom, pin.base.1 * pin.zoom), pin.anchor))
+                });
+                let Ok(Some((size, anchor))) = step else {
+                    return;
+                };
+                let frame = handle.get();
+                let local = (anchor.0 - frame.x, frame.y + frame.h - anchor.1);
+                handle.set(zoomed_frame(frame, size, local));
+                cx.background_executor().timer(FRAME_INTERVAL).await;
+            }
+        })
+        .detach();
+    }
+
     fn on_scroll(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        self.zoom_by(zoom_factor(event.delta), event.position, window, cx);
+        let smooth = matches!(event.delta, ScrollDelta::Lines(_));
+        self.zoom_by(zoom_factor(event.delta), event.position, smooth, window, cx);
     }
 
     fn on_pinch(&mut self, event: &PinchEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let factor = (1.0 + f64::from(event.delta)).clamp(0.5, 2.0);
-        self.zoom_by(factor, event.position, window, cx);
+        self.zoom_by(factor, event.position, false, window, cx);
     }
 
     fn run(&mut self, action: Act, window: &mut Window, cx: &mut Context<Self>) {
@@ -319,7 +390,7 @@ impl Render for Pin {
                             .text_color(white())
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(zoom_label(self.zoom)),
+                            .child(zoom_label(self.target)),
                     ),
             );
         }
@@ -421,5 +492,20 @@ mod tests {
         // 横向滚动不缩放。
         assert_eq!(zoom_factor(ScrollDelta::Lines(point(3.0, 0.0))), 1.0);
         assert_eq!(zoom_label(1.5), "150%");
+    }
+
+    #[test]
+    fn wheel_zoom_eases_to_the_target_quickly() {
+        // 滚轮一格 ×1.1 不一下跳过去（那就是一顿一顿的），而是几帧内平滑地追上，0.3 秒内一定到位。
+        let first = ease_zoom(1.0, 1.1, FRAME_INTERVAL);
+        assert!(first > 1.0 && first < 1.1, "{first}");
+        let mut zoom = 1.0;
+        for _ in 0..40 {
+            zoom = ease_zoom(zoom, 1.1, FRAME_INTERVAL);
+        }
+        assert_eq!(zoom, 1.1);
+        // 放大、缩小一样快：按倍数算，走过的比例相同。
+        let down = ease_zoom(1.0, 1.0 / 1.1, FRAME_INTERVAL);
+        assert!((first * down - 1.0).abs() < 1e-9, "{first} {down}");
     }
 }

@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Zooming a pinned screenshot with the scroll wheel no longer lags behind. Fast scrolling used to queue up window resizes, so the screenshot kept changing size after you stopped. Mouse wheel steps now ease smoothly instead of jumping, and trackpad zoom follows your fingers.
+
+### 简体中文
+
+#### 修复
+
+- 在钉图上用滚轮缩放不再卡顿、延迟。以前滚得快时改窗口大小的操作会排队，停手后图还在继续变大变小。现在鼠标滚轮每一格平滑过渡、不再一跳一跳，触控板缩放跟手。
+
 ## [0.4.6] - 2026-11-14
 
 ### Changed

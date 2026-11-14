@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::{AnyThread as _, MainThreadMarker};
 use objc2_app_kit::{
     NSColor, NSImage, NSImageScaling, NSImageView, NSPopUpMenuWindowLevel,
-    NSScreenSaverWindowLevel, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowLevel,
+    NSScreenSaverWindowLevel, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowLevel,
     NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_core_graphics::CGImage;
@@ -165,20 +165,34 @@ pub fn frame(window: &Window) -> Option<Rect> {
     ))
 }
 
-/// 移动 / 缩放窗口到 `frame`（AppKit 全局坐标）。钉图缩放用：垫在下面的图片随 contentView 一起缩放。
+/// 在 GPUI 的更新之外读写窗口 frame 的句柄。钉图缩放用：垫在下面的图片随 contentView 一起缩放。
 ///
-/// 放到 GPUI 的更新之外再改：改 frame 时 GPUI 同步收到尺寸变化并要借用整个 App 去更新视口大小，
+/// 只能在 GPUI 的更新之外改：改 frame 时 GPUI 同步收到尺寸变化并要借用整个 App 去更新视口大小，
 /// 要是此刻还在 App 的更新里（滚轮事件、`cx.defer` 都是），借用失败、只记一行日志，布局和悬停、
-/// 滚动的响应区域就停在旧尺寸。所以交给前台任务，在主线程空下来时执行。
-pub fn set_frame_later(window: &Window, frame: Rect, cx: &mut gpui_kit::App) {
-    let Some(ns_window) = crate::panel::ns_window(window) else {
-        return;
-    };
-    cx.spawn(async move |_: &mut gpui_kit::AsyncApp| {
-        ns_window.setFrame_display(ns_rect(frame), true);
-        ns_window.invalidateShadow();
-    })
-    .detach();
+/// 滚动的响应区域就停在旧尺寸。所以由前台任务在主线程空下来时调用 [`FrameHandle::set`]。
+pub struct FrameHandle(Retained<NSWindow>);
+
+impl FrameHandle {
+    pub fn of(window: &Window) -> Option<Self> {
+        crate::panel::ns_window(window).map(Self)
+    }
+
+    /// 窗口此刻的位置（AppKit 全局坐标）。
+    pub fn get(&self) -> Rect {
+        let frame = self.0.frame();
+        Rect::new(
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.width,
+            frame.size.height,
+        )
+    }
+
+    /// 移动 / 缩放窗口到 `frame`（AppKit 全局坐标）。
+    pub fn set(&self, frame: Rect) {
+        self.0.setFrame_display(ns_rect(frame), true);
+        self.0.invalidateShadow();
+    }
 }
 
 /// 窗口是不是 key window（键盘落在它上面）。
