@@ -8,6 +8,7 @@
 //!
 //! 表单项标了 `auto_run` 时（翻译），输入停顿 `AUTO_RUN_DELAY` 后自动执行，等待和执行期间详情区显示加载占位。
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{
@@ -127,6 +128,36 @@ fn selection_after_refresh(items: &[Item], previous: Option<&str>, fresh: bool) 
         .min(items.len().saturating_sub(1))
 }
 
+/// Agent 详情里看过的未读完成轮次（会话 ID → 完成轮次）。
+/// 面板打开期间只记下来、不写回执：写了回执列表就按已读重排，旋钮 / 方向键滚到一半选中项会跳走。
+/// 收起面板时一次性提交，下次打开再按新的已读状态排序。
+#[derive(Default)]
+struct ViewedCompletions {
+    /// 正显示在详情里的那一轮；离开这条详情才算看过。
+    current: Option<(String, String)>,
+    /// 已经离开、等收起面板时提交的。
+    pending: BTreeMap<String, String>,
+}
+
+impl ViewedCompletions {
+    /// 详情里显示的未读轮次换成 `next`（没有未读详情时为 `None`）。换了会话，上一条记为看过。
+    fn show(&mut self, next: Option<(String, String)>) {
+        let session = |turn: &Option<(String, String)>| turn.as_ref().map(|(id, _)| id.clone());
+        if session(&self.current) != session(&next)
+            && let Some((id, revision)) = self.current.take()
+        {
+            self.pending.insert(id, revision);
+        }
+        self.current = next;
+    }
+
+    /// 收起面板：交出这次看过的全部轮次（含正在看的那条），由调用方一次写回执。
+    fn finish(&mut self) -> BTreeMap<String, String> {
+        self.show(None);
+        std::mem::take(&mut self.pending)
+    }
+}
+
 struct ActiveScope {
     scope: Scope,
     filter: usize,
@@ -224,8 +255,8 @@ pub struct Launcher {
     scope: Option<ActiveScope>,
     items: Vec<Item>,
     selected: usize,
-    /// 实际渲染在 Agent 详情里的未读轮次；离开这条详情时才记为已读。
-    viewed_completion: Option<(String, String)>,
+    /// 实际渲染在 Agent 详情里的未读轮次；收起面板时才统一记为已读。
+    viewed_completions: ViewedCompletions,
     /// 会话信息默认折叠，展开只对当前选中的会话有效。
     expanded_agent_info: Option<String>,
     /// 每次发起查询加一，后台结果回来时版本不对就丢弃。
@@ -350,7 +381,7 @@ impl Launcher {
             scope: None,
             items: Vec::new(),
             selected: 0,
-            viewed_completion: None,
+            viewed_completions: ViewedCompletions::default(),
             expanded_agent_info: None,
             revision: 0,
             result: None,
@@ -553,7 +584,7 @@ impl Launcher {
         crate::trace::log("launcher.hide");
         self.visible = false;
         agents::set_panel_visible(false);
-        self.finish_completion_view();
+        agents::mark_read_batch(self.viewed_completions.finish());
         self.expanded_agent_info = None;
         self.actions_open = false;
         self.hidden_at = Some(Instant::now());
@@ -563,30 +594,20 @@ impl Launcher {
 
     // ---------- 状态变化 ----------
 
-    fn finish_completion_view(&mut self) -> bool {
-        self.viewed_completion
-            .take()
-            .is_some_and(|(id, revision)| agents::mark_read(id, revision))
-    }
-
     fn mark_list_read(&mut self, cx: &mut Context<Self>) {
         let unread = self.items.iter().filter_map(|item| {
             let completion = item.completion.as_ref().filter(|completion| completion.unread)?;
             Some((item.id.clone(), completion.revision.clone()))
         });
         if agents::mark_read_batch(unread) {
-            self.viewed_completion = None;
             self.refresh(cx);
         }
     }
 
-    fn sync_completion_view(&mut self, cx: &mut Context<Self>) {
+    fn sync_completion_view(&mut self) {
         let item = self.selected_item().filter(|_| {
             self.visible && !self.fresh_list && self.scope_id() == Some(agents::SCOPE_ID)
         });
-        let same_session = item
-            .zip(self.viewed_completion.as_ref())
-            .is_some_and(|(item, (id, _))| item.id == *id);
         let next = item.and_then(|item| {
             let completion = item
                 .completion
@@ -595,10 +616,7 @@ impl Launcher {
             item.detail.as_ref()?;
             Some((item.id.clone(), completion.revision.clone()))
         });
-        if !same_session && self.finish_completion_view() {
-            self.refresh(cx);
-        }
-        self.viewed_completion = next;
+        self.viewed_completions.show(next);
     }
 
     /// 界面语言切换后（在设置窗口里切的，那时面板已隐藏），唤起时重取构造时固定下来的文案：
@@ -2608,7 +2626,7 @@ impl Render for Launcher {
         // 输入框等 GPUI Kit 组件跟随明暗（只在模式真的变化时切换全局主题）。
         crate::settings::sync_component_theme(window, cx);
         self.sync_form(window, cx);
-        self.sync_completion_view(cx);
+        self.sync_completion_view();
         let pal = style::palette(window);
         let layout = self.layout();
 
@@ -2677,8 +2695,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        Deactivated, Escape, RESHOW_GRACE, end_position, on_deactivated, on_escape,
-        placeholder_for, provider_of, selection_after_refresh, should_reset,
+        Deactivated, Escape, RESHOW_GRACE, ViewedCompletions, end_position, on_deactivated,
+        on_escape, placeholder_for, provider_of, selection_after_refresh, should_reset,
     };
     use crate::provider::Item;
 
@@ -2716,6 +2734,26 @@ mod tests {
         let plain = [item("apps:a", false), item("apps:b", false)];
         assert_eq!(selection_after_refresh(&plain, None, true), 0);
         assert_eq!(selection_after_refresh(&[], None, true), 0);
+    }
+
+    #[test]
+    fn scrolling_past_unread_sessions_commits_read_only_when_the_panel_hides() {
+        // 用旋钮在 Agent 列表里滚过未读会话时不能写回执：写了列表就按已读重排，选中项跳走、没法往下翻。
+        let turn = |id: &str, revision: &str| Some((id.to_string(), revision.to_string()));
+        let mut viewed = ViewedCompletions::default();
+        viewed.show(turn("a", "done:1"));
+        viewed.show(turn("b", "done:4"));
+        viewed.show(None); // 滚到一条没有未读详情的会话
+        viewed.show(turn("c", "done:2"));
+        viewed.show(turn("c", "done:3")); // 停在同一会话时它又完成了一轮：只算最新那轮
+        assert!(viewed.pending.keys().eq(["a", "b"]), "离开的会话只记下来，等收起面板");
+        // 收起面板：看过的全部一次交出（含正停在详情里的 c），没滚到的会话仍是未读。
+        let committed = viewed.finish();
+        let expected = [("a", "done:1"), ("b", "done:4"), ("c", "done:3")]
+            .map(|(id, revision)| (id.to_string(), revision.to_string()));
+        assert!(committed.into_iter().eq(expected));
+        // 提交过就清空：下次打开面板不会重复提交上一轮的记录。
+        assert!(viewed.finish().is_empty());
     }
 
     #[test]

@@ -52,7 +52,7 @@ fn global_section() -> &'static str {
     tr("Agent 会话", "Agent Sessions")
 }
 pub(crate) const SCOPE_ID: &str = "agents";
-pub(crate) use seen::{mark_read, mark_read_batch};
+pub(crate) use seen::mark_read_batch;
 pub(crate) use state::scoped_sections;
 
 /// 一轮扫描里遇到的问题。每条只在首次出现时打印到 stderr，避免每秒刷屏。

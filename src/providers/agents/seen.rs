@@ -40,10 +40,6 @@ pub fn is_read(id: &str, revision: &str) -> bool {
     })
 }
 
-pub fn mark_read(id: String, revision: String) -> bool {
-    mark_read_batch([(id, revision)])
-}
-
 pub fn mark_read_batch(completions: impl IntoIterator<Item = (String, String)>) -> bool {
     let Some(seen) = SEEN.get() else { return false };
     let mut seen = seen.lock().expect("Agent 已读记录锁中毒");
