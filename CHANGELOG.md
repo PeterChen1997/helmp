@@ -6,6 +6,18 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-11-15
+
+### Fixed
+
+- Scrolling through the Agent list with the knob or arrow keys no longer marks each conversation as read the moment you move past it. The list used to re-sort under you, so the selection jumped away and you could not keep scrolling down. Conversations you looked at are now marked read together when the panel closes; Mark All as Read still takes effect right away.
+
+### 简体中文
+
+#### 修复
+
+- 用旋钮或方向键在 Agent 列表里往下翻时，不再一离开某条会话就把它标成已读。以前列表会马上按已读重新排序，选中项跳走、没法继续往下翻。现在看过的会话在收起面板时一起标为已读；「全部标为已读」仍然立即生效。
+
 ## [0.4.7] - 2026-11-15
 
 ### Changed
