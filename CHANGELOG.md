@@ -6,6 +6,18 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-11-15
+
+### Added
+
+- Anonymous usage statistics and crash reports, so problems can be found and fixed faster. Only event names, the enabled built-in providers and the version are sent, together with a random install ID; never what you type or copy. Turn it off any time in Settings › General › Privacy.
+
+### 简体中文
+
+#### 新增
+
+- 匿名使用统计与崩溃报告，方便更快发现和修复问题。只发送事件名、启用的内置功能和版本号，外加一个随机安装 ID；不发送你输入或复制的内容。可随时在「设置 › 通用 › 隐私」里关闭。
+
 ## [0.4.8] - 2026-11-15
 
 ### Fixed
