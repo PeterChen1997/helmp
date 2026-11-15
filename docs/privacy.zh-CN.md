@@ -2,7 +2,7 @@
 
 [English](privacy.md) · 简体中文
 
-一句话：Helmp 没有账号、没有遥测、没有崩溃上报。它保存的东西都在你 Mac 上的同一个目录里。会发出的网络请求只有这几类：发往你为翻译配置的模型接口；你运行已启用插件的命令时，发往该插件声明的主机；以及（除非你关掉）每天一次读取 Helmp 的更新清单（只是下载一个版本文件，不带任何关于你的信息）。你添加的 MCP 服务器是你自己选的程序或服务：Helmp 启动或连接它们，并把你运行的工具的参数发给它们；它们还会访问什么，由它们自己决定。
+一句话：Helmp 没有账号；会发送匿名使用统计和崩溃报告，可以在「设置 › 通用 › 隐私」里关闭（见下文）。它保存的东西都在你 Mac 上的同一个目录里。会发出的网络请求只有这几类：发往你为翻译配置的模型接口；你运行已启用插件的命令时，发往该插件声明的主机；以及（除非你关掉）每天一次读取 Helmp 的更新清单（只是下载一个版本文件，不带任何关于你的信息）。你添加的 MCP 服务器是你自己选的程序或服务：Helmp 启动或连接它们，并把你运行的工具的参数发给它们；它们还会访问什么，由它们自己决定。
 
 本页描述的是当前代码的实际行为。如果发现对不上，请开 issue 告诉我们。
 
@@ -80,7 +80,9 @@
 - **货币换算**在启动时如果本地汇率超过一天，会下载欧洲央行每日参考汇率（`GET https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`，8 秒超时），之后每小时检查一次、一天最多下载一次。请求里不带任何关于你或你输入内容的信息。
 - **开发工具 › 公网 IP** 只在你对这一行按回车时，向 `https://api.ipify.org`（或设置 `devtools.public_ip_url` 里的地址）查询你的公网 IP。
 - **检查更新**会下载版本清单 `https://blog.peterchen97.cn/helmp/releases/latest.json`，取不到时改为 `https://github.com/PeterChen1997/helmp/releases/latest/download/latest.json`（15 秒超时）。打开「设置 › 通用 › 自动检查更新」时，启动 20 秒后检查一次，之后每天一次；关掉后只在你点「检查更新」时检查。请求是普通的 `GET`，User-Agent 为 `Helmp/<版本> (macOS updater)`，不带任何标识符，也不带你的使用情况。安装包只在你点「下载并安装」后才下载，地址来自清单（同样是这两个主机）。安装时新版本解压到 App 旁边的隐藏目录 `.helmp-update-…`，助手脚本放在临时目录（`$TMPDIR/helmp-update-<pid>/`），解压目录和脚本用完即删，助手的 `update.log` 留在那里，直到 macOS 清理临时文件；下载的 dmg 存在「下载」文件夹。详见 [updates.zh-CN.md](updates.zh-CN.md)。
-- 除此之外没有任何网络请求：没有统计、遥测、崩溃上报。
+- 匿名使用统计（「设置 › 通用 › 隐私」，默认打开）：启动时、执行结果时，向自建的 Umami（`a.hweb.peterchen97.cn`）发一个事件，只带功能类别（`clipboard`、`translate` 这类内置名字，插件一律记作 `plugins`）、Helmp 版本、界面语言和存在 `telemetry.json` 里的随机安装 ID。不发送搜索内容、文件名、剪贴板、译文或插件名。
+- 崩溃报告（同一个开关）：崩溃和操作失败（保存设置 / 最近使用、注册快捷键、安装更新）发往 Sentry（`sentry.io`），带堆栈、错误信息、Helmp 和 macOS 版本。路径里的家目录换成 `~`，去掉主机名和用户。
+- 除此之外没有任何网络请求。
 
 插件中心（「设置 › 插件 › 浏览插件中心」、`helmp plugins available` / `install`、`install-plugin` 链接）只在你使用时才从 `cdn.jsdelivr.net` 下载插件索引和插件文件，Helmp 不会在后台检查。见 [plugin-center.zh-CN.md](plugin-center.zh-CN.md)。
 

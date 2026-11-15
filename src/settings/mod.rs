@@ -558,6 +558,7 @@ impl SettingsView {
             Ok(()) => self.error = None,
             Err(err) => {
                 eprintln!("helmp: 保存设置失败：{err:#}");
+                crate::telemetry::report("settings.save", &err);
                 self.error = Some(trf!(
                     "保存设置失败：{err:#}",
                     "Couldn't save settings: {err:#}"

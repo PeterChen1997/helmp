@@ -3,6 +3,8 @@
 # 产物在 target/dist/：Helmp-<版本>.dmg、Helmp-<版本>.zip、SHA256SUMS.txt。
 #
 # 用法：script/release.sh [--dry-run]
+# Sentry：构建时注入 SENTRY_DSN_HELMP（没设就从 ~/.config/sentry-dsns.env 读，仓库里没有值），
+#   打包后用 sentry-cli 把 helmp.dSYM 传到 own-tay/helmp，崩溃堆栈才可读。
 # 公证用 App Store Connect API 密钥（与本机其他项目共用）：
 #   HELMP_NOTARY_KEY_ID / HELMP_NOTARY_ISSUER / HELMP_NOTARY_KEY_PATH 可覆盖默认值。
 set -euo pipefail
@@ -48,7 +50,7 @@ notarize() {
   echo "   公证通过：$id"
 }
 
-for tool in cargo codesign xcrun hdiutil ditto shasum security; do
+for tool in cargo codesign xcrun hdiutil ditto shasum security sentry-cli; do
   command -v "$tool" >/dev/null || fail "缺少 $tool"
 done
 [[ -f "$KEY_PATH" ]] || fail "缺少 App Store Connect API 密钥：$KEY_PATH"
@@ -61,8 +63,17 @@ dist="target/dist"
 dmg="$dist/Helmp-$version.dmg"
 zip="$dist/Helmp-$version.zip"
 
+if [[ -z "${SENTRY_DSN_HELMP:-}" && -f "$HOME/.config/sentry-dsns.env" ]]; then
+  SENTRY_DSN_HELMP="$(grep -m1 '^SENTRY_DSN_HELMP=' "$HOME/.config/sentry-dsns.env" | cut -d= -f2- || true)"
+fi
+[[ -n "${SENTRY_DSN_HELMP:-}" ]] || fail "缺少 SENTRY_DSN_HELMP（环境变量或 ~/.config/sentry-dsns.env）：发布包必须带崩溃上报"
+export SENTRY_DSN_HELMP
+
 step "构建并打包 Helmp $version"
 run bash script/bundle.sh release >/dev/null
+
+step "上传调试符号到 Sentry（own-tay/helmp）"
+run sentry-cli debug-files upload --org own-tay --project helmp --wait target/release/helmp.dSYM
 
 step "Developer ID 签名（hardened runtime + 时间戳）"
 run codesign --force --options runtime --timestamp --entitlements resources/Helmp.entitlements \

@@ -31,6 +31,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3.5.1", features = ["json"] }
 security-framework = "3.7.0"
+# 崩溃与错误上报（CARM-46）：只开 panic、堆栈、调试镜像；传输用 ureq + rustls，不引入 tokio。
+# DSN 构建期从环境变量 SENTRY_DSN_HELMP 注入（见 src/telemetry.rs），仓库里没有值。
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "ureq", "rustls"] }
 # 只为 readme-shots 打开 GPUI 的离屏渲染（与 gpui-kit 用的是同一版本）。
 gpui-pre = { version = "=0.3.11", optional = true }
 gpui-pre-macos = { version = "=0.3.11", optional = true }
@@ -58,4 +61,7 @@ opt-level = 1
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# 行号级调试信息拆到 Helmp.dSYM（不进二进制），release.sh 上传给 Sentry 符号化堆栈。
+debug = "line-tables-only"
+split-debuginfo = "packed"
 strip = true

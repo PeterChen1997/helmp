@@ -160,6 +160,7 @@ fn save(snapshot: &[Entry]) {
             .with_context(|| format!("写入 {}", path.display()))
     }) {
         eprintln!("helmp: 保存最近使用失败：{err:#}");
+        crate::telemetry::report("history.save", &err);
     }
 }
 

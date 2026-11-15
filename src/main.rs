@@ -28,6 +28,7 @@ mod provider;
 mod providers;
 mod settings;
 mod style;
+mod telemetry;
 mod trace;
 mod updates;
 
@@ -51,6 +52,8 @@ fn main() {
         return;
     }
 
+    // 未捕获 panic 上报 Sentry；guard 活到进程结束（设置里可关，见 telemetry.rs）。
+    let _sentry = telemetry::init();
     engine.start_in_background();
     run_gui(engine);
 }
@@ -108,10 +111,18 @@ fn run_gui(engine: Engine) {
             if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
                 // 大声失败：热键注册不上整个 App 就没有意义。
                 eprintln!("helmp: failed to register global hotkey: {err:#}");
+                telemetry::report("hotkey.register", &err);
                 cx.quit();
                 return;
             }
             menubar::install(cx);
+            telemetry::launched();
+            // 退出时进程直接结束、不会走到 Sentry guard 的 drop：先把排队的错误发完。
+            cx.on_app_quit(|_| {
+                telemetry::flush();
+                async {}
+            })
+            .detach();
             // 自动检查更新的定时、面板命令的检查请求、安装就绪后退出（见 src/updates）。
             updates::start(cx);
             onboarding::maybe_show(cx);

@@ -221,6 +221,37 @@ impl SettingsView {
                 ],
                 pal,
             ))
+            .child(widgets::group_header(tr("隐私", "Privacy"), pal))
+            .child(widgets::group(
+                vec![
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("匿名使用统计与崩溃报告", "Anonymous usage stats & crash reports"),
+                            tr(
+                                "发送启动、用了哪类功能（如剪贴板、翻译）和版本号，以及崩溃与出错时的堆栈。\
+                                 不发送搜索内容、文件名、剪贴板或译文；用随机 ID，不关联账号。关掉后立即停止发送。",
+                                "Sends launches, which kinds of features you use (like Clipboard or Translate), \
+                                 the version, and stack traces when something crashes or fails. Never sends what \
+                                 you search, file names, clipboard or translated text; uses a random ID tied to no \
+                                 account. Turning it off stops sending immediately.",
+                            ),
+                            pal,
+                        ),
+                        widgets::switch(
+                            "telemetry",
+                            general.telemetry,
+                            tr("匿名使用统计与崩溃报告", "Anonymous usage stats & crash reports"),
+                            pal,
+                            cx.listener(|this, on: &bool, _, cx| {
+                                let on = *on;
+                                this.save(cx, |c| c.general.telemetry = on);
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+                ],
+                pal,
+            ))
             .into_any_element()
     }
 

@@ -440,6 +440,7 @@ pub fn install_in_background() {
                 Err(err) => {
                     let text = format!("{err:#}").replace('\n', "; ");
                     eprintln!("helmp: 安装更新失败：{text}");
+                    crate::telemetry::report("updates.install", &err);
                     state.install_error = Some(text);
                 }
             }

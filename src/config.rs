@@ -93,6 +93,8 @@ pub struct General {
     pub auto_check_updates: bool,
     /// 界面语言；旧配置没有这个字段时跟随系统。
     pub language: Language,
+    /// 匿名使用统计（Umami）与崩溃报告（Sentry）；关掉后两者都不发（见 `telemetry`）。
+    pub telemetry: bool,
 }
 
 impl Default for General {
@@ -105,6 +107,7 @@ impl Default for General {
             panel_screen: PanelScreen::Mouse,
             auto_check_updates: true,
             language: Language::System,
+            telemetry: true,
         }
     }
 }

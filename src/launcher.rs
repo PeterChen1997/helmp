@@ -1127,6 +1127,10 @@ impl Launcher {
         if record && !item.id.starts_with("recent:") {
             crate::history::record(&item, &self.query, self.scope_id());
         }
+        // 输入即译的自动执行（record = false）不算一次使用。
+        if record {
+            crate::telemetry::used(provider_of(&item.id).unwrap_or_default());
+        }
 
         // 只有提交表单本身（回车运行）才在原地显示结果；结果上的操作（复制、替换）要先隐藏面板，
         // 让后续的 ⌘V 等落到用户原来的 App。

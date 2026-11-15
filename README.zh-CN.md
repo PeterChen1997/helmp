@@ -6,7 +6,7 @@
 
 <p align="center">
   macOS 原生启动器，顺便告诉你哪个 coding agent 在等你。<br>
-  用 Rust + <a href="https://www.gpui.rs">GPUI</a>（Zed 编辑器的 UI 框架）写的高性能原生应用，数据只在本机，不用登录，没有遥测。
+  用 Rust + <a href="https://www.gpui.rs">GPUI</a>（Zed 编辑器的 UI 框架）写的高性能原生应用，数据只在本机，不用登录；匿名使用统计与崩溃报告可在设置里关闭。
 </p>
 
 <p align="center">

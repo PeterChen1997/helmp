@@ -6,7 +6,7 @@
 
 <p align="center">
   A native macOS launcher that also tells you which coding agent is waiting for you.<br>
-  A fast native app written in Rust with <a href="https://www.gpui.rs">GPUI</a>, the UI framework behind the Zed editor. Local-first, no account, no telemetry.
+  A fast native app written in Rust with <a href="https://www.gpui.rs">GPUI</a>, the UI framework behind the Zed editor. Local-first, no account; anonymous usage stats and crash reports can be turned off in Settings.
 </p>
 
 <p align="center">

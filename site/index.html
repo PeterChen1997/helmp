@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Helmp · macOS launcher with an agent switcher</title>
-  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, snippets, file and bookmark search, screenshot OCR, translation with your own model, unit and currency conversion, window management, developer tools, plugins and MCP servers. English and Chinese interface. No account, no telemetry.">
+  <meta name="description" content="Helmp is a native macOS launcher written in Rust and GPUI: pinyin app search, a Claude Code / Codex session switcher, clipboard history, snippets, file and bookmark search, screenshot OCR, translation with your own model, unit and currency conversion, window management, developer tools, plugins and MCP servers. English and Chinese interface. No account; anonymous usage stats and crash reports you can turn off.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#dfe8fd" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0b1131" media="(prefers-color-scheme: dark)">
@@ -16,6 +16,7 @@
   <link rel="icon" type="image/png" href="assets/icon-64.png">
   <link rel="apple-touch-icon" href="assets/icon-512.png">
   <link rel="stylesheet" href="assets/style.css">
+  <script defer src="https://a.hweb.peterchen97.cn/script.js" data-website-id="202fc4e3-a6c6-46d8-8517-faf1f867822f" data-domains="blog.peterchen97.cn"></script>
   <script>
     // 首帧之前定好语言，避免先闪一下英文再切中文。读写 localStorage 都可能抛错（隐私模式等）。
     (function () {
@@ -75,10 +76,10 @@
           <span lang="en">A native Mac launcher that knows which agent is waiting.</span>
           <span lang="zh-CN"><span class="seg">原生 Mac 启动器，</span><span class="seg">知道哪个 agent 在等你。</span></span>
         </h1>
-        <p class="hero-lede" lang="en">Find apps by pinyin, search your clipboard, read text from screenshots, translate with your own model, and jump straight to the Claude Code or Codex session that needs you. Written in Rust with GPUI. No account, no telemetry.</p>
-        <p class="hero-lede" lang="zh-CN">拼音搜应用、翻剪贴板、截图识字、用你自己的模型翻译，还能一键跳到正在等你的 Claude Code / Codex 会话。Rust + GPUI 原生编写，不用登录，没有遥测。</p>
+        <p class="hero-lede" lang="en">Find apps by pinyin, search your clipboard, read text from screenshots, translate with your own model, and jump straight to the Claude Code or Codex session that needs you. Written in Rust with GPUI. No account; anonymous stats you can turn off.</p>
+        <p class="hero-lede" lang="zh-CN">拼音搜应用、翻剪贴板、截图识字、用你自己的模型翻译，还能一键跳到正在等你的 Claude Code / Codex 会话。Rust + GPUI 原生编写，不用登录，匿名统计可关闭。</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest">
+          <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest" data-umami-event="download" data-umami-event-location="hero">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
             <span lang="en">Download for Mac</span><span lang="zh-CN">下载 Mac 版</span>
           </a>
@@ -443,7 +444,7 @@
     <!-- ============ Privacy ============ -->
     <section id="privacy" class="section" aria-labelledby="privacy-title">
       <div class="wrap">
-        <h2 id="privacy-title"><span lang="en"><span class="seg">Local first.</span> <span class="seg">No account, no telemetry.</span></span><span lang="zh-CN"><span class="seg">数据留在本机。</span><span class="seg">不用登录，没有遥测。</span></span></h2>
+        <h2 id="privacy-title"><span lang="en"><span class="seg">Local first.</span> <span class="seg">No account. Anonymous stats, easy to turn off.</span></span><span lang="zh-CN"><span class="seg">数据留在本机。</span><span class="seg">不用登录，匿名统计可关闭。</span></span></h2>
         <div class="trio">
           <div>
             <h3><span lang="en">One folder on your Mac</span><span lang="zh-CN">本机的一个目录</span></h3>
@@ -456,9 +457,9 @@
             <p lang="zh-CN">模型 API Key、插件密钥和 MCP 令牌都存在 macOS 钥匙串里，从不写进 <code>config.json</code>。</p>
           </div>
           <div>
-            <h3><span lang="en">Nothing phones home</span><span lang="zh-CN">不往外报数据</span></h3>
-            <p lang="en">No analytics, no telemetry, no crash reports. The daily update check downloads a version file and sends nothing about you. Agent session files are only read, never written.</p>
-            <p lang="zh-CN">没有统计、遥测、崩溃上报。每天检查更新只是下载一个版本文件，不带任何关于你的信息。Agent 的会话文件只读不写。</p>
+            <h3><span lang="en">Anonymous stats, one switch</span><span lang="zh-CN">匿名统计，一键关闭</span></h3>
+            <p lang="en">Helmp counts launches and which kinds of features get used (Clipboard, Translate…), and sends crash reports, under a random ID tied to no account. Never what you search, file names, clipboard or translated text. Turn it off in Settings › General › Privacy. Agent session files are only read, never written.</p>
+            <p lang="zh-CN">Helmp 会匿名统计启动次数和用了哪类功能（剪贴板、翻译……），并上报崩溃，只带一个与账号无关的随机 ID；不发送搜索内容、文件名、剪贴板或译文。在「设置 › 通用 › 隐私」里一键关闭。Agent 的会话文件只读不写。</p>
           </div>
         </div>
 
@@ -509,6 +510,16 @@
                 <td><span lang="en">Once a day (can be turned off), when you click Check for Updates, and when you install an update</span><span lang="zh-CN">每天一次（可关闭）、点「检查更新」时，以及你确认安装更新时</span></td>
               </tr>
               <tr>
+                <th scope="row"><span lang="en">Usage stats</span><span lang="zh-CN">使用统计</span></th>
+                <td><code>a.hweb.peterchen97.cn</code><span lang="en"> (self-hosted Umami)</span><span lang="zh-CN">（自建 Umami）</span></td>
+                <td><span lang="en">At launch and when you run a result: feature kind and version only (can be turned off)</span><span lang="zh-CN">启动时、执行结果时：只有功能类别和版本号（可关闭）</span></td>
+              </tr>
+              <tr>
+                <th scope="row"><span lang="en">Crash reports</span><span lang="zh-CN">崩溃报告</span></th>
+                <td><code>sentry.io</code></td>
+                <td><span lang="en">When Helmp crashes or an operation fails: stack trace and error, home folder replaced by <code>~</code> (can be turned off)</span><span lang="zh-CN">崩溃或操作出错时：堆栈和错误信息，家目录换成 <code>~</code>（可关闭）</span></td>
+              </tr>
+              <tr>
                 <th scope="row"><span lang="en">Plugin Center</span><span lang="zh-CN">插件中心</span></th>
                 <td><code>cdn.jsdelivr.net</code></td>
                 <td><span lang="en">When you browse or install plugins</span><span lang="zh-CN">你浏览或安装插件时</span></td>
@@ -537,7 +548,7 @@
               <li><span lang="en">Open it and drag Helmp into Applications.</span><span lang="zh-CN">打开 dmg，把 Helmp 拖进「应用程序」。</span></li>
               <li><span lang="en">Launch Helmp. The first-run guide walks you through Accessibility and Screen Recording.</span><span lang="zh-CN">启动 Helmp，首次启动的引导会带你授权「辅助功能」和「录屏」。</span></li>
             </ol>
-            <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest"><span lang="en">Download the latest release</span><span lang="zh-CN">下载最新版</span></a>
+            <a class="btn btn-primary" href="https://github.com/PeterChen1997/helmp/releases/latest" data-umami-event="download" data-umami-event-location="install"><span lang="en">Download the latest release</span><span lang="zh-CN">下载最新版</span></a>
           </div>
           <div class="install-card glass">
             <h3><span lang="en">Build from source</span><span lang="zh-CN">从源码构建</span></h3>
