@@ -21,7 +21,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 记「功能使用」时认的 provider id：结果项 id 的前缀（`<provider>:…`）不在表里就记作 `other`，
 /// 保证上报的只会是这些枚举值。新增内置 provider 时补上（单测会提醒）。
-const PROVIDERS: [&str; 24] = [
+const PROVIDERS: [&str; 25] = [
     "builtin",
     "calculator",
     "system",
@@ -36,6 +36,7 @@ const PROVIDERS: [&str; 24] = [
     "processes",
     "window",
     "snippets",
+    "notes",
     "websearch",
     "files",
     "settings-panes",
@@ -129,6 +130,30 @@ pub fn launched() {
 /// 用户执行了一个结果项：按它所属的 provider 记 `use_<provider>`。
 pub fn used(provider: &str) {
     track(&format!("use_{}", known_provider(provider)), json!({}));
+}
+
+/// 便签只上报固定操作枚举，不接收正文或便签标识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Stage 2 的窗口 / provider 接入时使用。
+pub enum NoteEvent {
+    Created,
+    Docked,
+    Deleted,
+}
+
+impl NoteEvent {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Created => "note_create",
+            Self::Docked => "note_dock",
+            Self::Deleted => "note_delete",
+        }
+    }
+}
+
+#[allow(dead_code)] // Stage 2 的窗口 / provider 接入时使用。
+pub fn note(event: NoteEvent) {
+    track(event.name(), json!({}));
 }
 
 fn known_provider(provider: &str) -> &'static str {
@@ -301,7 +326,9 @@ mod tests {
     #[test]
     fn provider_table_matches_registered_providers() {
         // 表里缺了某个 provider，它的使用就全记成 `other`，后台看不出这个功能有没有人用。
-        let registered: Vec<&str> = crate::providers::all().iter().map(|p| p.id()).collect();
+        let mut registered: Vec<&str> = crate::providers::all().iter().map(|p| p.id()).collect();
+        // Stage 1 先预留 notes 的埋点，Stage 2 注册 provider 时删除这行。
+        registered.push("notes");
         let mut table = PROVIDERS.to_vec();
         let mut registered_sorted = registered.clone();
         table.sort_unstable();
@@ -314,9 +341,18 @@ mod tests {
         // 上报的名字只能是表里的枚举：别的字符串（误传进来的路径、内容）一律变成 `other`。
         assert_eq!(known_provider("clipboard"), "clipboard");
         assert_eq!(known_provider("settings-panes"), "settings-panes");
+        assert_eq!(known_provider("notes"), "notes");
         assert_eq!(known_provider("/Users/alice/secret.txt"), "other");
         assert_eq!(known_provider("我的密码是 123"), "other");
         assert_eq!(known_provider(""), "other");
+    }
+
+    #[test]
+    fn note_events_map_to_fixed_names() {
+        // 事件名必须稳定，且接口不接受正文，防止便签私密内容进入统计。
+        assert_eq!(NoteEvent::Created.name(), "note_create");
+        assert_eq!(NoteEvent::Docked.name(), "note_dock");
+        assert_eq!(NoteEvent::Deleted.name(), "note_delete");
     }
 
     #[test]

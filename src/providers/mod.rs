@@ -9,6 +9,9 @@ mod processes;
 pub mod clipboard;
 mod dictionary;
 mod files;
+// Stage 1 提供数据接口，Stage 2 接入 provider / 窗口后移除 dead_code 豁免。
+#[allow(dead_code)]
+pub(crate) mod notes;
 pub mod plugins;
 pub mod mcp;
 mod color;
