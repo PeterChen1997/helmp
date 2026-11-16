@@ -116,6 +116,7 @@ fn run_gui(engine: Engine) {
                 return;
             }
             menubar::install(cx);
+            providers::notes::restore_on_launch(cx);
             telemetry::launched();
             // 退出时进程直接结束、不会走到 Sentry guard 的 drop：先把排队的错误发完。
             cx.on_app_quit(|_| {
@@ -290,9 +291,67 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         if let Ok(keys) = std::env::var("HELMP_SELF_TEST_KEYS") {
             let tokens: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
             for (ix, token) in tokens.iter().enumerate() {
-                // 截图界面开着时，输入都给它（遮罩、识别结果或钉图）。
+                if token == "launcher" {
+                    providers::notes::self_test_clear();
+                    continue;
+                }
+                if let Some(idx) = token
+                    .strip_prefix("note:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    let ok = cx.update(|cx| providers::notes::self_test_select(idx, cx));
+                    println!(
+                        "self-test key {token}: ok={ok} {}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
+                if token == "launcher-show" {
+                    providers::notes::self_test_clear();
+                    if !is_active(cx) {
+                        toggle(window, launcher.clone(), cx);
+                    }
+                    cx.background_executor().timer(settle).await;
+                    report(token.clone(), cx);
+                    continue;
+                }
+                if let Some(raw) = token.strip_prefix("query:") {
+                    providers::notes::self_test_clear();
+                    let query = raw.replace('_', " ");
+                    set_query(window, launcher.clone(), &query, cx);
+                    cx.background_executor().timer(settle).await;
+                    report(format!("query {query:?}"), cx);
+                    continue;
+                }
+                if token == "notes-dock-all" {
+                    cx.update(providers::notes::dock_all);
+                    cx.background_executor().timer(settle).await;
+                    println!(
+                        "self-test key {token}: {}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
+                if token == "notes-toggle" {
+                    cx.update(providers::notes::toggle_visibility);
+                    cx.background_executor().timer(settle).await;
+                    println!(
+                        "self-test key {token}: {}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
+                if token == "notes-debug" {
+                    println!(
+                        "self-test key {token}: {}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
+                // 截图界面或选中便签开着时，输入都给它。
                 let target = cx
                     .update(capture::self_test_target)
+                    .or_else(|| cx.update(providers::notes::self_test_target))
                     .unwrap_or(settings_target);
                 let on_other_window = target != window;
                 // `wait:<秒>`：干等，留给慢操作（如图片 OCR）跑完。
@@ -389,12 +448,27 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     None
                 };
                 if let Some(events) = pointer {
-                    for event in events {
+                    let is_drag = token.starts_with("drag:");
+                    let drag_start_origin = if is_drag {
+                        target.update(cx, |_, window, _| window.bounds().origin).ok()
+                    } else {
+                        None
+                    };
+                    for mut event in events {
                         // 屏幕外的窗口系统不驱动重绘：每个事件后手动画一帧，按下 / 抬起之间的
                         // 状态（开关等控件靠它判断一次完整的点击）才会更新。
                         // 点击可能关掉这个窗口（截图工具栏的「复制」），之后的事件就不用再送了。
                         let alive = target
                             .update(cx, |_, window, cx| {
+                                // 可移动窗口（便签）在拖动中原点会变，把初始窗口内坐标换算成当下窗口内坐标。
+                                if let Some(start_origin) = drag_start_origin {
+                                    let delta = start_origin - window.bounds().origin;
+                                    match &mut event {
+                                        PlatformInput::MouseMove(ev) => ev.position += delta,
+                                        PlatformInput::MouseUp(ev) => ev.position += delta,
+                                        _ => {}
+                                    }
+                                }
                                 window.dispatch_event(event, cx);
                                 window.draw(cx).clear(cx);
                             })
@@ -407,7 +481,8 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     cx.background_executor().timer(Duration::from_millis(500)).await;
                     if on_other_window {
                         let state = cx.update(capture::debug_state);
-                        println!("self-test key {token}: capture={state}");
+                        let notes_state = cx.update(providers::notes::self_test_debug_state);
+                        println!("self-test key {token}: capture={state} notes={notes_state}");
                     } else {
                         // 点在面板上（如双击剪贴板条目）：报告面板状态。
                         let launcher = launcher.clone();
@@ -468,14 +543,21 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         .expect("launcher window gone");
                     continue;
                 }
+                if token == "native-esc" {
+                    let _ = target.update(cx, |_, window, _| send_native_key(window, '\x1b'));
+                    cx.background_executor().timer(Duration::from_millis(120)).await;
+                    println!(
+                        "self-test key {token}: notes={}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
                 if let Some(keys) = token.strip_prefix("native:") {
-                    // 构造真实的 NSEvent 按键交给面板窗口：和物理键盘一样经过第一响应者、
+                    // 构造真实的 NSEvent 按键交给目标窗口：和物理键盘一样经过第一响应者、
                     // 输入上下文和当前输入法（豆包组字等），用来验证中英文输入法都能打字。
                     // 「_」代表空格，「^」代表回车。需配合 HELMP_SELF_TEST_KEY_WINDOW。
                     for ch in keys.chars() {
-                        window
-                            .update(cx, move |_, window, _| send_native_key(window, ch))
-                            .expect("launcher window gone");
+                        let _ = target.update(cx, move |_, window, _| send_native_key(window, ch));
                         cx.background_executor().timer(Duration::from_millis(60)).await;
                     }
                 } else if let Some(text) = token.strip_prefix('~') {
@@ -576,6 +658,7 @@ fn send_native_key(window: &mut Window, ch: char) {
 
 fn key_code(ch: char) -> Option<u16> {
     Some(match ch {
+        '\x1b' => 53,
         '_' => 49, '^' => 36, '1' => 18, '2' => 19,
         'a' => 0, 's' => 1, 'd' => 2, 'f' => 3, 'h' => 4, 'g' => 5, 'z' => 6, 'x' => 7,
         'c' => 8, 'v' => 9, 'b' => 11, 'q' => 12, 'w' => 13, 'e' => 14, 'r' => 15,

@@ -66,7 +66,7 @@ pub struct ExtensionShortcut {
     pub command: Command,
 }
 
-pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 5] = [
+pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 6] = [
     ExtensionShortcut {
         provider: "clipboard",
         slot: "clipboard",
@@ -113,6 +113,18 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 5] = [
         label_en: "Agent Sessions",
         default: "ctrl-alt-a",
         command: Command::Scope("agents"),
+    },
+    // 便签「新建便签」默认不绑定，避免和用户现有全局快捷键冲突，可在设置 › 扩展里自行绑定。
+    ExtensionShortcut {
+        provider: "notes",
+        slot: "notes",
+        label: "新建便签",
+        label_en: "New Note",
+        default: "",
+        command: Command::RunItem {
+            id: "notes:new",
+            query: "新建便签",
+        },
     },
 ];
 
@@ -348,8 +360,8 @@ pub fn assigned(config: &Config) -> Vec<Wanted> {
             // 用户清除了快捷键（写成空字符串）：不绑定。
             Some(spec) if spec.trim().is_empty() => None,
             Some(spec) => Some(spec.to_string()),
-            // 没配置过：用默认值。
-            None => Some(shortcut.default.to_string()),
+            // 没配置过：用默认值；若默认为空字符串则默认不绑定。
+            None => (!shortcut.default.trim().is_empty()).then(|| shortcut.default.to_string()),
         };
         out.push(Wanted {
             command: shortcut.command,
@@ -392,7 +404,8 @@ pub fn default_spec(command: Command) -> Option<&'static str> {
         _ => EXTENSION_SHORTCUTS
             .iter()
             .find(|shortcut| shortcut.command == command)
-            .map(|shortcut| shortcut.default),
+            .map(|shortcut| shortcut.default)
+            .filter(|spec| !spec.trim().is_empty()),
     }
 }
 
@@ -1456,11 +1469,9 @@ mod tests {
         let fake = Fake::default();
         let mut registry = Registry::default();
         let config = Config::default();
+        let expected_count = wanted(&config).iter().filter(|w| w.spec.is_some()).count();
         registry.apply(&fake, &wanted_while(false, &config));
-        assert_eq!(
-            fake.registered.borrow().len(),
-            EXTENSION_SHORTCUTS.len() + 1
-        );
+        assert_eq!(fake.registered.borrow().len(), expected_count);
         registry.apply(&fake, &wanted_while(true, &config));
         assert!(fake.registered.borrow().is_empty());
         assert_eq!(registry.get(Command::Toggle), None);

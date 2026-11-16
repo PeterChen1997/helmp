@@ -73,6 +73,8 @@ enum MenuCommand {
     Run(Command),
     /// 执行等待中会话的主操作（跳转到会话）。
     RunItem(Box<Item>),
+    DockAllNotes,
+    ToggleNotesVisibility,
     Settings,
     CheckUpdates,
     Quit,
@@ -104,6 +106,7 @@ pub fn install(cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut last_refresh: Option<Instant> = None;
         let mut update_generation = u64::MAX;
+        let mut notes_generation = crate::providers::notes::menu_generation();
         loop {
             while let Ok(command) = rx.try_recv() {
                 cx.update(|cx| run(command, cx));
@@ -114,6 +117,10 @@ pub fn install(cx: &mut App) {
                 bar.dirty = true;
             }
             if hotkey::generation() != bar.hotkey_generation {
+                bar.dirty = true;
+            }
+            if crate::providers::notes::menu_generation() != notes_generation {
+                notes_generation = crate::providers::notes::menu_generation();
                 bar.dirty = true;
             }
             if crate::updates::generation() != update_generation {
@@ -219,6 +226,8 @@ fn run(command: MenuCommand, cx: &mut App) {
         }),
         MenuCommand::Run(command) => hotkey::execute(command, cx),
         MenuCommand::RunItem(item) => hotkey::run_action(*item, cx),
+        MenuCommand::DockAllNotes => crate::providers::notes::dock_all(cx),
+        MenuCommand::ToggleNotesVisibility => crate::providers::notes::toggle_visibility(cx),
         MenuCommand::Settings => crate::settings::open(cx),
         MenuCommand::CheckUpdates => {
             // 已经知道有新版本就不再查一遍：直接去关于页确认安装。
@@ -595,6 +604,30 @@ impl MenuBar {
             let entry = self.add(&mut commands, title, command, hotkey::active(shortcut));
             entry.setImage(symbol_image(symbol, title).as_deref());
         }
+        self.menu.addItem(&NSMenuItem::separatorItem(mtm));
+
+        let dock_all_title = tr("全部收边", "Dock All Notes");
+        let dock_entry = self.add(
+            &mut commands,
+            dock_all_title,
+            MenuCommand::DockAllNotes,
+            None,
+        );
+        dock_entry.setImage(symbol_image("sidebar.right", dock_all_title).as_deref());
+
+        let hidden = crate::providers::notes::all_hidden();
+        let (toggle_notes_title, toggle_notes_symbol) = if hidden {
+            (tr("显示全部便签", "Show All Notes"), "eye")
+        } else {
+            (tr("隐藏全部便签", "Hide All Notes"), "eye.slash")
+        };
+        let toggle_entry = self.add(
+            &mut commands,
+            toggle_notes_title,
+            MenuCommand::ToggleNotesVisibility,
+            None,
+        );
+        toggle_entry.setImage(symbol_image(toggle_notes_symbol, toggle_notes_title).as_deref());
         self.menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         let settings = self.add(&mut commands, tr("设置…", "Settings…"), MenuCommand::Settings, None);

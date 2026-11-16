@@ -838,7 +838,12 @@ mod tests {
         let system = system_shortcuts(None);
         let assigned = assigned(&Config::default());
         let mut defaults = vec![(Command::Toggle, DEFAULT_TOGGLE)];
-        defaults.extend(EXTENSION_SHORTCUTS.iter().map(|s| (s.command, s.default)));
+        defaults.extend(
+            EXTENSION_SHORTCUTS
+                .iter()
+                .filter(|s| !s.default.trim().is_empty())
+                .map(|s| (s.command, s.default)),
+        );
         for (command, spec) in defaults {
             let others: Vec<Wanted> = assigned
                 .iter()

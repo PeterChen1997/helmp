@@ -326,9 +326,7 @@ mod tests {
     #[test]
     fn provider_table_matches_registered_providers() {
         // 表里缺了某个 provider，它的使用就全记成 `other`，后台看不出这个功能有没有人用。
-        let mut registered: Vec<&str> = crate::providers::all().iter().map(|p| p.id()).collect();
-        // Stage 1 先预留 notes 的埋点，Stage 2 注册 provider 时删除这行。
-        registered.push("notes");
+        let registered: Vec<&str> = crate::providers::all().iter().map(|p| p.id()).collect();
         let mut table = PROVIDERS.to_vec();
         let mut registered_sorted = registered.clone();
         table.sort_unstable();

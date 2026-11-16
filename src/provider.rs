@@ -41,6 +41,8 @@ pub enum Outcome {
     /// 冻结屏幕、打开截图选区界面，或重新打开截图历史里的一张（钉图、识别文字、另存为）。
     /// 动作在后台线程执行，开窗口交给界面线程，见 `crate::capture`。
     Capture(crate::capture::Request),
+    /// 便签操作（新建、钉回桌面、删除），交给界面主线程管理窗口与队列。
+    Notes(crate::providers::notes::NotesRequest),
 }
 
 /// 执行时框架传给动作的输入：表单视图下是各字段的值。

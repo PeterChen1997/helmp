@@ -85,6 +85,7 @@ pub fn path() -> Result<PathBuf> {
 }
 
 /// 文件不存在才返回空；损坏或读取失败必须报错，避免后续覆盖用户便签。
+#[allow(dead_code)]
 pub fn load_from(path: &Path) -> Result<Vec<Note>> {
     load_from_inner(path, false)
 }

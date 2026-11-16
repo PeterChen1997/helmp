@@ -468,6 +468,16 @@ pub fn extension_meta(provider_id: &str) -> ExtensionMeta {
             Tint::Purple,
             None,
         ),
+        "notes" => (
+            tr("便签", "Notes"),
+            builtin,
+            "sticky-note",
+            Tint::Orange,
+            Some(tr(
+                "桌面置顶便签，支持吸边队列与原地编辑",
+                "Floating sticky notes with edge docking and inline editing",
+            )),
+        ),
         "mcp" => (
             tr("MCP 工具", "MCP Tools"),
             tr("MCP", "MCP"),

@@ -1212,6 +1212,20 @@ impl Launcher {
                             cx.defer(move |cx| crate::capture::open(mode, panel_hidden_at, cx));
                             return;
                         }
+                        Ok(Outcome::Notes(request)) => {
+                            let keep = keep_open;
+                            if !keep {
+                                this.executed = true;
+                            }
+                            let weak = cx.entity().downgrade();
+                            cx.defer(move |cx| {
+                                crate::providers::notes::handle(request, cx);
+                                if keep {
+                                    let _ = weak.update(cx, |launcher, cx| launcher.refresh(cx));
+                                }
+                            });
+                            return;
+                        }
                         Ok(Outcome::Show(detail)) => detail,
                         Ok(Outcome::Message(message)) => Detail {
                             title: item.title.clone(),

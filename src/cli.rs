@@ -448,6 +448,7 @@ pub(crate) fn outcome_text(outcome: Outcome) -> String {
         Outcome::OpenSettingsPage(page) => lines.push(format!("open settings: {page:?}")),
         Outcome::Dismiss => lines.push("dismiss".to_string()),
         Outcome::Capture(mode) => lines.push(format!("open capture: {}", mode.name())),
+        Outcome::Notes(req) => lines.push(format!("notes: {}", req.describe())),
         Outcome::Show(detail) => {
             lines.push(detail.title);
             for block in detail.blocks {
