@@ -1,8 +1,10 @@
 //! 便签持久化及与窗口无关的吸边、耳标排队计算。
+//! 运行时先 load 再 save，由调用方串行管理便签快照；写保护状态不替代快照的同步。
 
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,8 @@ pub const TAB_W: f64 = 24.0;
 pub const TAB_H: f64 = 72.0;
 pub const TAB_GAP: f64 = 8.0;
 pub const TAB_MIN_H: f64 = 28.0;
+
+static WRITE_BLOCKED: AtomicBool = AtomicBool::new(true);
 
 /// 全局屏幕坐标，单位 point，左上角原点，与 GPUI 窗口坐标一致。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -82,12 +86,16 @@ pub fn path() -> Result<PathBuf> {
 
 /// 文件不存在才返回空；损坏或读取失败必须报错，避免后续覆盖用户便签。
 pub fn load_from(path: &Path) -> Result<Vec<Note>> {
+    load_from_inner(path, false)
+}
+
+fn load_from_inner(path: &Path, recover_corruption: bool) -> Result<Vec<Note>> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err).context("Couldn’t read notes file"),
     };
-    let document: Document = serde_json::from_slice(&bytes).map_err(|err| {
+    let document = serde_json::from_slice::<Document>(&bytes).map_err(|err| {
         // serde 的错误可能引用错误字段中的正文；Sentry 只接收类别和行列号。
         anyhow::anyhow!(
             "Invalid notes file ({:?}, line {}, column {})",
@@ -95,8 +103,20 @@ pub fn load_from(path: &Path) -> Result<Vec<Note>> {
             err.line(),
             err.column()
         )
-    })?;
-    Ok(document.notes)
+    });
+    match document {
+        Ok(document) => Ok(document.notes),
+        Err(err) if recover_corruption => {
+            eprintln!("helmp: 便签文件损坏，将备份后重建：{err:#}");
+            crate::telemetry::report("notes.load", &err);
+            // 用户新记的便签不能因为旧文件坏了而静默丢失；只有备份成功才能覆盖原文件。
+            // 固定文件名，避免每次启动都积累一份坏文件。
+            std::fs::copy(path, path.with_extension("json.unreadable"))
+                .context("Couldn’t back up unreadable notes file")?;
+            Ok(Vec::new())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// 同目录临时文件 + rename，读者只会看见完整的新文件或旧文件。
@@ -119,7 +139,8 @@ pub fn save_to(path: &Path, notes: &[Note]) -> Result<()> {
     );
     let bytes = serde_json::to_vec_pretty(&Document {
         notes: notes.to_vec(),
-    })?;
+    })
+    .context("Couldn’t serialize notes")?;
     let tmp = path.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -140,9 +161,10 @@ pub fn save_to(path: &Path, notes: &[Note]) -> Result<()> {
 }
 
 pub fn load() -> Vec<Note> {
-    match path().and_then(|path| load_from(&path)) {
+    match path().and_then(|path| load_recovering_from(&path, &WRITE_BLOCKED)) {
         Ok(notes) => notes,
         Err(err) => {
+            WRITE_BLOCKED.store(true, Ordering::Relaxed);
             eprintln!("helmp: 读取便签失败：{err:#}");
             crate::telemetry::report("notes.load", &err);
             Vec::new()
@@ -151,15 +173,25 @@ pub fn load() -> Vec<Note> {
 }
 
 pub fn save(notes: &[Note]) {
-    if let Err(err) = path().and_then(|path| save_checked_to(&path, notes)) {
+    if let Err(err) = path().and_then(|path| save_checked_to(&path, notes, &WRITE_BLOCKED)) {
         eprintln!("helmp: 保存便签失败：{err:#}");
         crate::telemetry::report("notes.save", &err);
     }
 }
 
-fn save_checked_to(path: &Path, notes: &[Note]) -> Result<()> {
-    // load() 的兼容接口只能返回空；保存前复核，防止读失败后的空状态冲掉坏文件。
-    load_from(path)?;
+fn load_recovering_from(path: &Path, write_blocked: &AtomicBool) -> Result<Vec<Note>> {
+    write_blocked.store(true, Ordering::Relaxed);
+    let result = load_from_inner(path, true);
+    write_blocked.store(result.is_err(), Ordering::Relaxed);
+    result
+}
+
+fn save_checked_to(path: &Path, notes: &[Note], write_blocked: &AtomicBool) -> Result<()> {
+    // 读取 IO 错误或坏文件备份失败时持续拒写；不在每次保存时重读、反序列化整个文件。
+    anyhow::ensure!(
+        !write_blocked.load(Ordering::Relaxed),
+        "Notes writes blocked until a successful load or corruption backup"
+    );
     save_to(path, notes)
 }
 
@@ -197,9 +229,15 @@ pub fn dock_layout(ids: &[&str], edge: Edge, visible: Frame) -> Vec<(String, Fra
         return Vec::new();
     }
     let capacity = ((visible.h + TAB_GAP) / (TAB_MIN_H + TAB_GAP)).floor() as usize;
-    let count = ids.len().min(capacity);
-    let height =
-        ((visible.h - TAB_GAP * (ids.len() - 1) as f64) / ids.len() as f64).clamp(TAB_MIN_H, TAB_H);
+    let mut count = ids.len().min(capacity);
+    // h + TAB_GAP 可能向上舍入，容量临界点下方也必须装得下最小高度。
+    if count as f64 * TAB_MIN_H + (count - 1) as f64 * TAB_GAP > visible.h {
+        count -= 1;
+    }
+    // 按实际显示数量计算，向下取整到整数 pt，避免压缩后的浮点累加使首尾越界。
+    let height = ((visible.h - TAB_GAP * (count - 1) as f64) / count as f64)
+        .floor()
+        .clamp(TAB_MIN_H, TAB_H);
     let total = count as f64 * height + (count - 1) as f64 * TAB_GAP;
     let start_y = visible.y + (visible.h - total) / 2.0;
     let x = match edge {
@@ -329,7 +367,7 @@ mod tests {
         // 只有首次运行可以是空；坏 JSON、缺少根字段和 IO 错误不能伪装成没有便签。
         let dir = TempDir::new();
         assert!(load_from(&dir.file()).unwrap().is_empty());
-        for broken in ["{broken", "{}", r#"{"notes":null}"#] {
+        for broken in ["", "{broken", "{}", r#"{"notes":null}"#] {
             std::fs::write(dir.file(), broken).unwrap();
             assert!(load_from(&dir.file()).is_err());
             assert_eq!(std::fs::read_to_string(dir.file()).unwrap(), broken);
@@ -361,15 +399,82 @@ mod tests {
     }
 
     #[test]
-    fn checked_save_refuses_to_overwrite_corrupt_file() {
-        // load() 降级为空后界面仍可能自动保存，必须保留原文件以便用户恢复。
+    fn backup_failure_blocks_writes_until_a_successful_load() {
+        // 固定备份路径被目录占用，稳定模拟 copy 失败（不依赖运行用户的文件权限）。
         let dir = TempDir::new();
-        let notes = vec![new_note("便签", 123, Placement::Archived)];
-        save_checked_to(&dir.file(), &notes).unwrap();
-        assert_eq!(load_from(&dir.file()).unwrap(), notes);
+        let backup = dir.file().with_extension("json.unreadable");
+        std::fs::create_dir(&backup).unwrap();
         std::fs::write(dir.file(), "{broken").unwrap();
-        assert!(save_checked_to(&dir.file(), &[]).is_err());
+        let write_blocked = AtomicBool::new(false);
+        assert!(load_recovering_from(&dir.file(), &write_blocked).is_err());
+        assert!(write_blocked.load(Ordering::Relaxed));
+        let notes = vec![new_note("便签", 123, Placement::Archived)];
+        assert!(save_checked_to(&dir.file(), &notes, &write_blocked).is_err());
         assert_eq!(std::fs::read_to_string(dir.file()).unwrap(), "{broken");
+
+        // 即使外部修复了文件，也要重新 load 才能解除保护，避免把旧的空快照写进去。
+        save_to(&dir.file(), &notes).unwrap();
+        assert!(save_checked_to(&dir.file(), &[], &write_blocked).is_err());
+        assert_eq!(load_from(&dir.file()).unwrap(), notes);
+        assert_eq!(
+            load_recovering_from(&dir.file(), &write_blocked).unwrap(),
+            notes
+        );
+        assert!(!write_blocked.load(Ordering::Relaxed));
+        save_checked_to(&dir.file(), &notes, &write_blocked).unwrap();
+    }
+
+    #[test]
+    fn read_io_error_blocks_writes_without_creating_a_backup() {
+        let dir = TempDir::new();
+        std::fs::create_dir(dir.file()).unwrap();
+        let original = dir.file().join("original");
+        std::fs::write(&original, "keep").unwrap();
+        let write_blocked = AtomicBool::new(false);
+        assert!(load_recovering_from(&dir.file(), &write_blocked).is_err());
+        assert!(write_blocked.load(Ordering::Relaxed));
+        assert!(save_checked_to(&dir.file(), &[], &write_blocked).is_err());
+        assert!(!dir.file().with_extension("json.unreadable").exists());
+        assert_eq!(std::fs::read_to_string(original).unwrap(), "keep");
+    }
+
+    #[test]
+    fn missing_file_load_allows_first_save() {
+        let dir = TempDir::new();
+        let write_blocked = AtomicBool::new(true);
+        assert!(save_checked_to(&dir.file(), &[], &write_blocked).is_err());
+        assert!(
+            load_recovering_from(&dir.file(), &write_blocked)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!write_blocked.load(Ordering::Relaxed));
+        let notes = vec![new_note("首次便签", 123, Placement::Archived)];
+        save_checked_to(&dir.file(), &notes, &write_blocked).unwrap();
+        assert_eq!(load_from(&dir.file()).unwrap(), notes);
+    }
+
+    #[test]
+    fn corruption_recovery_preserves_backup_and_saves_new_notes() {
+        let dir = TempDir::new();
+        let write_blocked = AtomicBool::new(true);
+        let broken = "{broken";
+        std::fs::write(dir.file(), broken).unwrap();
+        assert!(
+            load_recovering_from(&dir.file(), &write_blocked)
+                .unwrap()
+                .is_empty()
+        );
+        let backup = dir.file().with_extension("json.unreadable");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), broken);
+        assert!(!write_blocked.load(Ordering::Relaxed));
+        let notes = vec![new_note("新便签", 123, Placement::Archived)];
+        save_checked_to(&dir.file(), &notes, &write_blocked).unwrap();
+        assert_eq!(
+            load_recovering_from(&dir.file(), &write_blocked).unwrap(),
+            notes
+        );
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), broken);
     }
 
     #[test]
@@ -554,6 +659,39 @@ mod tests {
         assert_eq!(layout.len(), 25);
         assert_eq!(layout.last().unwrap().0, "24");
         assert!(layout.iter().all(|(_, frame)| frame.h == TAB_MIN_H));
+        assert_inside_and_separated(&layout, screen);
+    }
+
+    #[test]
+    fn compressed_layout_stays_strictly_inside_screen() {
+        let ids: Vec<String> = (0..25).map(|n| n.to_string()).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        for count in [14, 25] {
+            for edge in [Edge::Left, Edge::Right] {
+                let layout = dock_layout(&refs[..count], edge, visible());
+                assert_eq!(layout.len(), count);
+                assert_inside_and_separated(&layout, visible());
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_layout_uses_remaining_space_and_checks_capacity_rounding() {
+        let screen = Frame {
+            h: 70.0,
+            ..visible()
+        };
+        let layout = dock_layout(&["a", "b", "c"], Edge::Left, screen);
+        assert_eq!(layout.len(), 2);
+        assert!(layout.iter().all(|(_, frame)| frame.h == 31.0));
+        assert_inside_and_separated(&layout, screen);
+
+        let screen = Frame {
+            h: 64.0_f64.next_down(),
+            ..visible()
+        };
+        let layout = dock_layout(&["a", "b"], Edge::Right, screen);
+        assert_eq!(layout.len(), 1);
         assert_inside_and_separated(&layout, screen);
     }
 
