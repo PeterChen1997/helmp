@@ -240,3 +240,35 @@ pub fn screen_of(window: &Window) -> Option<(Rect, Rect)> {
     let rect = |r: NSRect| Rect::new(r.origin.x, r.origin.y, r.size.width, r.size.height);
     Some((rect(screen.frame()), rect(screen.visibleFrame())))
 }
+
+/// 窗口此刻有没有真的出现在用户眼前，以及判断依据（日志、Sentry 用）。
+/// 全屏 App 的 Space 里调不起截图时（CARM-86），靠它分辨是窗口没显示、显示在了别的 Space，还是 Helmp 没被激活。
+pub struct Presence {
+    pub shown: bool,
+    pub detail: String,
+}
+
+pub fn presence(window: &Window) -> Presence {
+    let Some(ns_window) = crate::panel::ns_window(window) else {
+        return Presence {
+            shown: false,
+            detail: "no NSWindow".into(),
+        };
+    };
+    let visible = ns_window.isVisible();
+    let on_active_space = ns_window.isOnActiveSpace();
+    let front = objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .and_then(|app| app.bundleIdentifier())
+        .map(|id| id.to_string());
+    Presence {
+        shown: visible && on_active_space,
+        detail: format!(
+            "visible={visible} on_active_space={on_active_space} key={} app_active={} level={} behavior={:#x} front={front:?}",
+            ns_window.isKeyWindow(),
+            app_is_active(),
+            ns_window.level(),
+            ns_window.collectionBehavior().0,
+        ),
+    }
+}

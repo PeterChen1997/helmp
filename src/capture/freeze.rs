@@ -137,7 +137,10 @@ pub fn grab(screens: Vec<Screen>, dir: &Path) -> Result<Vec<Frozen>> {
     {
         match result {
             Ok(frozen) => return Ok(frozen),
-            Err(err) => crate::trace::log(format!("capture: ScreenCaptureKit fallback: {err:#}")),
+            Err(err) => {
+                crate::trace::log(format!("capture: ScreenCaptureKit fallback: {err:#}"));
+                crate::telemetry::report("capture.screen_capture_kit", &err);
+            }
         }
     }
     grab_from_disk(screens, dir)

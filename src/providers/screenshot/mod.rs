@@ -612,6 +612,10 @@ fn capture_and_recognize() -> Result<Outcome> {
 /// 测试夹具（`HELMP_CAPTURE_FIXTURE`）不截屏，不需要权限。
 fn open_capture(has_access: bool, mode: crate::capture::Mode) -> Result<Outcome> {
     if !has_access && crate::capture::fixture().is_none() {
+        crate::telemetry::report(
+            "capture.permission",
+            &anyhow::anyhow!("没有录屏权限，截图键改为提示去授权"),
+        );
         return Ok(Outcome::Show(permission_detail()));
     }
     Ok(Outcome::Capture(mode.into()))
