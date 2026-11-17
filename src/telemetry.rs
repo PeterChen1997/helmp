@@ -154,6 +154,21 @@ pub fn note(event: NoteEvent) {
     track(event.name(), json!({}));
 }
 
+/// 拖把手改了便签大小：只发宽度档位（`s` ≤ 300 / `m` ≤ 460 / `l`），不发正文。
+pub fn note_resized(width: f64) {
+    track("note_resized", json!({ "size": note_size_bucket(width) }));
+}
+
+fn note_size_bucket(width: f64) -> &'static str {
+    if width <= 300.0 {
+        "s"
+    } else if width <= 460.0 {
+        "m"
+    } else {
+        "l"
+    }
+}
+
 /// 从剪贴板历史写回一条文本：`mode` 为 `paste` / `copy` / `plain_text`，`formats` 是一起写回的富文本种类
 /// （来自固定表的短名，如 `rtf+html`；没有为 `plain`）。只发这两个枚举，不发内容。
 pub fn clipboard_paste(mode: &'static str, formats: &[&'static str]) {
@@ -363,6 +378,10 @@ mod tests {
         assert_eq!(NoteEvent::Created.name(), "note_create");
         assert_eq!(NoteEvent::Docked.name(), "note_dock");
         assert_eq!(NoteEvent::Deleted.name(), "note_delete");
+        // 缩放事件只带宽度档位：默认 280 算小号，拉到上限 640 算大号。
+        assert_eq!(note_size_bucket(280.0), "s");
+        assert_eq!(note_size_bucket(400.0), "m");
+        assert_eq!(note_size_bucket(640.0), "l");
     }
 
     #[test]

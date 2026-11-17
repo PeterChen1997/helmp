@@ -11,13 +11,18 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
 use objc2_foundation::NSRect;
 
-use super::store::{Edge, Frame, TAB_W};
+use super::store::{Edge, Frame};
 use crate::permissions::{double, object_for};
 
 pub const DEFAULT_CARD_W: f64 = 280.0;
 pub const DEFAULT_CARD_H: f64 = 200.0;
 pub const MIN_CARD_W: f64 = 220.0;
 pub const MIN_CARD_H: f64 = 140.0;
+/// 拖拽缩放的绝对上限；屏幕小时再按可用区比例收紧（见 `max_card_size`）。
+pub const MAX_CARD_W: f64 = 640.0;
+pub const MAX_CARD_H: f64 = 720.0;
+const MAX_CARD_W_RATIO: f64 = 0.5;
+const MAX_CARD_H_RATIO: f64 = 0.75;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayInfo {
@@ -158,6 +163,25 @@ fn overlap(a: Frame, b: Frame) -> f64 {
     w.max(0.0) * h.max(0.0)
 }
 
+/// 卡片在这块屏幕上允许的最大尺寸：不超过 640×720，也不超过可用区宽一半、高四分之三，
+/// 便签再大就成了挡住工作区的窗口。屏幕再小也不低于最小尺寸。
+pub fn max_card_size(visible: Frame) -> (f64, f64) {
+    let w = MAX_CARD_W.min(visible.w * MAX_CARD_W_RATIO).max(MIN_CARD_W);
+    let h = MAX_CARD_H.min(visible.h * MAX_CARD_H_RATIO).max(MIN_CARD_H);
+    (w.floor(), h.floor())
+}
+
+/// 拖拽缩放时把指针算出的尺寸夹到 [最小, 本屏最大] 之间；返回值同时是要存下的尺寸。
+pub fn clamp_resize(w: f64, h: f64, visible: Frame) -> (f64, f64) {
+    let (max_w, max_h) = max_card_size(visible);
+    let w = if w.is_finite() { w } else { DEFAULT_CARD_W };
+    let h = if h.is_finite() { h } else { DEFAULT_CARD_H };
+    (
+        w.clamp(MIN_CARD_W, max_w).round(),
+        h.clamp(MIN_CARD_H, max_h).round(),
+    )
+}
+
 pub fn card_size(saved: Option<(f64, f64)>, visible: Frame) -> (f64, f64) {
     let (w, h) = saved.unwrap_or((DEFAULT_CARD_W, DEFAULT_CARD_H));
     let w = if w.is_finite() && w >= MIN_CARD_W {
@@ -170,8 +194,8 @@ pub fn card_size(saved: Option<(f64, f64)>, visible: Frame) -> (f64, f64) {
     } else {
         DEFAULT_CARD_H
     };
-    let max_w = (visible.w - 16.0).max(TAB_W + 40.0);
-    let max_h = (visible.h - 16.0).max(MIN_CARD_H);
+    // 存下的尺寸不动，只在这块屏幕放不下时临时缩小显示（换到小屏再换回来还是原尺寸）。
+    let (max_w, max_h) = max_card_size(visible);
     (w.min(max_w).round(), h.min(max_h).round())
 }
 
@@ -237,6 +261,7 @@ pub fn default_floating_frame(visible: Frame) -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::notes::store::TAB_W;
 
     fn displays() -> Vec<DisplayInfo> {
         vec![
@@ -299,6 +324,52 @@ mod tests {
             let back = cocoa_to_tl(cocoa, primary_h);
             assert_eq!(back, sample);
         }
+    }
+
+    fn visible(w: f64, h: f64) -> Frame {
+        Frame {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h,
+        }
+    }
+
+    #[test]
+    fn resize_limits_follow_screen_but_never_exceed_absolute_cap() {
+        // 用户要求「能拉大但不能太大」：大屏封顶 640×720，小屏按可用区宽一半、高四分之三收紧，
+        // 不然在笔记本上一张便签就能盖住大半个工作区。
+        assert_eq!(max_card_size(visible(2560.0, 1415.0)), (640.0, 720.0));
+        assert_eq!(max_card_size(visible(1512.0, 945.0)), (640.0, 708.0));
+        assert_eq!(max_card_size(visible(1280.0, 775.0)), (640.0, 581.0));
+        assert_eq!(max_card_size(visible(1024.0, 600.0)), (512.0, 450.0));
+        // 屏幕再小也不能把上限压到最小尺寸以下，否则缩放区间会倒过来。
+        assert_eq!(
+            max_card_size(visible(300.0, 150.0)),
+            (MIN_CARD_W, MIN_CARD_H)
+        );
+    }
+
+    #[test]
+    fn clamp_resize_keeps_size_between_min_and_screen_max() {
+        let v = visible(1512.0, 945.0);
+        assert_eq!(clamp_resize(100.0, 60.0, v), (MIN_CARD_W, MIN_CARD_H));
+        assert_eq!(clamp_resize(5000.0, 5000.0, v), (640.0, 708.0));
+        assert_eq!(clamp_resize(360.4, 260.6, v), (360.0, 261.0));
+        // 指针坐标算坏（NaN）时退回默认尺寸，而不是存下一个恢复不了的值。
+        assert_eq!(clamp_resize(f64::NAN, 300.0, v), (DEFAULT_CARD_W, 300.0));
+    }
+
+    #[test]
+    fn saved_size_larger_than_this_screen_is_shown_smaller_but_not_rewritten() {
+        // 在 27 寸屏拉到 640×720 后移到笔记本上：显示时按笔记本上限收，回到大屏仍是原尺寸。
+        let saved = Some((640.0, 720.0));
+        assert_eq!(card_size(saved, visible(1512.0, 945.0)), (640.0, 708.0));
+        assert_eq!(card_size(saved, visible(2560.0, 1415.0)), (640.0, 720.0));
+        assert_eq!(
+            card_size(None, visible(1512.0, 945.0)),
+            (DEFAULT_CARD_W, DEFAULT_CARD_H)
+        );
     }
 
     #[test]

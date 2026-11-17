@@ -14,7 +14,7 @@ use super::native::{
     mouse_location_tl, offscreen,
 };
 use super::screen::{
-    DisplayInfo, all_screens, card_size, clamp_floating, default_floating_frame,
+    DisplayInfo, all_screens, card_size, clamp_floating, clamp_resize, default_floating_frame,
     expanded_frame_for_docked, resolve_display, screen_for_frame,
 };
 use super::store::{self, Edge, Frame, Note, Placement, TAB_W};
@@ -1062,7 +1062,7 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
             })
         };
         if let Some((handle, view, native_opt, was_visible)) = existing {
-            let dragging = view.read(cx).drag.is_some();
+            let dragging = view.read(cx).pointer_busy();
             let _ = handle.update(cx, |_, _, cx| {
                 view.update(cx, |w, cx| {
                     w.sync_state(
@@ -1260,7 +1260,7 @@ fn poll_hover_step(cx: &mut App) -> bool {
             .iter()
             .any(|n| matches!(n.placement, Placement::Docked { .. }));
         let stop = mgr.hidden_all || mgr.editing_id.is_some() || !has_docked;
-        let dragging = mgr.windows.values().any(|e| e.view.read(cx).drag.is_some());
+        let dragging = mgr.windows.values().any(|e| e.view.read(cx).pointer_busy());
         let candidates: Vec<HoverCandidate> = mgr
             .notes
             .iter()
@@ -1406,6 +1406,38 @@ struct DragSession {
     polling: bool,
 }
 
+/// 拖右下角（贴右边时是左下角）把手改大小。
+#[derive(Clone, Copy)]
+struct ResizeSession {
+    start_mouse_tl: (f64, f64),
+    start_frame_tl: Frame,
+    last_frame_tl: Frame,
+    /// 把手在左下角：右边缘固定，往左拉变宽。
+    anchor_right: bool,
+    polling: bool,
+}
+
+/// 由把手的指针位移算出新窗口 Frame：尺寸夹在 [最小, 本屏最大]，固定的那条边不动。
+fn resize_frame(start: Frame, dx: f64, dy: f64, anchor_right: bool, visible: Frame) -> Frame {
+    let raw_w = if anchor_right {
+        start.w - dx
+    } else {
+        start.w + dx
+    };
+    let (w, h) = clamp_resize(raw_w, start.h + dy, visible);
+    let x = if anchor_right {
+        start.x + start.w - w
+    } else {
+        start.x
+    };
+    Frame {
+        x: x.round(),
+        y: start.y,
+        w,
+        h,
+    }
+}
+
 /// 单个便签窗口视图。
 pub struct NoteWindow {
     id: String,
@@ -1420,6 +1452,7 @@ pub struct NoteWindow {
     blur_guard: EditBlurGuard,
     hovered: bool,
     drag: Option<DragSession>,
+    resize: Option<ResizeSession>,
     snap_preview: Option<Edge>,
     textarea: Entity<TextareaState>,
     focus: FocusHandle,
@@ -1497,6 +1530,7 @@ impl NoteWindow {
             blur_guard: EditBlurGuard::default(),
             hovered: false,
             drag: None,
+            resize: None,
             snap_preview: None,
             textarea,
             focus,
@@ -1541,6 +1575,11 @@ impl NoteWindow {
         if changed {
             cx.notify();
         }
+    }
+
+    /// 正在拖动或改大小：悬停收起、布局同步都要让开，不然指针一出卡片就被收回耳标。
+    fn pointer_busy(&self) -> bool {
+        self.drag.is_some() || self.resize.is_some()
     }
 
     fn schedule_debounced_save(&mut self, cx: &mut Context<Self>) {
@@ -1643,7 +1682,7 @@ impl NoteWindow {
         self.hovered = *hovered;
         if *hovered {
             self.unhover_task = None;
-            if self.docked && !self.expanded && !self.editing && self.drag.is_none() {
+            if self.docked && !self.expanded && !self.editing && !self.pointer_busy() {
                 let id = self.id.clone();
                 let window_handle = window.window_handle();
                 self.hover_task = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -1663,7 +1702,7 @@ impl NoteWindow {
             }
         } else {
             self.hover_task = None;
-            if self.docked && self.expanded && !self.editing && self.drag.is_none() {
+            if self.docked && self.expanded && !self.editing && !self.pointer_busy() {
                 let id = self.id.clone();
                 let window_handle = window.window_handle();
                 self.unhover_task = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -1674,7 +1713,7 @@ impl NoteWindow {
                                 w.docked
                                     && w.expanded
                                     && !w.editing
-                                    && w.drag.is_none()
+                                    && !w.pointer_busy()
                                     && !w.mouse_inside_window(window)
                             })
                             .unwrap_or(false)
@@ -1764,6 +1803,11 @@ impl NoteWindow {
         cur_mouse: (f64, f64),
         cx: &mut Context<Self>,
     ) -> Option<(Frame, bool)> {
+        // 拖离边缘变浮窗时沿用这张便签记住的尺寸。
+        let saved_size = cx
+            .try_global::<NotesManager>()
+            .and_then(|m| m.notes.iter().find(|n| n.id == self.id))
+            .and_then(|n| n.size);
         let drag = self.drag.as_mut()?;
         let dx = cur_mouse.0 - drag.start_mouse_tl.0;
         let dy = cur_mouse.1 - drag.start_mouse_tl.1;
@@ -1783,7 +1827,7 @@ impl NoteWindow {
                         w: 1440.0,
                         h: 863.0,
                     });
-                let (cw, ch) = card_size(None, visible);
+                let (cw, ch) = card_size(saved_size, visible);
                 drag.start_frame_tl = Frame {
                     x: (cur_mouse.0 - cw / 2.0).round(),
                     y: (cur_mouse.1 - 14.0).round(),
@@ -1861,9 +1905,14 @@ impl NoteWindow {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.advance_pointer_drag(event.position, window, cx);
+        self.advance_pointer_resize(event.position, window, cx);
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.resize.as_ref().is_some_and(|r| !r.polling) {
+            self.advance_pointer_resize(event.position, window, cx);
+            self.finish_resize(cx);
+        }
         if self.drag.as_ref().is_some_and(|d| !d.polling) {
             self.advance_pointer_drag(event.position, window, cx);
             self.finish_drag(window, cx);
@@ -1871,6 +1920,10 @@ impl NoteWindow {
     }
 
     fn on_mouse_up_out(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.resize.as_ref().is_some_and(|r| !r.polling) {
+            self.advance_pointer_resize(event.position, window, cx);
+            self.finish_resize(cx);
+        }
         if self.drag.as_ref().is_some_and(|d| !d.polling) {
             self.advance_pointer_drag(event.position, window, cx);
             self.finish_drag(window, cx);
@@ -1904,6 +1957,133 @@ impl NoteWindow {
         let id = self.id.clone();
         cx.defer(move |cx| commit_drop(&id, frame_tl, cx));
         cx.notify();
+    }
+
+    fn start_resize(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        let Some(handle) = NoteFrameHandle::of(window) else {
+            return;
+        };
+        let Some(frame_tl) = handle.frame_tl() else {
+            return;
+        };
+        let polling = !offscreen() && left_mouse_pressed();
+        let event_tl = (
+            frame_tl.x + f64::from(event.position.x),
+            frame_tl.y + f64::from(event.position.y),
+        );
+        let start_mouse_tl = if polling {
+            mouse_location_tl().unwrap_or(event_tl)
+        } else {
+            event_tl
+        };
+        self.resize = Some(ResizeSession {
+            start_mouse_tl,
+            start_frame_tl: frame_tl,
+            last_frame_tl: frame_tl,
+            anchor_right: self.grip_on_left(),
+            polling,
+        });
+        self.hover_task = None;
+        self.unhover_task = None;
+        cx.notify();
+        if !polling {
+            return;
+        }
+        let view = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(DRAG_TICK).await;
+                let still_pressed = left_mouse_pressed();
+                let next = window_handle
+                    .update(cx, |_, _, cx| {
+                        view.update(cx, |w, cx| {
+                            if !still_pressed {
+                                w.finish_resize(cx);
+                                return None;
+                            }
+                            let mouse = mouse_location_tl()?;
+                            w.step_resize_to(mouse, cx)
+                        })
+                        .ok()
+                        .flatten()
+                    })
+                    .ok()
+                    .flatten();
+                if let Some(frame) = next {
+                    handle.set_frame_tl(frame, CARD_CORNER_RADIUS);
+                }
+                if !still_pressed {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 贴右边的卡片把手放在左下角（右边贴着屏幕，只能往左拉）。
+    fn grip_on_left(&self) -> bool {
+        self.docked && self.dock_edge == Some(Edge::Right)
+    }
+
+    fn step_resize_to(&mut self, mouse: (f64, f64), cx: &mut Context<Self>) -> Option<Frame> {
+        let session = self.resize.as_mut()?;
+        let visible =
+            screen_for_frame(&current_screens(), session.start_frame_tl).map(|s| s.visible)?;
+        let frame = resize_frame(
+            session.start_frame_tl,
+            mouse.0 - session.start_mouse_tl.0,
+            mouse.1 - session.start_mouse_tl.1,
+            session.anchor_right,
+            visible,
+        );
+        if frame == session.last_frame_tl {
+            return None;
+        }
+        session.last_frame_tl = frame;
+        cx.notify();
+        Some(frame)
+    }
+
+    fn finish_resize(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.resize.take() else {
+            return;
+        };
+        cx.notify();
+        let frame = session.last_frame_tl;
+        if frame == session.start_frame_tl {
+            return;
+        }
+        let id = self.id.clone();
+        cx.defer(move |cx| commit_resize(&id, frame, cx));
+    }
+
+    fn advance_pointer_resize(
+        &mut self,
+        pos: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.resize.as_ref().is_none_or(|r| r.polling) {
+            return;
+        }
+        let Some(handle) = NoteFrameHandle::of(window) else {
+            return;
+        };
+        let Some(cur) = handle.frame_tl() else {
+            return;
+        };
+        let mouse = (cur.x + f64::from(pos.x), cur.y + f64::from(pos.y));
+        if let Some(frame) = self.step_resize_to(mouse, cx) {
+            cx.spawn(async move |_, _| handle.set_frame_tl(frame, CARD_CORNER_RADIUS))
+                .detach();
+        }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1971,6 +2151,42 @@ fn commit_drop(id: &str, dropped_frame: Frame, cx: &mut App) {
     sync_all_windows(cx);
 }
 
+/// 松开缩放把手：每张便签各记各的尺寸（贴边展开和浮窗共用），浮窗同时更新 Frame。
+fn commit_resize(id: &str, frame: Frame, cx: &mut App) {
+    let screens = current_screens();
+    let Some(screen) = screen_for_frame(&screens, frame) else {
+        return;
+    };
+    let size = apply_resize(
+        &mut cx.global_mut::<NotesManager>().notes,
+        id,
+        frame,
+        screen.visible,
+    );
+    let Some((w, _)) = size else {
+        return;
+    };
+    {
+        let mgr = cx.global_mut::<NotesManager>();
+        store::save(&mgr.notes);
+        set_snapshot(&mgr.notes);
+    }
+    telemetry::note_resized(w);
+    sync_all_windows(cx);
+}
+
+/// 把缩放结果写进便签：尺寸按本屏上下限夹好后存进 `size`；浮窗的位置尺寸也一起更新。
+fn apply_resize(notes: &mut [Note], id: &str, frame: Frame, visible: Frame) -> Option<(f64, f64)> {
+    let note = notes.iter_mut().find(|n| n.id == id)?;
+    let (w, h) = clamp_resize(frame.w, frame.h, visible);
+    note.size = Some((w, h));
+    if let Placement::Floating { frame: saved } = &mut note.placement {
+        *saved = clamp_floating(Frame { w, h, ..frame }, visible);
+    }
+    note.updated_at = now_unix_secs();
+    Some((w, h))
+}
+
 fn end_position(text: &str) -> Position {
     let line = text.matches('\n').count();
     let last = text.rsplit('\n').next().unwrap_or_default();
@@ -2009,6 +2225,24 @@ pub fn tab_chars(text: &str) -> Vec<String> {
         .take(3)
         .map(|ch| ch.to_string())
         .collect()
+}
+
+/// 缩放把手：右下角三角形排布的六个小点（贴右边时镜像到左下角）。
+fn grip_glyph(mirrored: bool, color: Hsla) -> impl IntoElement {
+    const DOTS: [(f32, f32); 6] = [(2., 0.), (1., 1.), (2., 1.), (0., 2.), (1., 2.), (2., 2.)];
+    div()
+        .relative()
+        .size(px(10.))
+        .children(DOTS.iter().map(move |&(col, row)| {
+            let col = if mirrored { 2. - col } else { col };
+            div()
+                .absolute()
+                .left(px(col * 4.))
+                .top(px(row * 4.))
+                .size(px(2.))
+                .rounded_full()
+                .bg(color)
+        }))
 }
 
 impl Render for NoteWindow {
@@ -2203,6 +2437,45 @@ impl NoteWindow {
                 .into_any_element()
         };
 
+        let grip_on_left = self.grip_on_left();
+        let resizing = self.resize.map(|r| r.last_frame_tl);
+        let show_grip = (self.hovered || self.editing || resizing.is_some()) && !self.collapsing;
+        let grip = div()
+            .id(SharedString::from(format!("note-grip-{}", self.id)))
+            .absolute()
+            .bottom_0()
+            .size(px(16.))
+            .flex()
+            .items_end()
+            .p(px(3.))
+            .when(grip_on_left, |el| el.left_0().justify_start())
+            .when(!grip_on_left, |el| el.right_0().justify_end())
+            .cursor(if grip_on_left {
+                CursorStyle::ResizeUpRightDownLeft
+            } else {
+                CursorStyle::ResizeUpLeftDownRight
+            })
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::start_resize))
+            .child(grip_glyph(
+                grip_on_left,
+                pal.muted.opacity(if show_grip { 0.9 } else { 0.0 }),
+            ));
+        let size_badge = resizing.map(|frame| {
+            div()
+                .absolute()
+                .bottom(px(6.))
+                .px(px(6.))
+                .py(px(1.))
+                .rounded(px(4.))
+                .bg(pal.accent)
+                .text_size(px(10.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(gpui_kit::white())
+                .when(grip_on_left, |el| el.left(px(20.)))
+                .when(!grip_on_left, |el| el.right(px(20.)))
+                .child(format!("{:.0} × {:.0}", frame.w, frame.h))
+        });
+
         let mut card = div()
             .id(SharedString::from(format!("note-card-{}", self.id)))
             .relative()
@@ -2225,7 +2498,9 @@ impl NoteWindow {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up_out))
             .child(header)
-            .child(body);
+            .child(body)
+            .child(grip)
+            .children(size_badge);
 
         if let Some(edge) = self.snap_preview {
             let indicator = div()
@@ -2285,6 +2560,114 @@ mod tests {
                 },
             },
         ]
+    }
+
+    #[test]
+    fn resize_from_grip_keeps_the_fixed_edge_and_respects_limits() {
+        let visible = sample_screens()[0].visible; // 1512×880 → 上限 640×660
+        let start = Frame {
+            x: 400.0,
+            y: 200.0,
+            w: 280.0,
+            h: 200.0,
+        };
+        // 浮窗 / 贴左边：右下角把手，左上角不动。
+        let grown = resize_frame(start, 80.0, 60.0, false, visible);
+        assert_eq!(
+            grown,
+            Frame {
+                x: 400.0,
+                y: 200.0,
+                w: 360.0,
+                h: 260.0
+            }
+        );
+        // 贴右边：把手在左下角，往左拉变宽，右边缘必须仍贴着原位置（贴屏那侧不能被拖离）。
+        let left = resize_frame(start, -80.0, 60.0, true, visible);
+        assert_eq!(left.x + left.w, start.x + start.w);
+        assert_eq!(left.w, 360.0);
+        // 拉过头停在上限，缩过头停在下限，固定边仍不动。
+        let huge = resize_frame(start, -2000.0, 2000.0, true, visible);
+        assert_eq!((huge.w, huge.h), (640.0, 660.0));
+        assert_eq!(huge.x + huge.w, start.x + start.w);
+        let tiny = resize_frame(start, -500.0, -500.0, false, visible);
+        assert_eq!(
+            (tiny.w, tiny.h),
+            (
+                super::super::screen::MIN_CARD_W,
+                super::super::screen::MIN_CARD_H
+            )
+        );
+        assert_eq!((tiny.x, tiny.y), (start.x, start.y));
+    }
+
+    #[test]
+    fn resized_size_survives_restart_for_docked_and_floating_notes() {
+        // 「改过的尺寸要记住」：写进 notes.json 再读回来，贴边展开和浮窗都用这个尺寸。
+        let screens = sample_screens();
+        let visible = screens[0].visible;
+        let mut notes = vec![
+            store::new_note(
+                "贴边",
+                1,
+                Placement::Docked {
+                    edge: Edge::Right,
+                    display: "main".into(),
+                    order: 0,
+                },
+            ),
+            store::new_note(
+                "浮窗",
+                2,
+                Placement::Floating {
+                    frame: Frame {
+                        x: 300.0,
+                        y: 300.0,
+                        w: 280.0,
+                        h: 200.0,
+                    },
+                },
+            ),
+        ];
+        let (docked_id, floating_id) = (notes[0].id.clone(), notes[1].id.clone());
+        let docked_frame = Frame {
+            x: 1100.0,
+            y: 300.0,
+            w: 412.0,
+            h: 330.0,
+        };
+        assert_eq!(
+            apply_resize(&mut notes, &docked_id, docked_frame, visible),
+            Some((412.0, 330.0))
+        );
+        // 超过上限的结果按上限存，不会存下一个下次打开就越界的尺寸。
+        let floating_frame = Frame {
+            x: 300.0,
+            y: 300.0,
+            w: 900.0,
+            h: 900.0,
+        };
+        assert_eq!(
+            apply_resize(&mut notes, &floating_id, floating_frame, visible),
+            Some((640.0, 660.0))
+        );
+        assert_eq!(
+            apply_resize(&mut notes, "missing", docked_frame, visible),
+            None
+        );
+
+        let dir = std::env::temp_dir().join(format!("helmp-notes-resize-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.json");
+        store::save_to(&file, &notes).unwrap();
+        let restored = store::load_from(&file).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let plans = plan_windows(&restored, &screens, false, Some(&docked_id), None);
+        let docked = plans.iter().find(|p| p.id == docked_id).unwrap();
+        assert_eq!((docked.frame.w, docked.frame.h), (412.0, 330.0));
+        let floating = plans.iter().find(|p| p.id == floating_id).unwrap();
+        assert_eq!((floating.frame.w, floating.frame.h), (640.0, 660.0));
     }
 
     #[test]
