@@ -145,6 +145,39 @@ pub fn clipboard_paste(mode: &'static str, formats: &[&'static str]) {
     );
 }
 
+/// 区域录屏开始：`entry` 是入口（`toolbar` 截图工具栏 / `hotkey` 区域录屏快捷键），两个布尔是这次录不录系统声音、麦克风
+/// （麦克风没授权时记实际的 false）。
+pub fn recording_start(entry: &'static str, system_audio: bool, microphone: bool) {
+    track(
+        "recording.start",
+        json!({ "entry": entry, "system_audio": system_audio, "microphone": microphone }),
+    );
+}
+
+/// 区域录屏停止：`by` 是怎么停的（`button` / `hotkey` / `esc` / `menubar` / `quit` / `error`），时长只发档位。
+pub fn recording_stop(by: &'static str, seconds: u64) {
+    track(
+        "recording.stop",
+        json!({ "by": by, "duration": duration_bucket(seconds) }),
+    );
+}
+
+/// 录好的 mp4 存下来了（只发时长档位，不发文件名、路径）。
+pub fn recording_save(seconds: u64) {
+    track("recording.save", json!({ "duration": duration_bucket(seconds) }));
+}
+
+/// 录屏时长的档位：只看分布，不发精确秒数。
+fn duration_bucket(seconds: u64) -> &'static str {
+    match seconds {
+        0..10 => "<10s",
+        10..60 => "10-60s",
+        60..300 => "1-5m",
+        300..1800 => "5-30m",
+        _ => "30m+",
+    }
+}
+
 fn known_provider(provider: &str) -> &'static str {
     PROVIDERS
         .iter()
@@ -311,6 +344,19 @@ mod state {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_duration_is_only_a_bucket() {
+        // 录屏时长只发档位：能看出大家录多长，又不会拿精确秒数去对人。
+        assert_eq!(duration_bucket(0), "<10s");
+        assert_eq!(duration_bucket(9), "<10s");
+        assert_eq!(duration_bucket(10), "10-60s");
+        assert_eq!(duration_bucket(59), "10-60s");
+        assert_eq!(duration_bucket(60), "1-5m");
+        assert_eq!(duration_bucket(299), "1-5m");
+        assert_eq!(duration_bucket(300), "5-30m");
+        assert_eq!(duration_bucket(1800), "30m+");
+    }
 
     #[test]
     fn provider_table_matches_registered_providers() {

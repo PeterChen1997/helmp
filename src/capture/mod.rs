@@ -26,6 +26,7 @@ mod native;
 mod overlay;
 mod pin;
 mod preview;
+pub mod record;
 mod result;
 mod screen_capture_kit;
 mod selector;
@@ -61,6 +62,16 @@ pub enum Mode {
     Capture(Primary),
     /// 松开鼠标立即识别文字。
     Ocr,
+    /// 松开鼠标立即开始录屏（「区域录屏」快捷键，见 [`record`]）。
+    Record,
+}
+
+/// 截图模式下工具栏最左边的「截图 | 录屏」切换：切到录屏后工具栏只剩声音开关和「开始录制」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    Shot,
+    Record,
 }
 
 impl Mode {
@@ -70,6 +81,7 @@ impl Mode {
             Mode::Capture(Primary::Copy) => "copy",
             Mode::Capture(Primary::Save) => "save",
             Mode::Ocr => "ocr",
+            Mode::Record => "record",
         }
     }
 }
@@ -129,6 +141,8 @@ pub enum Act {
     Copy,
     Pin,
     Recognize,
+    /// 对选区开始录屏。
+    Record,
     Close,
 }
 
@@ -143,6 +157,8 @@ pub struct Session {
     pub overlays: Vec<AnyWindowHandle>,
     /// 正在裁图、等另存为面板：重复的操作忽略（连按两次回车不会复制两次）。
     pub busy: bool,
+    /// 工具栏切在「截图」还是「录屏」（只在截图模式下有用）。
+    pub tab: Tab,
 }
 
 impl Session {
@@ -253,6 +269,11 @@ pub fn open(request: Request, panel_hidden_at: Option<Instant>, cx: &mut App) {
             return;
         }
     };
+    // 「区域录屏」快捷键在录制中再按一次 = 停止。
+    if mode == Mode::Record && record::busy(cx) {
+        record::stop(record::StopBy::Hotkey, cx);
+        return;
+    }
     let captures = state(cx);
     if captures.session.is_some() || captures.opening {
         let opening = captures.opening;
@@ -302,8 +323,13 @@ pub fn open(request: Request, panel_hidden_at: Option<Instant>, cx: &mut App) {
 
 /// 截图界面出错：在面板里大声说出来（面板为展示结果重新弹出时不会被焦点抖动收起，见 launcher）。
 fn fail(err: anyhow::Error, cx: &mut App) {
+    fail_at("capture.open", err, cx);
+}
+
+/// 同 [`fail`]，按 `place` 上报（录屏的错误不记成「打开截图界面」）。
+fn fail_at(place: &'static str, err: anyhow::Error, cx: &mut App) {
     eprintln!("helmp: 截图失败：{err:#}");
-    crate::telemetry::report("capture.open", &err);
+    crate::telemetry::report(place, &err);
     log(cx, format!("error {err:#}"));
     let item = crate::provider::Item {
         id: "screenshot:clipboard".into(),
@@ -333,6 +359,7 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         mosaic: None,
         overlays: Vec::new(),
         busy: false,
+        tab: Tab::Shot,
     });
     let mouse = native::mouse_location();
     let mut key_index = 0;
@@ -477,6 +504,10 @@ pub fn act(action: Act, cx: &mut App) {
         close_session(true, cx);
         return;
     }
+    if action == Act::Record {
+        start_recording(&session, cx);
+        return;
+    }
     let picked = session.update(cx, |session, cx| {
         if session.busy {
             return None;
@@ -552,11 +583,42 @@ pub fn act(action: Act, cx: &mut App) {
                     record_history(&shot, history::Ended::Recognized, cx);
                     result::open(shot, cx);
                 }
-                Act::Close => {}
+                Act::Close | Act::Record => {}
             }
         });
     })
     .detach();
+}
+
+/// 对选区开始录屏：先收起遮罩、把焦点还给原来的 App（录的是活的屏幕，不是冻结的画面），再交给 [`record`]。
+fn start_recording(session: &Entity<Session>, cx: &mut App) {
+    let target = {
+        let session = session.read(cx);
+        if session.busy || session.editor.drawing() {
+            return;
+        }
+        let Some((ix, rect)) = session.selected() else {
+            return;
+        };
+        let frozen = &session.screens[ix];
+        let entry = if session.mode == Mode::Record {
+            record::Entry::Hotkey
+        } else {
+            record::Entry::Toolbar
+        };
+        (
+            record::Target {
+                display: frozen.screen.id,
+                screen: frozen.screen.frame,
+                visible: frozen.visible(),
+                rect,
+                scale: frozen.scale,
+            },
+            entry,
+        )
+    };
+    close_session(true, cx);
+    record::start(target.0, target.1, cx);
 }
 
 /// 复制图片并提示「已复制」，返回是否复制成了。演练模式下只记日志，不碰用户剪贴板。
@@ -782,6 +844,9 @@ fn set_overlays_visible(visible: bool, cx: &mut App) {
 
 /// 图形自检：此刻该往哪个窗口送按键和鼠标（遮罩 → 识别结果 → 最新的钉图）。
 pub fn self_test_target(cx: &mut App) -> Option<AnyWindowHandle> {
+    if let Some(pill) = record::self_test_target(cx) {
+        return Some(pill);
+    }
     let captures = state(cx);
     if let Some(session) = captures.session.clone() {
         return session.read(cx).overlays.first().copied();
@@ -835,9 +900,11 @@ pub fn debug_state(cx: &mut App) -> String {
                 .ok()
         })
         .collect();
+    let recording = record::debug_state(cx);
+    let tab = session.as_ref().map(|session| session.read(cx).tab);
     let captures = state(cx);
     format!(
-        "overlays={overlays} selection={selection:?} busy={busy} result={result:?} result_focused={result_focused:?} pins={} pin_sizes={pins:?} log={:?}",
+        "overlays={overlays} selection={selection:?} busy={busy} tab={tab:?} recording={recording} result={result:?} result_focused={result_focused:?} pins={} pin_sizes={pins:?} log={:?}",
         captures.pins.len(),
         captures.log
     )
@@ -914,6 +981,7 @@ mod tests {
         assert_eq!(Mode::Capture(Primary::Copy).name(), "copy");
         assert_eq!(Mode::Capture(Primary::Save).name(), "save");
         assert_eq!(Mode::Ocr.name(), "ocr");
+        assert_eq!(Mode::Record.name(), "record");
         assert_eq!(Request::from(Mode::Ocr).name(), "ocr");
         assert_eq!(
             Request::History(Reopen::Pin, 1731480000123).name(),

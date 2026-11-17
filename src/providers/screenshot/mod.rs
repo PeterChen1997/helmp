@@ -79,7 +79,7 @@ const SCREENSHOT: [&str; 3] = ["截图", "jt", "screenshot"];
 /// 共用关键词在非主命令上的扣分：只用来分出先后，不能低到被别的插件的模糊匹配盖过。
 const SHARED_KEYWORD_PENALTY: u32 = 20;
 
-const COMMANDS: [Cmd; 4] = [
+const COMMANDS: [Cmd; 5] = [
     // 主「截图」命令。id 沿用旧的「截图到剪贴板」：最近使用、快捷键、菜单栏都按 id 重新找它，
     // 回车（复制）也正是旧命令的行为。旧标题仍在关键词里，按旧名字搜也能找到。
     Cmd {
@@ -148,6 +148,31 @@ const COMMANDS: [Cmd; 4] = [
         ocr: true,
         effects: false,
         run: capture_and_recognize,
+    },
+    // 「区域录屏」：框选后立即开始录制，存成 mp4（见 `crate::capture::record`）。录制中再执行一次就停止。
+    Cmd {
+        key: "record",
+        title: ("区域录屏", "Record Screen Area"),
+        subtitle: (
+            "框选区域后直接开始录屏，再执行一次停止，存为 mp4",
+            "Select an area to start recording; run again to stop and save it as MP4",
+        ),
+        keywords: &[
+            SCREENSHOT[0],
+            SCREENSHOT[1],
+            SCREENSHOT[2],
+            "录屏",
+            "区域录屏",
+            "lp",
+            "screen recording",
+            "record screen",
+            "record screen area",
+        ],
+        symbol: "video",
+        action_title: ("录屏", "Record"),
+        ocr: false,
+        effects: false,
+        run: capture_and_record,
     },
     Cmd {
         key: "ocr-clipboard",
@@ -602,6 +627,10 @@ fn capture_and_save() -> Result<Outcome> {
         capture::has_screen_access(),
         crate::capture::Mode::Capture(crate::capture::Primary::Save),
     )
+}
+
+fn capture_and_record() -> Result<Outcome> {
+    open_capture(capture::has_screen_access(), crate::capture::Mode::Record)
 }
 
 fn capture_and_recognize() -> Result<Outcome> {
@@ -1315,6 +1344,7 @@ mod tests {
             ("screenshot:clipboard", Mode::Capture(Primary::Copy)),
             ("screenshot:save", Mode::Capture(Primary::Save)),
             ("screenshot:ocr-screen", Mode::Ocr),
+            ("screenshot:record", Mode::Record),
         ];
         for (id, mode) in ids {
             let item = Screenshot.query("截图").into_iter().find(|item| item.id == id).unwrap();
@@ -1325,6 +1355,18 @@ mod tests {
                 other => panic!("{id} 应打开截图界面：{other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn record_command_is_found_by_its_own_names() {
+        // 「区域录屏」快捷键按 id + 查询词「区域录屏」找这一项（`hotkey::execute`）：改名会让快捷键失效。
+        for query in ["区域录屏", "录屏", "lp", "screen recording"] {
+            let items = Screenshot.query(query);
+            let best = items.iter().max_by_key(|item| item.score).unwrap();
+            assert_eq!(best.id, "screenshot:record", "{query:?}");
+        }
+        // 搜「截图」仍然是截图排第一（上面的测试），录屏只是跟着出来。
+        assert!(ids("截图").contains(&"screenshot:record".to_string()));
     }
 
     #[test]

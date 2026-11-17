@@ -4,13 +4,14 @@
 use std::rc::Rc;
 
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use super::annotation::{BLOCK_SIZES, Tool, WIDTHS};
 use super::geometry::{self, Handle, Hit, Rect};
 use super::selector::{Effect, Selector, State};
 use super::toolbar::{self, Edit};
-use super::{Act, Mode, Primary, Session, act, is_close_key};
+use super::{Act, Mode, Primary, Session, Tab, act, is_close_key};
 use crate::i18n::tr;
 use crate::style::{self, Palette};
 
@@ -74,10 +75,13 @@ impl Overlay {
     }
 
     fn primary(&self, cx: &App) -> Act {
-        match self.session.read(cx).mode {
+        let session = self.session.read(cx);
+        match session.mode {
+            Mode::Capture(_) if session.tab == Tab::Record => Act::Record,
             Mode::Capture(Primary::Copy) => Act::Copy,
             Mode::Capture(Primary::Save) => Act::Save,
             Mode::Ocr => Act::Recognize,
+            Mode::Record => Act::Record,
         }
     }
 
@@ -85,6 +89,7 @@ impl Overlay {
     fn apply(&self, effect: Effect, cx: &mut Context<Self>) {
         let action = match effect {
             Effect::Selected(_) if self.session.read(cx).mode == Mode::Ocr => Act::Recognize,
+            Effect::Selected(_) if self.session.read(cx).mode == Mode::Record => Act::Record,
             Effect::Confirm => self.primary(cx),
             Effect::Close => Act::Close,
             Effect::None | Effect::Selected(_) => return,
@@ -93,11 +98,32 @@ impl Overlay {
     }
 
     fn edit(&self, edit: Edit, cx: &mut Context<Self>) {
+        // 声音开关在录屏模式的提示条上也有（那时还没有选区），改的是配置里记住的选择。
+        match edit {
+            Edit::SystemAudio | Edit::Microphone => {
+                super::record::toggle_audio(edit == Edit::Microphone);
+                self.session.update(cx, |_, cx| cx.notify());
+                return;
+            }
+            _ => {}
+        }
         self.session.update(cx, |session, cx| {
             if session.busy
-                || session.mode == Mode::Ocr
+                || matches!(session.mode, Mode::Ocr | Mode::Record)
                 || !session.selected().is_some_and(|(ix, _)| ix == self.index)
             {
+                return;
+            }
+            if let Edit::Tab(tab) = edit {
+                if tab != session.tab && !session.editor.drawing() {
+                    session.tab = tab;
+                    // 录屏没有标注：切过去时收起标注工具，已画的标注留着（切回截图还在）。
+                    session.editor.tool = None;
+                }
+                cx.notify();
+                return;
+            }
+            if session.tab == Tab::Record {
                 return;
             }
             match edit {
@@ -118,6 +144,7 @@ impl Overlay {
                     }
                     None => {}
                 },
+                Edit::Tab(_) | Edit::SystemAudio | Edit::Microphone => {}
             }
             cx.notify();
         });
@@ -269,6 +296,21 @@ impl Overlay {
         }
         let keystroke = &event.keystroke;
         let command = keystroke.modifiers.platform;
+        // 录屏没有标注、复制、保存：只认回车（开始录制）和关闭键。
+        let recording = {
+            let session = self.session.read(cx);
+            session.mode == Mode::Record || session.tab == Tab::Record
+        };
+        if recording {
+            let action = match keystroke.key.as_str() {
+                _ if is_close_key(keystroke) => Act::Close,
+                "enter" => Act::Record,
+                _ => return,
+            };
+            cx.stop_propagation();
+            cx.defer(move |cx| act(action, cx));
+            return;
+        }
         let edit = match keystroke.key.as_str() {
             "z" if command && keystroke.modifiers.shift => Some(Edit::Redo),
             "z" if command => Some(Edit::Undo),
@@ -406,7 +448,10 @@ impl Render for Overlay {
             cursor_for(selector.hit(self.mouse), pressing)
         };
         let ocr = session.mode == Mode::Ocr;
+        // 「区域录屏」快捷键：松手就开录，不出工具栏。
+        let direct = ocr || session.mode == Mode::Record;
         let busy = session.busy;
+        let tab = session.tab;
         let primary = self.primary(cx);
 
         let mut root = div()
@@ -448,8 +493,9 @@ impl Render for Overlay {
             if selected && !pressing && !ocr && !annotating {
                 root = root.children(handles(sel, &pal));
             }
-            if selected && !pressing && !ocr && !busy {
-                let origin = geometry::toolbar_origin(sel, toolbar::size(), bounds, TOOLBAR_GAP);
+            if selected && !pressing && !direct && !busy {
+                let origin =
+                    geometry::toolbar_origin(sel, toolbar::size(tab), bounds, TOOLBAR_GAP);
                 let entity = cx.entity();
                 root = root.child(
                     div()
@@ -458,6 +504,8 @@ impl Render for Overlay {
                         .top(px(origin.y as f32))
                         .child(toolbar::editor_toolbar(
                             &session.editor,
+                            tab,
+                            super::record::audio(),
                             primary,
                             &self.hex,
                             toolbar::options_offset(origin.y, bounds.bottom()),
@@ -477,6 +525,11 @@ impl Render for Overlay {
                     "框选要识别的文字 · 单击选中窗口 · Esc 退出",
                     "Select the text to recognize · Click a window to pick it · Esc to quit",
                 )
+            } else if session.mode == Mode::Record {
+                tr(
+                    "框选要录制的区域 · 单击选中窗口 · Esc 退出",
+                    "Select the area to record · Click a window to pick it · Esc to quit",
+                )
             } else {
                 tr(
                     "拖动框选 · 单击选中窗口 · Esc 退出",
@@ -493,13 +546,26 @@ impl Render for Overlay {
                     .justify_center()
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
                             .px(px(14.))
                             .py(px(7.))
                             .rounded(px(16.))
                             .bg(black().opacity(0.66))
                             .text_color(white())
                             .text_size(px(13.))
-                            .child(hint),
+                            .child(hint)
+                            // 快捷键直接开录时没有工具栏：声音开关放在这条提示上，开录前就能改。
+                            .when(session.mode == Mode::Record, |bar| {
+                                let entity = cx.entity();
+                                bar.children(toolbar::hint_audio_toggles(
+                                    super::record::audio(),
+                                    Rc::new(move |edit, _, cx| {
+                                        entity.update(cx, |overlay, cx| overlay.edit(edit, cx))
+                                    }),
+                                ))
+                            }),
                     ),
             );
         }

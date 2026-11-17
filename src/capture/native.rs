@@ -26,6 +26,8 @@ pub enum Kind {
     Pin,
     /// 「已复制」之类的提示：不接收鼠标，一会儿自己消失。
     Toast,
+    /// 录屏时选区外的红框：不接收鼠标、不抢焦点、没有阴影，Helmp 隐藏时也留着。
+    Frame,
 }
 
 /// 窗口创建后调用一次：去掉标题栏样式、设层级与跨桌面行为、摆到 `frame`（AppKit 全局坐标）。
@@ -38,7 +40,7 @@ pub fn setup(window: &Window, kind: Kind, frame: Rect, offscreen: bool) {
     // 无边框：带标题栏样式的窗口会被系统限制在菜单栏下面，盖不住整块屏幕。
     // 去掉 NonactivatingPanel 的窗口会激活 Helmp（要键盘的遮罩和结果窗口）；钉图和提示保留它。
     let mut mask = NSWindowStyleMask::Borderless;
-    if matches!(kind, Kind::Pin | Kind::Toast) {
+    if matches!(kind, Kind::Pin | Kind::Toast | Kind::Frame) {
         mask |= NSWindowStyleMask::NonactivatingPanel;
     }
     ns_window.setStyleMask(mask);
@@ -60,11 +62,11 @@ pub fn setup(window: &Window, kind: Kind, frame: Rect, offscreen: bool) {
     // NSPanel 默认在 App 失去前台时隐藏：钉图、结果窗口必须一直留着，用户随时能看到。
     ns_window.setHidesOnDeactivate(false);
     // 隐藏 Helmp（把焦点还给别的 App）时钉图和提示要留在屏幕上。
-    ns_window.setCanHide(!matches!(kind, Kind::Pin | Kind::Toast));
+    ns_window.setCanHide(!matches!(kind, Kind::Pin | Kind::Toast | Kind::Frame));
     ns_window.setOpaque(false);
     ns_window.setBackgroundColor(Some(&NSColor::clearColor()));
     ns_window.setHasShadow(matches!(kind, Kind::Pin | Kind::Result | Kind::Toast));
-    if kind == Kind::Toast {
+    if matches!(kind, Kind::Toast | Kind::Frame) {
         ns_window.setIgnoresMouseEvents(true);
     }
     let rect = if offscreen {

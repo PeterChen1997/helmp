@@ -838,7 +838,13 @@ mod tests {
         let system = system_shortcuts(None);
         let assigned = assigned(&Config::default());
         let mut defaults = vec![(Command::Toggle, DEFAULT_TOGGLE)];
-        defaults.extend(EXTENSION_SHORTCUTS.iter().map(|s| (s.command, s.default)));
+        // 默认留空的（区域录屏）不绑定任何组合，不用查。
+        defaults.extend(
+            EXTENSION_SHORTCUTS
+                .iter()
+                .filter(|s| !s.default.is_empty())
+                .map(|s| (s.command, s.default)),
+        );
         for (command, spec) in defaults {
             let others: Vec<Wanted> = assigned
                 .iter()

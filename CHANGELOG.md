@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Region screen recording. In the screenshot toolbar, switch Capture to Record and click Start Recording, or set a Record Screen Area shortcut in Settings › Screenshot (none by default) to start recording as soon as you release the mouse. While recording, a red frame marks the area and a bar below it shows the time and a Stop button; the menu bar shows the time too. Stop with that button, the menu bar item, <kbd>esc</kbd> or the shortcut again. The MP4 is saved to your screenshot folder, with Copy File and Show in Finder. System audio (on by default) and the microphone (off by default) can be switched on the toolbar or in Settings; without microphone access only the screen and system audio are recorded. The frame and the bar are never in the video. Needs macOS 15 or later.
+
+### 简体中文
+
+#### 新增
+
+- 区域录屏。在截图工具栏上把「截图」切到「录屏」，点「开始录制」；或在「设置 › 截图」里给「区域录屏」录一个快捷键（默认不设），框选后松开鼠标就开始录。录制中选区外有一圈红框，下方浮条显示时长和「停止」，菜单栏上也显示时长。点停止、点菜单栏、按 <kbd>esc</kbd> 或再按一次快捷键都能停。mp4 存到截图保存位置，可以复制文件或在访达中显示。系统声音（默认开）和麦克风（默认关）在工具栏或设置里切换；没有麦克风权限时只录画面和系统声音。红框和浮条不会被录进视频。需要 macOS 15 或更新。
+
 ## [0.4.10] - 2026-11-17
 
 ### Changed

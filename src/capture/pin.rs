@@ -311,6 +311,8 @@ impl Pin {
                 super::result::open(shot, cx);
             }
             Act::Close | Act::Pin => close(handle, cx),
+            // 钉图上没有录屏。
+            Act::Record => {}
         });
     }
 

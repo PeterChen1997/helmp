@@ -174,12 +174,12 @@ fn gui_ocr_mode_recognizes_on_release_and_copies() {
 #[test]
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_capture -- --ignored"]
 fn gui_pin_then_copy_and_close() {
-    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始，「钉图」在 (418,125)。
+    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始，「钉图」在 (539,125)（最左是关闭和「截图 | 录屏」切换）。
     // 钉住后 ⌘C 复制钉图（600×180 像素），Esc 关掉钉图；Esc 也能直接关掉截图界面。
-    let keys = "drag:100,10,400,100 click:418,125 cmd-c escape";
+    let keys = "drag:100,10,400,100 click:539,125 cmd-c escape";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
-    let pinned = line(&out, "self-test key click:418,125:");
+    let pinned = line(&out, "self-test key click:539,125:");
     assert!(
         pinned.contains("overlays=0") && pinned.contains("pins=1"),
         "{pinned}"
@@ -217,9 +217,9 @@ fn gui_annotations_are_baked_into_the_saved_retina_png() {
 
     // 选区 (12,6)–(550,110)，主工具栏下方只有一排的空间，选项排到主工具栏上面。
     let keys = concat!(
-        "drag:12,6,550,110 click:165,135 click:250,92 drag:32,24,80,48 ",
-        "click:389,92 cmd-a ~B2285C enter drag:90,24,130,48 ",
-        "click:345,135 drag:150,24,198,54 cmd-z cmd-shift-z cmd-s"
+        "drag:12,6,550,110 click:203,135 click:288,92 drag:32,24,80,48 ",
+        "click:427,92 cmd-a ~B2285C enter drag:90,24,130,48 ",
+        "click:383,135 drag:150,24,198,54 cmd-z cmd-shift-z cmd-s"
     );
     let shots = h.root.join("shots");
     let shots_for_config = shots.display().to_string();
@@ -275,9 +275,9 @@ fn gui_annotations_are_baked_into_the_saved_retina_png() {
 #[test]
 #[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
 fn gui_rightmost_capture_button_copies() {
-    let keys = "drag:12,6,550,110 click:531,135";
+    let keys = "drag:12,6,550,110 click:569,135";
     let out = gui(&capture_env(Helmp::new(), "screenshot-capture", keys));
-    let copied = line(&out, "self-test key click:531,135:");
+    let copied = line(&out, "self-test key click:569,135:");
     assert!(copied.contains("overlays=0"), "{out}");
     assert!(copied.contains("[dry-run] copy image 1076x208"), "{out}");
 }
@@ -366,7 +366,7 @@ fn screenshot_history_scope_lists_reopens_and_deletes() {
 fn gui_completed_captures_are_kept_in_history() {
     // 复制、钉图之后，最终图（Retina 原始像素）记进截图历史，元数据写明怎么用掉的；
     // 只是关掉截图界面（Esc / ⌘W）的不记。
-    let keys = "drag:12,6,550,110 click:531,135";
+    let keys = "drag:12,6,550,110 click:569,135";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
     let entries = history(&h);
@@ -382,7 +382,7 @@ fn gui_completed_captures_are_kept_in_history() {
     assert_eq!(png_size(&png), (1076, 208));
     assert!(out.contains("history Copied 1076x208"), "{out}");
 
-    let keys = "drag:100,10,400,100 click:418,125";
+    let keys = "drag:100,10,400,100 click:539,125";
     let h = capture_env(Helmp::new(), "screenshot-capture", keys);
     let out = gui(&h);
     let entries = history(&h);
@@ -403,7 +403,7 @@ fn gui_completed_captures_are_kept_in_history() {
     let h = capture_env(
         Helmp::new().config(|c| c["screenshot"] = serde_json::json!({"history": false})),
         "screenshot-capture",
-        "drag:12,6,550,110 click:531,135",
+        "drag:12,6,550,110 click:569,135",
     );
     let out = gui(&h);
     assert!(out.contains("[dry-run] copy image 1076x208"), "{out}");
@@ -418,7 +418,7 @@ fn gui_pin_zooms_with_the_wheel_and_closes_with_cmd_w() {
     // ⌘W 和 Esc 一样关掉钉图。缩小后滚轮要落在钉图里面才算（左上角附近，缩到多小都还在窗口里）；
     // 每步的尺寸后面若多出「gpui=…」，说明 GPUI 的视口没跟上窗口大小，工具栏和滚动区域会停在旧尺寸。
     let keys = concat!(
-        "drag:100,10,400,100 click:418,125 scroll:150,45,120 ",
+        "drag:100,10,400,100 click:539,125 scroll:150,45,120 ",
         "scroll:150,45,-120 scroll:5,5,-5000 scroll:5,5,-5000 scroll:5,5,-5000 ",
         "scroll:5,5,-5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 ",
         "scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 scroll:5,5,5000 cmd-w"
@@ -523,4 +523,112 @@ fn gui_history_reopens_as_a_pin_or_recognizes_text() {
     for expected in ["你好", "Huan", "quick brown fox"] {
         assert!(done.contains(expected), "识别结果缺少 {expected:?}：{done}");
     }
+}
+
+/// 录屏存进截图目录的 mp4（夹具模式下是占位文件）。
+fn recordings(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|read| {
+            read.map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "mp4"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_toolbar_record_tab_records_and_stop_button_saves() {
+    // 截图工具栏最左的「Capture | Record」切到录屏 → 打开麦克风 → 开始录制：遮罩收起（录的是活的屏幕），
+    // 浮条出现；点浮条上的停止 → mp4 存进截图目录、弹「已保存」提示。麦克风开关记进配置（下次沿用）。
+    // 选区 (100,10)–(400,100)，工具栏从屏幕左边开始：Record 在 (124,125)；切过去后麦克风 (331,125)、
+    // 开始录制 (456,125)；浮条上的停止在浮条右端 (215,18)。
+    let keys = "drag:100,10,400,100 click:124,125 click:331,125 click:456,125 wait:1 click:215,18";
+    let h = Helmp::new();
+    let shots = h.root.join("shots");
+    let shots_for_config = shots.display().to_string();
+    let h = capture_env(
+        h.config(move |c| c["screenshot"] = serde_json::json!({ "save_dir": shots_for_config })),
+        "screenshot-capture",
+        keys,
+    );
+    let out = gui(&h);
+    let tab = line(&out, "self-test key click:124,125:");
+    assert!(tab.contains("tab=Some(Record)"), "{tab}");
+    let started = line(&out, "self-test key click:456,125:");
+    assert!(started.contains("overlays=0"), "开录时遮罩要收起：{started}");
+    assert!(
+        started.contains("record start toolbar system=true mic=true"),
+        "{started}"
+    );
+    assert!(started.contains("recording=toolbar"), "{started}");
+    let stopped = line(&out, "self-test key click:215,18:");
+    assert!(stopped.contains("record stop button"), "{stopped}");
+    assert!(stopped.contains("recording=none"), "{stopped}");
+    assert!(stopped.contains("toast Saved Helmp Recording"), "{stopped}");
+    let saved = recordings(&shots);
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    assert!(
+        saved[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Helmp Recording "),
+        "{saved:?}"
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(h.data_file("config.json")).unwrap()).unwrap();
+    assert_eq!(config["screenshot"]["record_microphone"], true, "{config}");
+    assert_eq!(config["screenshot"]["record_system_audio"], true, "{config}");
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_record_hotkey_starts_on_release_and_stops_on_second_press() {
+    // 「区域录屏」快捷键：框选松手就开录（不出截图工具栏）；录制中再按一次同一个快捷键停止并保存。
+    let keys = "drag:100,10,400,100 wait:1 hotkey:screenshot-record";
+    let h = Helmp::new();
+    let shots = h.root.join("shots");
+    let shots_for_config = shots.display().to_string();
+    let h = capture_env(
+        h.config(move |c| c["screenshot"] = serde_json::json!({ "save_dir": shots_for_config })),
+        "screenshot-record",
+        keys,
+    );
+    let out = gui(&h);
+    let opened = line(&out, "self-test hotkey screenshot-record:");
+    assert!(opened.contains("overlays=1"), "{opened}");
+    let started = line(&out, "self-test key drag:");
+    assert!(started.contains("overlays=0"), "{started}");
+    assert!(
+        started.contains("record start hotkey system=true mic=false"),
+        "{started}"
+    );
+    assert!(
+        started.contains("recording=hotkey") && started.contains("rect=(100,10,300,90)"),
+        "录的就是框出的区域：{started}"
+    );
+    let stopped = line(&out, "self-test key hotkey:screenshot-record:");
+    assert!(stopped.contains("record stop hotkey"), "{stopped}");
+    assert!(stopped.contains("recording=none"), "{stopped}");
+    assert_eq!(recordings(&shots).len(), 1);
+}
+
+#[test]
+#[ignore = "开屏幕外的真实截图界面。手动运行：cargo test --release --test e2e_capture -- --ignored"]
+fn gui_escape_stops_recording() {
+    let keys = "drag:100,10,400,100 wait:1 escape";
+    let h = Helmp::new();
+    let shots = h.root.join("shots");
+    let shots_for_config = shots.display().to_string();
+    let h = capture_env(
+        h.config(move |c| c["screenshot"] = serde_json::json!({ "save_dir": shots_for_config })),
+        "screenshot-record",
+        keys,
+    );
+    let out = gui(&h);
+    let stopped = line(&out, "self-test key escape:");
+    assert!(stopped.contains("record stop esc"), "{stopped}");
+    assert!(stopped.contains("recording=none"), "{stopped}");
+    assert_eq!(recordings(&shots).len(), 1);
 }

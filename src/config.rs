@@ -275,6 +275,10 @@ pub struct ScreenshotConfig {
     pub ocr_languages: Vec<String>,
     /// 截图历史：记下最近 10 张完成的截图（`<data_dir>/capture-history/`，见 `capture::history`）。默认开。
     pub history: bool,
+    /// 区域录屏时录系统声音。默认开；截图工具栏上的开关改的就是它（记住上次的选择）。
+    pub record_system_audio: bool,
+    /// 区域录屏时录麦克风。默认关：第一次打开要请求麦克风权限。
+    pub record_microphone: bool,
 }
 
 impl Default for ScreenshotConfig {
@@ -283,6 +287,8 @@ impl Default for ScreenshotConfig {
             save_dir: None,
             ocr_languages: vec!["zh-Hans".into(), "en-US".into()],
             history: true,
+            record_system_audio: true,
+            record_microphone: false,
         }
     }
 }

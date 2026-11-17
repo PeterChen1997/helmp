@@ -220,8 +220,27 @@ impl SettingsView {
 
         // 「截图」「截图识别文字」是两条独立的快捷键，并排列出、各自录制；录成对方正在用的组合会被指名拦下。
         let mut rows = Vec::new();
+        let mut record_rows = Vec::new();
         for shortcut in &self.screenshot_hotkeys {
             let (zh, en) = shortcut.label;
+            // 「区域录屏」的快捷键放进下面的「录屏」分组，和声音开关在一起。
+            if shortcut.slot == "screenshot-record" {
+                record_rows.push(
+                    widgets::row(
+                        widgets::label_with_help(
+                            trf!("「{}」快捷键", "“{}” shortcut", tr(zh, en)),
+                            tr(
+                                "框选区域后直接开始录屏，不出截图工具栏；录制中再按一次停止",
+                                "Select an area to start recording right away; press it again to stop",
+                            ),
+                            pal,
+                        ),
+                        crate::settings::hotkey::with_note(&shortcut.recorder, pal, cx),
+                    )
+                    .into_any_element(),
+                );
+                continue;
+            }
             let help = if shortcut.slot == "screenshot-capture" {
                 tr(
                     "冻结屏幕后框选，再复制、保存、钉图或识别文字",
@@ -318,6 +337,67 @@ impl SettingsView {
                 ]).collect(),
                 pal,
             ))
+            .child(widgets::group_header(tr("录屏", "Screen Recording"), pal))
+            .child(
+                widgets::group(
+                    record_rows
+                        .into_iter()
+                        .chain([
+                            widgets::row(
+                                widgets::label_with_help(
+                                    tr("录制系统声音", "Record system audio"),
+                                    tr(
+                                        "截图工具栏的「录屏」上也能切换，上次的选择会记住",
+                                        "You can also switch it on the Record tab of the screenshot toolbar; your last choice is remembered",
+                                    ),
+                                    pal,
+                                ),
+                                widgets::switch(
+                                    "record-system-audio",
+                                    shot.record_system_audio,
+                                    tr("录制系统声音", "Record system audio"),
+                                    pal,
+                                    cx.listener(|this, on: &bool, _, cx| {
+                                        let on = *on;
+                                        this.save(cx, |c| c.screenshot.record_system_audio = on);
+                                    }),
+                                ),
+                            )
+                            .into_any_element(),
+                            widgets::row(
+                                widgets::label_with_help(
+                                    tr("录制麦克风", "Record microphone"),
+                                    tr(
+                                        "第一次录制时会请求麦克风权限；没有授权时只录画面",
+                                        "Helmp asks for microphone access the first time; without it only the screen is recorded",
+                                    ),
+                                    pal,
+                                ),
+                                widgets::switch(
+                                    "record-microphone",
+                                    shot.record_microphone,
+                                    tr("录制麦克风", "Record microphone"),
+                                    pal,
+                                    cx.listener(|this, on: &bool, _, cx| {
+                                        let on = *on;
+                                        this.save(cx, |c| c.screenshot.record_microphone = on);
+                                    }),
+                                ),
+                            )
+                            .into_any_element(),
+                        ])
+                        .collect(),
+                    pal,
+                )
+                .mb(px(6.)),
+            )
+            .child(div().ml(px(4.)).mb(px(12.)).child(widgets::help_text(
+                tr(
+                    "录好的 mp4 存到上面的截图保存位置。",
+                    "Recordings are saved as MP4 in the screenshot folder above.",
+                ),
+                pal,
+            )))
             .child(widgets::group_header(
                 tr("文字识别语言", "Text Recognition Languages"),
                 pal,

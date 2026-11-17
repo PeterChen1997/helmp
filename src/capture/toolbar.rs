@@ -9,8 +9,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use super::Act;
 use super::annotation::{BLOCK_SIZES, COLORS, Editor, Tool, WIDTHS};
+use super::record::Audio;
+use super::{Act, Tab};
 use crate::i18n::{tr, trf};
 use crate::style::Palette;
 
@@ -20,6 +21,19 @@ const PAD: f32 = 4.;
 const DIVIDER: f32 = 1.;
 const OPTIONS_GAP: f32 = 4.;
 const ROW_HEIGHT: f32 = BUTTON + PAD * 2. + 2.;
+/// 「截图 | 录屏」切换里每一格的宽度（按界面语言，英文字更长）。
+fn tab_width() -> f32 {
+    if crate::i18n::is_en() { 56. } else { 44. }
+}
+/// 录屏工具栏上「系统声音」「麦克风」两个开关和「开始录制」按钮的宽度。
+fn record_widths() -> (f32, f32, f32) {
+    if crate::i18n::is_en() {
+        (118., 104., 136.)
+    } else {
+        (96., 82., 96.)
+    }
+}
+const RED: u32 = 0xFF3B30;
 
 pub const SAVE: ActionButton = (Act::Save, "download", "保存", "Save", "⌘S");
 pub const RECOGNIZE: ActionButton = (
@@ -66,7 +80,7 @@ const TOOLS: [(Option<Tool>, &str, &str, &str, &str); 8] = [
     ),
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edit {
     Select(Option<Tool>),
     Undo,
@@ -75,6 +89,11 @@ pub enum Edit {
     Width(usize),
     BlockSize(usize),
     StepSize(isize),
+    /// 切换「截图 | 录屏」。
+    Tab(Tab),
+    /// 开关「录系统声音」「录麦克风」（记进配置）。
+    SystemAudio,
+    Microphone,
 }
 
 pub type ActionButton = (Act, &'static str, &'static str, &'static str, &'static str);
@@ -93,13 +112,195 @@ pub fn key_tool(key: &str) -> Option<Edit> {
         .map(|entry| Edit::Select(entry.0))
 }
 
-pub fn size() -> (f64, f64) {
-    // 关闭 | 工具 | 撤销 重做 | 操作：三条分隔线。
-    let buttons = (1 + TOOLS.len() + 2 + ACTIONS.len()) as f32;
-    let dividers = 3.;
-    let width =
-        buttons * BUTTON + (buttons + dividers - 1.) * GAP + dividers * DIVIDER + 2. * (PAD + 1.);
+pub fn size(tab: Tab) -> (f64, f64) {
+    let segment = 2. * tab_width() + 2. * SEGMENT_PAD;
+    let width = match tab {
+        // 关闭 | 截图/录屏 | 工具 | 撤销 重做 | 操作：四条分隔线。
+        Tab::Shot => {
+            let buttons = (1 + TOOLS.len() + 2 + ACTIONS.len()) as f32;
+            let dividers = 4.;
+            buttons * BUTTON
+                + segment
+                + (buttons + 1. + dividers - 1.) * GAP
+                + dividers * DIVIDER
+                + 2. * (PAD + 1.)
+        }
+        // 关闭 | 截图/录屏 | 系统声音 麦克风 | 开始录制：三条分隔线。
+        Tab::Record => {
+            let (system, microphone, start) = record_widths();
+            let items = 5.;
+            let dividers = 3.;
+            BUTTON
+                + segment
+                + system
+                + microphone
+                + start
+                + (items + dividers - 1.) * GAP
+                + dividers * DIVIDER
+                + 2. * (PAD + 1.)
+        }
+    };
     (f64::from(width), f64::from(ROW_HEIGHT))
+}
+
+const SEGMENT_PAD: f32 = 2.;
+
+/// 「截图 | 录屏」分段切换。
+fn tab_switch(tab: Tab, pal: &Palette, on_edit: &OnEdit) -> Div {
+    let item = |target: Tab, zh: &str, en: &str| {
+        let on = target == tab;
+        let on_edit = on_edit.clone();
+        div()
+            .id(SharedString::from(format!("capture-tab-{target:?}")))
+            .w(px(tab_width()))
+            .h(px(BUTTON - 2. * SEGMENT_PAD))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .text_size(px(12.))
+            .when(on, |d| d.bg(pal.window).shadow_sm().text_color(pal.fg))
+            .when(!on, |d| {
+                d.text_color(pal.fg.opacity(0.6))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(|style| style.text_color(pal.fg))
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                on_edit(Edit::Tab(target), window, cx);
+            })
+            .child(tr(zh, en).to_string())
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .p(px(SEGMENT_PAD))
+        .rounded(px(6.))
+        .bg(pal.key_bg)
+        .child(item(Tab::Shot, "截图", "Capture"))
+        .child(item(Tab::Record, "录屏", "Record"))
+}
+
+/// 声音开关（图标 + 文字）。开着时是强调色描边，关着是灰的划线图标。
+fn audio_toggle(
+    edit: Edit,
+    on: bool,
+    width: f32,
+    pal: &Palette,
+    on_edit: &OnEdit,
+) -> Stateful<Div> {
+    let (name, zh, en) = match (edit, on) {
+        (Edit::Microphone, true) => ("mic", "麦克风", "Microphone"),
+        (Edit::Microphone, false) => ("mic-off", "麦克风", "Microphone"),
+        (_, true) => ("volume-2", "系统声音", "System Audio"),
+        (_, false) => ("volume-x", "系统声音", "System Audio"),
+    };
+    let tip = match (edit, on) {
+        (Edit::Microphone, true) => tr("录制麦克风：开", "Record microphone: on"),
+        (Edit::Microphone, false) => tr("录制麦克风：关", "Record microphone: off"),
+        (_, true) => tr("录制系统声音：开", "Record system audio: on"),
+        (_, false) => tr("录制系统声音：关", "Record system audio: off"),
+    };
+    let color = if on { pal.accent } else { pal.fg.opacity(0.55) };
+    let on_edit = on_edit.clone();
+    div()
+        .id(SharedString::from(format!("capture-{edit:?}")))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .gap(px(5.))
+        .w(px(width))
+        .h(px(BUTTON))
+        .rounded(px(5.))
+        .cursor(CursorStyle::PointingHand)
+        .when(on, |d| d.bg(pal.key_bg).border_1().border_color(pal.accent))
+        .when(!on, |d| d.hover(|style| style.bg(pal.key_bg)))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            on_edit(edit, window, cx);
+        })
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tip).build(window, cx)
+        })
+        .child(icon(name, color))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(if on { pal.accent } else { pal.fg.opacity(0.7) })
+                .child(tr(zh, en).to_string()),
+        )
+}
+
+/// 「区域录屏」快捷键的框选提示条上的声音开关（深色底，白字）。
+pub fn hint_audio_toggles(audio: Audio, on_edit: OnEdit) -> Vec<Stateful<Div>> {
+    [
+        (Edit::SystemAudio, audio.system),
+        (Edit::Microphone, audio.microphone),
+    ]
+    .into_iter()
+    .map(|(edit, on)| {
+        let (name, label) = match (edit, on) {
+            (Edit::Microphone, true) => ("mic", tr("麦克风", "Microphone")),
+            (Edit::Microphone, false) => ("mic-off", tr("麦克风", "Microphone")),
+            (_, true) => ("volume-2", tr("系统声音", "System Audio")),
+            (_, false) => ("volume-x", tr("系统声音", "System Audio")),
+        };
+        let color = if on { white() } else { white().opacity(0.5) };
+        let on_edit = on_edit.clone();
+        div()
+            .id(SharedString::from(format!("hint-{edit:?}")))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(8.))
+            .h(px(22.))
+            .rounded(px(11.))
+            .cursor(CursorStyle::PointingHand)
+            .when(on, |d| d.bg(white().opacity(0.18)))
+            .hover(|style| style.bg(white().opacity(0.26)))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                on_edit(edit, window, cx);
+            })
+            .child(icon(name, color).size(px(14.)))
+            .child(div().text_color(color).child(label.to_string()))
+    })
+    .collect()
+}
+
+/// 录屏工具栏右边的红色「开始录制」。
+fn start_button(width: f32, on_press: &OnPress) -> Stateful<Div> {
+    let on_press = on_press.clone();
+    div()
+        .id("capture-start-recording")
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .gap(px(6.))
+        .w(px(width))
+        .h(px(BUTTON))
+        .rounded(px(BUTTON / 2.))
+        .bg(rgb(RED))
+        .cursor(CursorStyle::PointingHand)
+        .hover(|style| style.opacity(0.88))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            on_press(Act::Record, window, cx);
+        })
+        .tooltip(|window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tooltip("开始录制", "Start Recording", "↵"))
+                .build(window, cx)
+        })
+        .child(div().size(px(9.)).rounded_full().bg(white()))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(white())
+                .child(tr("开始录制", "Start Recording").to_string()),
+        )
 }
 
 /// 选项贴在主工具栏旁，空间不足时改放上方。
@@ -329,8 +530,11 @@ fn options(
     options
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn editor_toolbar(
     editor: &Editor,
+    tab: Tab,
+    audio: Audio,
     primary: Act,
     hex: &Entity<InputState>,
     options_top: Pixels,
@@ -338,6 +542,18 @@ pub fn editor_toolbar(
     on_edit: OnEdit,
     on_press: OnPress,
 ) -> Div {
+    if tab == Tab::Record {
+        let (system, microphone, start) = record_widths();
+        return row(pal)
+            .children(action_buttons(&[CLOSE], primary, pal, &on_press))
+            .child(divider(pal))
+            .child(tab_switch(tab, pal, &on_edit))
+            .child(divider(pal))
+            .child(audio_toggle(Edit::SystemAudio, audio.system, system, pal, &on_edit))
+            .child(audio_toggle(Edit::Microphone, audio.microphone, microphone, pal, &on_edit))
+            .child(divider(pal))
+            .child(start_button(start, &on_press));
+    }
     let tools = TOOLS.map(|(tool, name, zh, en, key)| {
         let selected = tool == editor.tool;
         edit_button(
@@ -376,6 +592,8 @@ pub fn editor_toolbar(
         .child(
             row(pal)
                 .children(action_buttons(&[CLOSE], primary, pal, &on_press))
+                .child(divider(pal))
+                .child(tab_switch(tab, pal, &on_edit))
                 .child(divider(pal))
                 .children(tools)
                 .child(divider(pal))

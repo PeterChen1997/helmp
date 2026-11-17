@@ -44,6 +44,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     </dict>
   </array>
   <key>NSAppleEventsUsageDescription</key><string>Helmp 需要控制终端 App，才能跳转到对应的 Agent 会话。</string>
+  <key>NSMicrophoneUsageDescription</key><string>Helmp 区域录屏时可以把麦克风的声音一起录进视频（在截图工具栏或设置里打开「录制麦克风」才会用到）。</string>
 </dict>
 </plist>
 PLIST

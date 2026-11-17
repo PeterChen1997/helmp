@@ -66,7 +66,7 @@ pub struct ExtensionShortcut {
     pub command: Command,
 }
 
-pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 5] = [
+pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 6] = [
     ExtensionShortcut {
         provider: "clipboard",
         slot: "clipboard",
@@ -96,6 +96,19 @@ pub const EXTENSION_SHORTCUTS: [ExtensionShortcut; 5] = [
         command: Command::RunItem {
             id: "screenshot:ocr-screen",
             query: "截图识别文字",
+        },
+    },
+    // 「区域录屏」：框选后直接开录，录制中再按一次停止。默认不设：常用组合几乎都被系统和别的 App 占了，
+    // 由用户自己录（设置 › 截图 › 录屏）。
+    ExtensionShortcut {
+        provider: "screenshot",
+        slot: "screenshot-record",
+        label: "区域录屏",
+        label_en: "Record Screen Area",
+        default: "",
+        command: Command::RunItem {
+            id: "screenshot:record",
+            query: "区域录屏",
         },
     },
     ExtensionShortcut {
@@ -348,8 +361,8 @@ pub fn assigned(config: &Config) -> Vec<Wanted> {
             // 用户清除了快捷键（写成空字符串）：不绑定。
             Some(spec) if spec.trim().is_empty() => None,
             Some(spec) => Some(spec.to_string()),
-            // 没配置过：用默认值。
-            None => Some(shortcut.default.to_string()),
+            // 没配置过：用默认值（默认值为空的不绑定）。
+            None => (!shortcut.default.is_empty()).then(|| shortcut.default.to_string()),
         };
         out.push(Wanted {
             command: shortcut.command,
@@ -392,7 +405,8 @@ pub fn default_spec(command: Command) -> Option<&'static str> {
         _ => EXTENSION_SHORTCUTS
             .iter()
             .find(|shortcut| shortcut.command == command)
-            .map(|shortcut| shortcut.default),
+            .map(|shortcut| shortcut.default)
+            .filter(|default| !default.is_empty()),
     }
 }
 
@@ -1424,6 +1438,42 @@ mod tests {
     }
 
     #[test]
+    fn record_shortcut_is_unset_until_the_user_records_one() {
+        // 用户选的方案：「区域录屏」默认不占任何组合（不和系统 / 别的 App 抢键），设置里显示「未设置」、
+        // 也没有「恢复默认」；录了之后就注册、显示键帽，再按一次同一个键停止录制。
+        let record = extension_command("screenshot-record").unwrap();
+        assert_eq!(
+            record,
+            Command::RunItem {
+                id: "screenshot:record",
+                query: "区域录屏"
+            }
+        );
+        assert_eq!(default_spec(record), None);
+        let config = Config::default();
+        assert_eq!(assigned_spec(&config, record), None);
+        assert!(wanted(&config).iter().any(|w| w.command == record && w.spec.is_none()));
+
+        let mut config = Config::default();
+        config.extensions.insert(
+            "screenshot-record".into(),
+            ExtensionConfig {
+                hotkey: Some("alt-cmd-shift-1".into()),
+                ..ExtensionConfig::default()
+            },
+        );
+        assert_eq!(
+            assigned_spec(&config, record).as_deref(),
+            Some("alt-cmd-shift-1")
+        );
+        let fake = Fake::default();
+        let mut registry = Registry::default();
+        let problems = registry.apply(&fake, &wanted(&config));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(hint_in(Some(&registry), record).as_deref(), Some("⌥⇧⌘1"));
+    }
+
+    #[test]
     fn screenshot_and_ocr_are_both_registered_and_hinted_on_their_own_commands() {
         // 用户看到的「截图快捷键只有一个」：两条都要真的注册上，结果右侧的键帽也要各显示各的，
         // 不能两条命令都显示插件主键位（截图识别文字）的那个组合，或者「截图」那一项干脆没有键帽。
@@ -1442,9 +1492,9 @@ mod tests {
         // 不是由快捷键直接执行的项没有键帽。
         assert_eq!(item_command("screenshot:save"), None);
 
-        // 设置里逐条列出：截图插件名下就是这两条，「截图」在前。
+        // 设置里逐条列出：截图插件名下是这三条，「截图」在前，「区域录屏」在最后（设置里放进「录屏」分组）。
         let slots: Vec<&str> = shortcuts_of("screenshot").map(|s| s.slot).collect();
-        assert_eq!(slots, ["screenshot-capture", "screenshot"]);
+        assert_eq!(slots, ["screenshot-capture", "screenshot", "screenshot-record"]);
         let slots: Vec<&str> = shortcuts_of("clipboard").map(|s| s.slot).collect();
         assert_eq!(slots, ["clipboard"]);
     }
@@ -1457,10 +1507,12 @@ mod tests {
         let mut registry = Registry::default();
         let config = Config::default();
         registry.apply(&fake, &wanted_while(false, &config));
-        assert_eq!(
-            fake.registered.borrow().len(),
-            EXTENSION_SHORTCUTS.len() + 1
-        );
+        // 唤起键 + 有默认组合的扩展快捷键（区域录屏默认不设）。
+        let with_default = EXTENSION_SHORTCUTS
+            .iter()
+            .filter(|shortcut| !shortcut.default.is_empty())
+            .count();
+        assert_eq!(fake.registered.borrow().len(), with_default + 1);
         registry.apply(&fake, &wanted_while(true, &config));
         assert!(fake.registered.borrow().is_empty());
         assert_eq!(registry.get(Command::Toggle), None);

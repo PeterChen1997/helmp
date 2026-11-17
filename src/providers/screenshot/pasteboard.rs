@@ -55,6 +55,22 @@ pub fn write_png(pasteboard: &NSPasteboard, png: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// 清空并放进一个文件（file URL）：在访达、聊天软件里粘贴得到的就是这个文件。录屏存好后的「复制文件」用。
+pub fn write_file_url(pasteboard: &NSPasteboard, path: &std::path::Path) -> Result<()> {
+    use objc2::runtime::ProtocolObject;
+    use objc2_app_kit::NSPasteboardWriting;
+    use objc2_foundation::{NSArray, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let objects: [Retained<ProtocolObject<dyn NSPasteboardWriting>>; 1] =
+        [ProtocolObject::from_retained(url)];
+    pasteboard.clearContents();
+    anyhow::ensure!(
+        pasteboard.writeObjects(&NSArray::from_retained_slice(&objects)),
+        tr("写入剪贴板失败", "Couldn't write to the clipboard")
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

@@ -118,7 +118,9 @@ fn run_gui(engine: Engine) {
             menubar::install(cx);
             telemetry::launched();
             // 退出时进程直接结束、不会走到 Sentry guard 的 drop：先把排队的错误发完。
-            cx.on_app_quit(|_| {
+            cx.on_app_quit(|cx| {
+                // 还在录屏：先停下并等 mp4 写完，不留打不开的半截文件。
+                capture::record::stop_for_quit(cx);
                 telemetry::flush();
                 async {}
             })
@@ -285,7 +287,7 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         let settings_target = target;
 
         // HELMP_SELF_TEST_KEYS：空格分隔的按键（GPUI 写法，如 `tab`、`up`、`cmd-k`），`~文字` 逐字输入，
-        // `wait:<秒>` 干等，`snap:<名字>` 截图（需 `--features readme-shots`，见 docs/images/README.md）。
+        // `wait:<秒>` 干等，`hotkey:<键位>` 执行一条全局快捷键，`snap:<名字>` 截图（需 `--features readme-shots`，见 docs/images/README.md）。
         // 每步之后打印范围、焦点、表单和结果；最后一步多等一会儿，留给输入即译和模型调用。
         if let Ok(keys) = std::env::var("HELMP_SELF_TEST_KEYS") {
             let tokens: Vec<String> = keys.split_whitespace().map(str::to_string).collect();
@@ -303,6 +305,17 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                         let state = cx.update(capture::debug_state);
                         println!("self-test key {token}: capture={state}");
                     }
+                    continue;
+                }
+                // `hotkey:<键位>`：在这一步像按下那条全局快捷键一样执行（如录制中再按一次区域录屏停止）。
+                if let Some(slot) = token.strip_prefix("hotkey:") {
+                    match hotkey::extension_command(slot) {
+                        Some(command) => cx.update(|cx| hotkey::execute(command, cx)),
+                        None => println!("self-test key {token}: 没有这个快捷键"),
+                    }
+                    cx.background_executor().timer(settle).await;
+                    let state = cx.update(capture::debug_state);
+                    println!("self-test key {token}: capture={state}");
                     continue;
                 }
                 // `click:<x>,<y>` 在窗口坐标处单击；`scroll:<x>,<y>,<dy>` 在那里滚动（dy 为负 = 往下翻）。
