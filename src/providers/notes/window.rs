@@ -33,6 +33,9 @@ const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 /// 超过多少 pt 才算拖拽，避免轻点误拖。
 const DRAG_THRESHOLD: f64 = 4.0;
 const DRAG_TICK: Duration = Duration::from_millis(8);
+/// 停靠便签耳标 ↔ 卡片的窗口过渡时长与帧间隔（约 120 帧/秒）。
+const DOCK_ANIM: Duration = Duration::from_millis(160);
+const ANIM_TICK: Duration = Duration::from_millis(8);
 
 /// 供 `Provider` 线程只读查询的内存快照（主线程更新完便签后同步刷新）。
 static SNAPSHOT: OnceLock<RwLock<Vec<Note>>> = OnceLock::new();
@@ -986,6 +989,18 @@ fn plan_windows(
     out
 }
 
+/// 一个便签窗口这次同步要套用的原生几何。
+struct NativeOp {
+    id: String,
+    handle: NoteFrameHandle,
+    frame: Frame,
+    radius: f64,
+    visible: bool,
+    order_front: bool,
+    /// 耳标 ↔ 卡片要逐帧过渡时的起始帧（同步时窗口所在位置）。
+    tween_from: Option<Frame>,
+}
+
 /// 同步所有非归档便签窗口：打开缺失窗口、关掉多余窗口、更新视图展示态并异步套用几何位置。
 fn sync_all_windows(cx: &mut App) {
     ensure_manager(cx);
@@ -1033,7 +1048,7 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
         let _ = entry.handle.update(cx, |_, window, _| window.remove_window());
     }
 
-    let mut native_ops: Vec<(String, NoteFrameHandle, Frame, f64, bool, bool)> = Vec::new();
+    let mut native_ops: Vec<NativeOp> = Vec::new();
     for plan in plans {
         let Some(note) = snapshots_by_id.get(&plan.id).cloned() else {
             continue;
@@ -1041,11 +1056,12 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
         let existing = {
             let mgr = cx.global_mut::<NotesManager>();
             mgr.windows.get_mut(&plan.id).map(|e| {
+                let was_visible = e.visible;
                 e.visible = plan.visible;
-                (e.handle, e.view.clone(), e.native.clone())
+                (e.handle, e.view.clone(), e.native.clone(), was_visible)
             })
         };
-        if let Some((handle, view, native_opt)) = existing {
+        if let Some((handle, view, native_opt, was_visible)) = existing {
             let dragging = view.read(cx).drag.is_some();
             let _ = handle.update(cx, |_, _, cx| {
                 view.update(cx, |w, cx| {
@@ -1062,14 +1078,18 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
             if !dragging
                 && let Some(native_handle) = native_opt
             {
-                native_ops.push((
-                    plan.id.clone(),
-                    native_handle,
-                    plan.frame,
-                    plan.radius,
-                    plan.visible,
-                    plan.order_front,
-                ));
+                let tween_from = native_handle
+                    .frame_tl()
+                    .filter(|from| animates_dock_transition(plan.docked, was_visible, *from, plan.frame));
+                native_ops.push(NativeOp {
+                    id: plan.id.clone(),
+                    handle: native_handle,
+                    frame: plan.frame,
+                    radius: plan.radius,
+                    visible: plan.visible,
+                    order_front: plan.order_front,
+                    tween_from,
+                });
             }
         } else if let Some(entry) = open_note_window(&note, &plan, hidden_all, cx) {
             cx.global_mut::<NotesManager>()
@@ -1095,31 +1115,95 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
                 let windows = &cx.global::<NotesManager>().windows;
                 native_ops
                     .into_iter()
-                    .filter(|(id, ..)| windows.contains_key(id))
-                    .map(|(_, handle, frame, radius, visible, order_front)| {
-                        (handle, frame, radius, visible, order_front)
-                    })
+                    .filter(|op| windows.contains_key(&op.id))
                     .collect::<Vec<_>>()
             });
-            for (handle, frame, radius, visible, _) in &native_ops {
-                if *visible {
-                    handle.set_frame_tl(*frame, *radius);
-                    handle.set_visible(true);
-                } else {
-                    handle.set_visible(false);
+            // 耳标 ↔ 卡片在下面逐帧过渡；其余直接到位。
+            let mut tweens = Vec::new();
+            for op in &native_ops {
+                if !op.visible {
+                    op.handle.set_visible(false);
+                    continue;
                 }
+                match op.tween_from {
+                    Some(from) => tweens.push((op.handle.clone(), from, op.frame, op.radius)),
+                    None => op.handle.set_frame_tl(op.frame, op.radius),
+                }
+                op.handle.set_visible(true);
             }
             // 先完成全部窗口布局后再置顶展开/编辑卡片，确保相邻耳标不会遮挡展开后的卡片一角。
-            for (handle, _, _, visible, order_front) in native_ops {
-                if visible && order_front {
-                    handle.order_front();
+            for op in &native_ops {
+                if op.visible && op.order_front {
+                    op.handle.order_front();
                 }
             }
+            if !tweens.is_empty() {
+                // 每帧 `setFrame:display:` 会让 GPUI 按新尺寸同步重画，内容跟着窗口长大，不会先闪一帧。
+                // 期间有新的同步（再次悬停、移开、删除）就让位：新一轮从当前帧继续，不会跳。
+                let start = Instant::now();
+                loop {
+                    cx.background_executor().timer(ANIM_TICK).await;
+                    if LAYOUT_SEQ.load(Ordering::Relaxed) != seq {
+                        return;
+                    }
+                    let t = start.elapsed().as_secs_f64() / DOCK_ANIM.as_secs_f64();
+                    if t >= 1.0 {
+                        break;
+                    }
+                    for (handle, from, to, _) in &tweens {
+                        handle.set_frame_tl(tween_frame(*from, *to, t), CARD_CORNER_RADIUS);
+                    }
+                }
+                for (handle, _, to, radius) in &tweens {
+                    handle.set_frame_tl(*to, *radius);
+                }
+            }
+            let ids: Vec<String> = native_ops.into_iter().map(|op| op.id).collect();
+            cx.update(|cx| settle_collapsed(&ids, cx));
         })
         .detach();
     }
 
     ensure_hover_poll(cx);
+}
+
+/// 停靠便签展开 / 收起的过渡帧：ease-out cubic，`t` 截到 0..=1，`t = 1` 时精确等于目标。
+fn tween_frame(from: Frame, to: Frame, t: f64) -> Frame {
+    let t = t.clamp(0.0, 1.0);
+    if t >= 1.0 {
+        return to;
+    }
+    let e = 1.0 - (1.0 - t).powi(3);
+    let lerp = |a: f64, b: f64| (a + (b - a) * e).round();
+    Frame {
+        x: lerp(from.x, to.x),
+        y: lerp(from.y, to.y),
+        w: lerp(from.w, to.w),
+        h: lerp(from.h, to.h),
+    }
+}
+
+/// 只有原本就显示着、尺寸要变的停靠窗口（耳标 ↔ 卡片）才做过渡；只挪位置的队列重排直接到位。
+fn animates_dock_transition(docked: bool, was_visible: bool, from: Frame, to: Frame) -> bool {
+    docked && was_visible && ((from.w - to.w).abs() >= 0.5 || (from.h - to.h).abs() >= 0.5)
+}
+
+/// 收起过渡播完后把视图切回耳标（过渡中一直画卡片，避免耳标内容被拉伸到卡片大小）。
+fn settle_collapsed(ids: &[String], cx: &mut App) {
+    let views: Vec<Entity<NoteWindow>> = {
+        let windows = &cx.global::<NotesManager>().windows;
+        ids.iter()
+            .filter_map(|id| windows.get(id).map(|e| e.view.clone()))
+            .collect()
+    };
+    for view in views {
+        view.update(cx, |w, cx| {
+            if w.collapsing {
+                w.collapsing = false;
+                cx.notify();
+            }
+        });
+    }
 }
 
 fn point_in_frame(mx: f64, my: f64, f: Frame, pad: f64) -> bool {
@@ -1278,6 +1362,39 @@ fn open_note_window(
     })
 }
 
+/// 编辑态的失焦退出判定：窗口激活过才在失焦时退出编辑，避免进入编辑瞬间的激活抖动误退出。
+#[derive(Debug, Clone, Copy, Default)]
+struct EditBlurGuard {
+    armed: bool,
+}
+
+impl EditBlurGuard {
+    /// 进入编辑；`window_active` 是窗口此刻是否已是 key。用户点耳标 / 卡片时，NonactivatingPanel
+    /// 在 mouseDown 就成了 key，之后不会再收到「变为 active」的通知，必须当场就绪，否则失焦永远不退出编辑。
+    fn enter(&mut self, window_active: bool) {
+        self.armed = window_active;
+    }
+
+    /// 窗口激活状态变化；返回 true 表示该排队复核并退出编辑。
+    fn on_activation(&mut self, editing: bool, active: bool) -> bool {
+        if active {
+            if editing {
+                self.armed = true;
+            }
+            return false;
+        }
+        editing && self.armed
+    }
+
+    fn armed(self) -> bool {
+        self.armed
+    }
+
+    fn reset(&mut self) {
+        self.armed = false;
+    }
+}
+
 /// 单个便签窗口内的拖拽起点状态。
 #[derive(Clone, Copy)]
 struct DragSession {
@@ -1296,9 +1413,11 @@ pub struct NoteWindow {
     docked: bool,
     dock_edge: Option<Edge>,
     expanded: bool,
+    /// 停靠卡片正在收回耳标：过渡播完前仍画卡片（见 `settle_collapsed`）。
+    collapsing: bool,
     visible: bool,
     editing: bool,
-    activated_for_edit: bool,
+    blur_guard: EditBlurGuard,
     hovered: bool,
     drag: Option<DragSession>,
     snap_preview: Option<Edge>,
@@ -1344,13 +1463,8 @@ impl NoteWindow {
                 }
             }),
             cx.observe_window_activation(window, move |this, window, cx| {
-                if window.is_window_active() {
-                    if this.editing {
-                        this.activated_for_edit = true;
-                    }
-                    return;
-                }
-                if this.editing && this.activated_for_edit {
+                let editing = this.editing;
+                if this.blur_guard.on_activation(editing, window.is_window_active()) {
                     let id = id_for_blur.clone();
                     // 给窗口切换留 80ms 缓冲，避免激活瞬间偶发抖动导致立即退出编辑。
                     cx.spawn_in(window, async move |this, cx| {
@@ -1358,7 +1472,7 @@ impl NoteWindow {
                             .timer(Duration::from_millis(80))
                             .await;
                         let _ = this.update_in(cx, |this, window, cx| {
-                            if this.editing && this.activated_for_edit && !window.is_window_active()
+                            if this.editing && this.blur_guard.armed() && !window.is_window_active()
                             {
                                 cx.defer(move |cx| {
                                     finish_edit_window(&id, EditEndMode::EndSessionNoReturn, cx);
@@ -1377,9 +1491,10 @@ impl NoteWindow {
             docked,
             dock_edge,
             expanded,
+            collapsing: false,
             visible,
             editing: false,
-            activated_for_edit: false,
+            blur_guard: EditBlurGuard::default(),
             hovered: false,
             drag: None,
             snap_preview: None,
@@ -1406,6 +1521,11 @@ impl NoteWindow {
             || self.expanded != expanded
             || self.visible != visible
             || self.text != note.text;
+        if self.expanded && !expanded {
+            self.collapsing = docked && visible && !offscreen();
+        } else if expanded || !visible {
+            self.collapsing = false;
+        }
         self.docked = docked;
         self.dock_edge = dock_edge;
         self.expanded = expanded;
@@ -1438,7 +1558,6 @@ impl NoteWindow {
         self.hover_task = None;
         self.unhover_task = None;
         self.editing = true;
-        self.activated_for_edit = false;
         let current_text = self.text.clone();
         self.textarea.update(cx, |ta, cx| {
             if ta.value().as_ref() != current_text {
@@ -1448,6 +1567,7 @@ impl NoteWindow {
         if let Some(handle) = NoteFrameHandle::of(window) {
             handle.set_editing(true);
         }
+        self.blur_guard.enter(window.is_window_active());
         self.focus_editor(window, cx);
         cx.notify();
     }
@@ -1477,7 +1597,7 @@ impl NoteWindow {
             return;
         }
         self.editing = false;
-        self.activated_for_edit = false;
+        self.blur_guard.reset();
         self.save_task = None;
         let value = self.textarea.read(cx).value().to_string();
         if value != self.text {
@@ -1897,7 +2017,7 @@ impl Render for NoteWindow {
         let pal = style::palette(window);
         let id = self.id.clone();
 
-        if self.docked && !self.expanded {
+        if self.docked && !self.expanded && !self.collapsing {
             return self.render_tab(&pal, cx);
         }
         self.render_card(id, &pal, window, cx)
@@ -2550,5 +2670,66 @@ mod tests {
         });
         assert!(!mgr.dirty_save);
         assert_eq!(saved.as_deref(), Some("草稿 v2"));
+    }
+
+    #[test]
+    fn blur_after_typing_ends_edit_when_window_was_already_key() {
+        // 用户点耳标或卡片进入编辑时，NonactivatingPanel 在 mouseDown 那一刻就成了 key，
+        // 进入编辑后不会再收到「变为 active」的通知。输入完点到别处，失焦必须照样退出编辑：
+        // 否则 `editing_id` 一直残留，悬停轮询停掉、卡片保持展开，便签再也收不回边（CARM-142）。
+        let mut guard = EditBlurGuard::default();
+        guard.enter(true);
+        assert!(guard.on_activation(true, false), "已是 key 时进入编辑，失焦必须退出编辑");
+    }
+
+    #[test]
+    fn blur_before_window_ever_activates_does_not_end_edit() {
+        // 从启动器新建便签时窗口进入编辑那一刻还不是 key：激活完成前的抖动（先收到失焦）不能把刚开的编辑关掉；
+        // 激活之后再失焦才退出。
+        let mut guard = EditBlurGuard::default();
+        guard.enter(false);
+        assert!(!guard.on_activation(true, false));
+        assert!(!guard.on_activation(true, true));
+        assert!(guard.on_activation(true, false));
+
+        // 退出编辑后再失焦不应重复触发退出。
+        guard.reset();
+        assert!(!guard.on_activation(false, false));
+    }
+
+    #[test]
+    fn dock_tween_eases_out_and_lands_exactly_on_target() {
+        // 悬停弹出原来是一次 setFrame 直接跳到卡片尺寸（CARM-142「不丝滑」）。过渡要先快后慢、逐帧单调长大，
+        // 且最后一帧必须精确落在目标 frame：差一两个点，悬停命中和队列里相邻耳标的位置就会错开。
+        let tab = Frame { x: 1490.0, y: 400.0, w: 22.0, h: 64.0 };
+        let card = Frame { x: 1232.0, y: 332.0, w: 280.0, h: 200.0 };
+        assert_eq!(tween_frame(tab, card, 0.0), tab);
+        assert_eq!(tween_frame(tab, card, 1.0), card);
+        assert_eq!(tween_frame(tab, card, 1.7), card);
+
+        let mut prev_w = tab.w;
+        for step in 1..20 {
+            let f = tween_frame(tab, card, f64::from(step) / 20.0);
+            assert!(f.w >= prev_w, "宽度必须单调变化：{f:?}");
+            assert!(f.x + f.w <= card.x + card.w + 0.5, "右侧停靠卡片在过渡中也要贴着屏幕边：{f:?}");
+            prev_w = f.w;
+        }
+        // ease-out：前一半时间走完大半距离，弹出时手感跟手。
+        let half = tween_frame(tab, card, 0.5);
+        assert!(half.w - tab.w > (card.w - tab.w) * 0.8, "{half:?}");
+    }
+
+    #[test]
+    fn only_visible_docked_size_changes_are_tweened() {
+        // 只有耳标 ↔ 卡片（尺寸变化）才过渡；队列重排只挪位置要直接到位，否则新建一张便签整列耳标都会漂；
+        // 刚显示出来的窗口和自由浮窗也不做过渡。
+        let tab = Frame { x: 1490.0, y: 400.0, w: 22.0, h: 64.0 };
+        let card = Frame { x: 1232.0, y: 332.0, w: 280.0, h: 200.0 };
+        let moved_tab = Frame { y: 480.0, ..tab };
+        assert!(animates_dock_transition(true, true, tab, card));
+        assert!(animates_dock_transition(true, true, card, tab));
+        assert!(!animates_dock_transition(true, true, tab, moved_tab));
+        assert!(!animates_dock_transition(true, false, tab, card));
+        assert!(!animates_dock_transition(false, true, tab, card));
     }
 }
