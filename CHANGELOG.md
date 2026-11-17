@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-11-17
+
 ### Changed
 
 - Clipboard history keeps formatting. Text copied from web pages, documents and code editors is saved with its rich-text forms (RTF, HTML and RTFD), and pasting it from the history brings back the bold, links, lists and code colors. Plain-text editors still get plain text, and Paste as Plain Text (⌥↵) still drops the formatting. Each item keeps at most 1 MB of rich text; a form that doesn't fit, such as a note with large images, is skipped and the text is saved as before. History from earlier versions is kept and pastes as plain text.
