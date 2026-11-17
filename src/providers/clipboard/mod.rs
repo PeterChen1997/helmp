@@ -32,7 +32,7 @@ use crate::provider::{
     Action, Block, Detail, Icon, Item, NamedAction, Outcome, Provider, Scope, Tint,
 };
 use present::{Clock, TextKind};
-use store::{Added, Entry, Kind, MAX_BYTES, NewClip, Source, Store};
+use store::{Added, Entry, Format, Kind, MAX_BYTES, NewClip, RICH_TYPES, Source, Store};
 use watcher::Read;
 
 const PROVIDER_ID: &str = "clipboard";
@@ -235,7 +235,11 @@ impl Provider for Clipboard {
 
     fn start(&self) -> Result<()> {
         let dir = crate::paths::data_dir()?;
-        self.inner.open(Store::open(&dir)?)?;
+        // 打开时会补建新列 / 新表（迁移）：失败就是用户的历史打不开，必须报上来。错误里只有路径和 SQLite 信息。
+        if let Err(err) = Store::open(&dir).and_then(|store| self.inner.open(store)) {
+            crate::telemetry::report("clipboard.open", &err);
+            return Err(err);
+        }
         if SHARED.set(Arc::clone(&self.inner)).is_err() {
             eprintln!("helmp: 剪贴板 provider 被启动了两次，清空历史只作用于第一个实例");
         }
@@ -271,6 +275,7 @@ impl Provider for Clipboard {
                     {
                         if let Err(err) = inner.prune(config) {
                             eprintln!("helmp: 清理过期剪贴板历史失败：{err:#}");
+                            crate::telemetry::report("clipboard.prune", &err);
                         }
                         retention = config.retention_days();
                         pruned_at = Instant::now();
@@ -289,6 +294,7 @@ impl Provider for Clipboard {
                         watcher::poll(&pasteboard, &mut last, &recording(&full), source.as_ref());
                     if let Err(err) = inner.handle(read, source) {
                         eprintln!("helmp: 剪贴板采集失败：{err:#}");
+                        crate::telemetry::report("clipboard.capture", &err);
                     }
                 }
             })
@@ -462,6 +468,29 @@ enum PasteMode {
     PlainText,
 }
 
+impl PasteMode {
+    fn event_name(self) -> &'static str {
+        match self {
+            PasteMode::Paste => "paste",
+            PasteMode::Copy => "copy",
+            PasteMode::PlainText => "plain_text",
+        }
+    }
+}
+
+/// 写回的富文本种类的上报短名。只可能是 [`RICH_TYPES`] 表里的值。
+fn format_names(formats: &[Format]) -> Vec<&'static str> {
+    formats
+        .iter()
+        .filter_map(|format| {
+            RICH_TYPES
+                .iter()
+                .find(|(uti, _)| *uti == format.uti)
+                .map(|(_, name)| *name)
+        })
+        .collect()
+}
+
 #[derive(Default)]
 struct Inner {
     /// `start` 之前为 `None`。
@@ -615,18 +644,10 @@ impl Inner {
                 AfterCopy::Done | AfterCopy::Paste => outcome,
             });
         }
-        let (entry, image_path) = {
-            let guard = self.store.lock().expect("clipboard store poisoned");
-            let store = guard.as_ref().context(not_ready())?;
-            let entry = store.get(id)?.with_context(|| missing(id))?;
-            let image_path = store.image_path(&entry);
-            (entry, image_path)
-        };
-        let written = match mode {
-            PasteMode::PlainText => as_plain_text(&entry)?,
-            PasteMode::Paste | PasteMode::Copy => entry,
-        };
-        macos::write(&written, &image_path)?;
+        // 读库或写剪贴板失败报 Sentry（错误里只有条目 id 和路径，没有内容）。
+        // 之后「焦点没回来所以没发 ⌘V」是使用中的正常情况，不报。
+        self.write_back(id, mode)
+            .inspect_err(|err| crate::telemetry::report("clipboard.paste", err))?;
         {
             let mut guard = self.store.lock().expect("clipboard store poisoned");
             let store = guard.as_mut().context(not_ready())?;
@@ -644,6 +665,30 @@ impl Inner {
                 Ok(Outcome::Done)
             }
         }
+    }
+
+    /// 按 `mode` 把第 `id` 条写回系统剪贴板：原样粘贴 / 复制时连同富文本表示一起写，纯文本粘贴只写文字。
+    fn write_back(&self, id: i64, mode: PasteMode) -> Result<()> {
+        let (entry, image_path, formats) = {
+            let guard = self.store.lock().expect("clipboard store poisoned");
+            let store = guard.as_ref().context(not_ready())?;
+            let entry = store.get(id)?.with_context(|| missing(id))?;
+            let image_path = store.image_path(&entry);
+            let formats = match (mode, entry.kind) {
+                (PasteMode::Paste | PasteMode::Copy, Kind::Text) => store.formats(id)?,
+                _ => Vec::new(),
+            };
+            (entry, image_path, formats)
+        };
+        let written = match mode {
+            PasteMode::PlainText => as_plain_text(&entry)?,
+            PasteMode::Paste | PasteMode::Copy => entry,
+        };
+        macos::write(&written, &image_path, &formats)?;
+        if written.kind == Kind::Text {
+            crate::telemetry::clipboard_paste(mode.event_name(), &format_names(&formats));
+        }
+        Ok(())
     }
 }
 

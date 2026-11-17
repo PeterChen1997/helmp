@@ -16,7 +16,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSData, NSString, NSURL};
 
-use super::store::{Entry, ImageFormat, Kind, MAX_BYTES, Source};
+use super::store::{Entry, Format, ImageFormat, Kind, MAX_BYTES, Source};
 use super::watcher::{Image, Pasteboard, TRANSIENT_TYPE};
 use crate::i18n::{tr, trf};
 
@@ -73,6 +73,18 @@ impl Pasteboard for SystemPasteboard {
         })
     }
 
+    fn data(&self, uti: &str, max: u64) -> Option<Result<Vec<u8>, u64>> {
+        autoreleasepool(|_| {
+            let data = pasteboard().dataForType(&NSString::from_str(uti))?;
+            let bytes = data.length() as u64;
+            Some(if bytes > max {
+                Err(bytes)
+            } else {
+                Ok(data.to_vec())
+            })
+        })
+    }
+
     fn image(&self) -> Option<Result<Image, u64>> {
         autoreleasepool(|_| {
             let pasteboard = pasteboard();
@@ -117,9 +129,19 @@ pub fn frontmost_app() -> Option<Source> {
     })
 }
 
-/// 把历史条目写回系统剪贴板，并打上 TransientType 标记。
-pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
-    // 图片在进 autoreleasepool 前读好，IO 错误直接带路径上报。
+/// 把历史条目写回系统剪贴板，并打上 TransientType 标记。文本条目连同 `formats`（RTF / HTML / RTFD）
+/// 一起写：目标 App 自己挑最合适的那种，纯文本编辑器照样拿到纯文本。
+pub fn write(entry: &Entry, image_path: &Path, formats: &[Format]) -> Result<()> {
+    autoreleasepool(|_| write_to(&pasteboard(), entry, image_path, formats))
+}
+
+fn write_to(
+    pasteboard: &NSPasteboard,
+    entry: &Entry,
+    image_path: &Path,
+    formats: &[Format],
+) -> Result<()> {
+    // 图片先读好，IO 错误直接带路径上报。
     let image = match entry.kind {
         Kind::Image => Some((
             std::fs::read(image_path).with_context(|| {
@@ -133,60 +155,61 @@ pub fn write(entry: &Entry, image_path: &Path) -> Result<()> {
         )),
         _ => None,
     };
-    autoreleasepool(|_| {
-        let pasteboard = pasteboard();
-        pasteboard.clearContents();
-        let written = match (entry.kind, &image) {
-            (Kind::Text, _) => {
-                pasteboard.setString_forType(&NSString::from_str(&entry.content), string_type())
-            }
-            (Kind::Image, Some((bytes, format))) => {
-                let ty = match format {
-                    ImageFormat::Png => png_type(),
-                    ImageFormat::Tiff => tiff_type(),
-                };
-                pasteboard.setData_forType(Some(&NSData::with_bytes(bytes)), ty)
-            }
-            (Kind::Image, None) => bail!(tr(
-                "图片条目没有读到图片数据",
-                "The image item has no image data"
-            )),
-            (Kind::Files, _) => {
-                let urls: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = entry
-                    .content
-                    .lines()
-                    .map(|path| {
-                        ProtocolObject::from_retained(NSURL::fileURLWithPath(&NSString::from_str(
-                            path,
-                        )))
-                    })
-                    .collect();
-                ensure!(
-                    !urls.is_empty(),
-                    tr("文件条目没有路径", "The file item has no paths")
-                );
-                pasteboard.writeObjects(&NSArray::from_retained_slice(&urls))
-            }
-        };
-        ensure!(
-            written,
-            trf!(
-                "写入系统剪贴板失败（第 {} 条）",
-                "Couldn’t write item #{} to the clipboard",
-                entry.id
-            )
-        );
-        let marked = pasteboard
-            .setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE));
-        ensure!(
-            marked,
-            tr(
-                "给剪贴板内容打 TransientType 标记失败",
-                "Couldn’t mark the clipboard content as transient"
-            )
-        );
-        Ok(())
-    })
+    pasteboard.clearContents();
+    let written = match (entry.kind, &image) {
+        (Kind::Text, _) => {
+            pasteboard.setString_forType(&NSString::from_str(&entry.content), string_type())
+                && formats.iter().all(|format| {
+                    pasteboard.setData_forType(
+                        Some(&NSData::with_bytes(&format.data)),
+                        &NSString::from_str(&format.uti),
+                    )
+                })
+        }
+        (Kind::Image, Some((bytes, format))) => {
+            let ty = match format {
+                ImageFormat::Png => png_type(),
+                ImageFormat::Tiff => tiff_type(),
+            };
+            pasteboard.setData_forType(Some(&NSData::with_bytes(bytes)), ty)
+        }
+        (Kind::Image, None) => bail!(tr(
+            "图片条目没有读到图片数据",
+            "The image item has no image data"
+        )),
+        (Kind::Files, _) => {
+            let urls: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = entry
+                .content
+                .lines()
+                .map(|path| {
+                    ProtocolObject::from_retained(NSURL::fileURLWithPath(&NSString::from_str(path)))
+                })
+                .collect();
+            ensure!(
+                !urls.is_empty(),
+                tr("文件条目没有路径", "The file item has no paths")
+            );
+            pasteboard.writeObjects(&NSArray::from_retained_slice(&urls))
+        }
+    };
+    ensure!(
+        written,
+        trf!(
+            "写入系统剪贴板失败（第 {} 条）",
+            "Couldn’t write item #{} to the clipboard",
+            entry.id
+        )
+    );
+    let marked =
+        pasteboard.setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE));
+    ensure!(
+        marked,
+        tr(
+            "给剪贴板内容打 TransientType 标记失败",
+            "Couldn’t mark the clipboard content as transient"
+        )
+    );
+    Ok(())
 }
 
 /// 把一段纯文本写进系统剪贴板，打上 TransientType 标记（剪贴板历史不记录它）。片段粘贴用。
@@ -394,6 +417,64 @@ pub fn post_key_now(keycode: u16, flags: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_entry(content: &str) -> Entry {
+        Entry {
+            id: 1,
+            kind: Kind::Text,
+            content: content.into(),
+            chars: content.chars().count(),
+            width: 0,
+            height: 0,
+            source: None,
+            copied_at_ms: 0,
+            seq: 1,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn rich_text_is_written_back_in_every_format_plus_plain_text() {
+        // 真的 NSPasteboard（私有命名的，不碰系统剪贴板）：富文本 App 要能拿到 RTF / HTML，
+        // 纯文本编辑器照样拿到纯文本，并且带 Transient 标记（自己和别的剪贴板工具都不再记一次）。
+        autoreleasepool(|_| {
+            let name = format!("helmp-rich-test-{}", std::process::id());
+            let board = NSPasteboard::pasteboardWithName(&NSString::from_str(&name));
+            let formats = [
+                Format {
+                    uti: "public.rtf".into(),
+                    data: b"{\\rtf1\\ansi {\\b Bold}}".to_vec(),
+                },
+                Format {
+                    uti: "public.html".into(),
+                    data: b"<b>Bold</b>".to_vec(),
+                },
+            ];
+            write_to(&board, &text_entry("Bold"), Path::new(""), &formats).unwrap();
+            let read = |uti: &str| {
+                board
+                    .dataForType(&NSString::from_str(uti))
+                    .map(|data| data.to_vec())
+            };
+            assert_eq!(
+                board.stringForType(string_type()).map(|s| s.to_string()),
+                Some("Bold".into())
+            );
+            assert_eq!(read("public.rtf"), Some(formats[0].data.clone()));
+            assert_eq!(read("public.html"), Some(b"<b>Bold</b>".to_vec()));
+            assert!(read(TRANSIENT_TYPE).is_some());
+
+            // 纯文本粘贴：只剩文字，上一次的富文本表示必须清掉。
+            write_to(&board, &text_entry("Bold"), Path::new(""), &[]).unwrap();
+            assert_eq!(read("public.rtf"), None);
+            assert_eq!(read("public.html"), None);
+            assert_eq!(
+                board.stringForType(string_type()).map(|s| s.to_string()),
+                Some("Bold".into())
+            );
+            board.clearContents();
+        });
+    }
 
     const ME: i32 = 100;
 

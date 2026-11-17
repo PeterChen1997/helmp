@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- Clipboard history keeps formatting. Text copied from web pages, documents and code editors is saved with its rich-text forms (RTF, HTML and RTFD), and pasting it from the history brings back the bold, links, lists and code colors. Plain-text editors still get plain text, and Paste as Plain Text (⌥↵) still drops the formatting. Each item keeps at most 1 MB of rich text; a form that doesn't fit, such as a note with large images, is skipped and the text is saved as before. History from earlier versions is kept and pastes as plain text.
+
+### 简体中文
+
+#### 变更
+
+- 剪贴板历史保留格式。从网页、文档、代码编辑器复制的文字会连同富文本表示（RTF、HTML、RTFD）一起保存，从历史里粘贴时粗体、链接、列表和代码高亮都会回来。纯文本编辑器照样拿到纯文本，「粘贴为纯文本」（⌥↵）照样去掉格式。每条最多保留 1 MB 富文本；放不下的那种表示（比如带大图的笔记）不保存，文字照常记录。旧版本的历史全部保留，按纯文本粘贴。
+
 ## [0.4.9] - 2026-11-15
 
 ### Added
