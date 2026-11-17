@@ -159,6 +159,11 @@ pub fn note_resized(width: f64) {
     track("note_resized", json!({ "size": note_size_bucket(width) }));
 }
 
+/// 编辑完一张便签、正文里用到了 Markdown：只发用到的语法类别（如 `bold+task`），不发正文。
+pub fn note_markdown_used(kinds: &[&'static str]) {
+    track("note_markdown_used", json!({ "kinds": kinds.join("+") }));
+}
+
 fn note_size_bucket(width: f64) -> &'static str {
     if width <= 300.0 {
         "s"

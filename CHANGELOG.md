@@ -6,6 +6,26 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Sticky notes now render Markdown as you write: headings, bullet lists, checkboxes, bold, italic, inline code and links. The markers (`#`, `**`, `- [ ]`) only show faintly on the line with the cursor, so formatting stays editable. Click a checkbox to tick it without entering edit mode; links open in your browser (http/https only). Notes are still stored as plain Markdown, and Chinese input methods work as in any native text field.
+- Drag the grip in the corner of a note to resize it (bottom-right, or bottom-left for notes docked on the right edge). Sizes range from 220×140 up to 640×720, capped at half the screen width and three quarters of its height, and each note remembers its own size.
+
+### Changed
+
+- When a docked note expands, the other tabs on that edge slide out of its way like the Dock instead of being covered.
+
+### 简体中文
+
+#### 新增
+
+- 便签支持所见即所得的 Markdown：标题、列表、复选框、粗体、斜体、行内代码和链接。`#`、`**`、`- [ ]` 这些标记只在光标所在行淡淡显示，格式随时可改；复选框不进编辑也能直接点；链接点了用浏览器打开（只开 http/https）。正文仍按 Markdown 原文保存，中文输入法和普通原生输入框一样好用。
+- 拖便签角上的把手可以改大小（右下角；贴在右边的便签在左下角）。最小 220×140，最大 640×720，且不超过屏幕宽度一半、高度四分之三；每张便签各自记住大小。
+
+#### 变更
+
+- 吸边便签展开时，同一侧的其他耳标会像 Dock 一样滑开让位，不再被盖住。
+
 ## [0.4.12] - 2026-11-17
 
 ### Fixed

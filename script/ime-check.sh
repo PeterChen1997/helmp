@@ -2,7 +2,7 @@
 # 输入法回归检查：用真实 HID 按键在面板里打字，核对中英文输入法都能用。
 #
 # 依次切到系统拼音、豆包（若已启用）、ABC，在面板搜索框里打 nihao+空格 / wx，看搜索框的结果；
-# 再在 flomo 表单里用系统拼音打一次。结束后恢复原来的输入法。
+# 再在 flomo 表单里用系统拼音打一次，最后在便签的原生编辑器里用系统拼音、豆包各打一次。结束后恢复原来的输入法。
 #
 # 前提：先 `bash script/bundle.sh release`，且 Helmp.app 已有辅助功能权限（发按键要用）。
 # 会短暂唤起面板抢焦点约数秒；面板不是 key window 时绝不发键（不会打进别的 App）。
@@ -37,6 +37,8 @@ run() { # 输入源 查询 按键 期望（正则）
   if ! "$work/tis" select "${source}" 2>/dev/null; then echo "跳过 ${source}（未启用）"; return; fi
   rm -rf "$work/d" "$work/h"; mkdir -p "$work/d" "$work/h"
   echo '{"clipboard":{"enabled":false},"onboarding_done":true}' > "$work/d/config.json"
+  # 便签用例：放一张屏幕上的浮窗便签，`note-edit:0` 让它进入编辑后按键都打进便签。
+  [[ "$keys" == note-edit:* ]] && echo '{"notes":[{"id":"ime","text":"- [ ] ","created_at":1,"updated_at":1,"placement":{"kind":"floating","frame":{"x":200,"y":200,"w":320,"h":220}}}]}' > "$work/d/notes.json"
   open -n -W --stdout "$work/out.log" --stderr "$work/out.log" \
     --env HELMP_SELF_TEST_KEY_WINDOW=1 --env HELMP_DATA_DIR="$work/d" --env HOME="$work/h" \
     --env "HELMP_SELF_TEST=$query" --env "HELMP_SELF_TEST_KEYS=$keys" "$app"
@@ -55,4 +57,6 @@ run com.apple.inputmethod.SCIM.ITABC 1 "native:nihao native:_" 'query="你好"'
 run com.bytedance.inputmethod.doubaoime.pinyin 1 "native:nihao native:_" 'query="你'
 run com.apple.keylayout.ABC 1 "native:wx" 'query="wx"'
 run com.apple.inputmethod.SCIM.ITABC flomo "tab native:nihao native:_" '"content", "你好"'
+run com.apple.inputmethod.SCIM.ITABC 1 "note-edit:0 native:nihao native:_ wait:1 notes-debug" 'editing=Some.*text="- \[ \] 你好"'
+run com.bytedance.inputmethod.doubaoime.pinyin 1 "note-edit:0 native:nihao native:_ wait:1 notes-debug" 'editing=Some.*text="- \[ \] 你'
 exit "$failed"

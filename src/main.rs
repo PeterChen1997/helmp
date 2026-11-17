@@ -108,7 +108,9 @@ fn run_gui(engine: Engine) {
             });
             cx.set_global(engine::EngineGlobal(launcher.read(cx).engine()));
 
-            let quiet_self_test = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT").is_some();
+            let notes_demo = std::env::var_os("HELMP_SELF_TEST_NOTES_DEMO").is_some();
+            let quiet_self_test =
+                std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT").is_some() || notes_demo;
             if !quiet_self_test {
                 if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
                     // 大声失败：热键注册不上整个 App 就没有意义。
@@ -137,7 +139,10 @@ fn run_gui(engine: Engine) {
                 mcp::ipc::serve(cx);
             }
 
-            if let Some(append) = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT") {
+            if notes_demo {
+                // 便签录屏演示：便签真的显示在屏幕上（不设 HELMP_SELF_TEST），不注册热键和菜单栏。
+                providers::notes::self_test_demo(cx);
+            } else if let Some(append) = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT") {
                 notes_quit_self_test(cx, append.to_string_lossy().into_owned());
             } else if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
                 self_test(cx, window, launcher, query.to_string_lossy().into_owned());
@@ -153,20 +158,15 @@ fn notes_quit_self_test(cx: &mut App, append: String) {
         let target = cx
             .update(|cx| providers::notes::self_test_begin_edit(0, cx))
             .expect("self-test note window missing");
+        // 正文编辑器是原生 NSTextView：按输入法上屏的同一条 insertText 路径写入，
+        // 再等它的变更事件经 channel 回到主循环（正常打字也是这条链路）。
+        let inserted = cx.update(|cx| providers::notes::self_test_insert_text(&append, cx));
+        assert!(inserted, "self-test note editor missing");
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(30))
+            .await;
         target
-            .update(cx, |_, window, cx| {
-                // 离屏窗口先绘制一帧挂载 Textarea 输入处理器，再通过真实按键分发向编辑器输入。
-                window.draw(cx).clear(cx);
-                for ch in append.chars() {
-                    let stroke = gpui_kit::Keystroke {
-                        key: ch.to_string(),
-                        key_char: Some(ch.to_string()),
-                        ..Default::default()
-                    };
-                    window.dispatch_keystroke(stroke, cx);
-                }
-                window.draw(cx).clear(cx);
-            })
+            .update(cx, |_, window, cx| window.draw(cx).clear(cx))
             .expect("self-test note window gone");
         let state = cx.update(providers::notes::self_test_debug_state);
         let disk_before_quit = providers::notes::store::path()
@@ -347,6 +347,26 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     .and_then(|s| s.parse::<usize>().ok())
                 {
                     let ok = cx.update(|cx| providers::notes::self_test_select(idx, cx));
+                    println!(
+                        "self-test key {token}: ok={ok} {}",
+                        cx.update(providers::notes::self_test_debug_state)
+                    );
+                    continue;
+                }
+                // `note-edit:<序号>`：让第 n 张便签进入编辑（原生编辑器成为第一响应者），之后的按键都打进便签。
+                if let Some(idx) = token
+                    .strip_prefix("note-edit:")
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    // 先收起自检开头唤起的面板：面板失焦隐藏时会把焦点还给之前的 App，便签会跟着失焦退出编辑。
+                    if is_active(cx) {
+                        toggle(window, launcher.clone(), cx);
+                        cx.background_executor().timer(settle).await;
+                    }
+                    let ok = cx
+                        .update(|cx| providers::notes::self_test_begin_edit(idx, cx))
+                        .is_some();
+                    cx.background_executor().timer(settle).await;
                     println!(
                         "self-test key {token}: ok={ok} {}",
                         cx.update(providers::notes::self_test_debug_state)

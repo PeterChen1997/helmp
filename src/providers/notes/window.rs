@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use gpui_kit::component::input::{InputEvent, Position, Textarea, TextareaState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::markdown;
+use super::rich::{Colors, EditorEvent, RichEditor};
 use super::native::{
     self, CARD_CORNER_RADIUS, NoteFrameHandle, TAB_CORNER_RADIUS, left_mouse_pressed,
     mouse_location_tl, offscreen,
@@ -33,6 +34,13 @@ const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 /// 超过多少 pt 才算拖拽，避免轻点误拖。
 const DRAG_THRESHOLD: f64 = 4.0;
 const DRAG_TICK: Duration = Duration::from_millis(8);
+/// 卡片标题栏高度（含底边线）与正文区内边距：原生编辑器按这些摆在正文区上。
+const HEADER_H: f64 = 29.0;
+const BODY_TOP: f64 = HEADER_H + 8.0;
+const BODY_PAD_X: f64 = 11.0;
+const BODY_PAD_BOTTOM: f64 = 14.0;
+/// 窗口窄于这个宽度时（过渡中）不显示原生编辑器。
+const MIN_EDITOR_W: f64 = 160.0;
 /// 停靠便签耳标 ↔ 卡片的窗口过渡时长与帧间隔（约 120 帧/秒）。
 const DOCK_ANIM: Duration = Duration::from_millis(160);
 const ANIM_TICK: Duration = Duration::from_millis(8);
@@ -47,6 +55,8 @@ static MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// 防止异步布局应用任务乱序覆盖。
 static LAYOUT_SEQ: AtomicU64 = AtomicU64::new(0);
+/// 录屏演示时固定住悬停展开（指针不在卡片上，悬停轮询会立刻把它收回去）。
+static DEMO_PIN_HOVER: AtomicBool = AtomicBool::new(false);
 /// `HELMP_SELF_TEST` 选中的目标便签 id。
 static SELF_TEST_NOTE_ID: OnceLock<RwLock<Option<String>>> = OnceLock::new();
 
@@ -83,6 +93,80 @@ pub fn self_test_begin_edit(index: usize, cx: &mut App) -> Option<AnyWindowHandl
         .clone()?;
     begin_edit(&id, cx);
     self_test_target(cx)
+}
+
+/// 图形自检：往正在编辑的便签里「上屏」一段文字（走 NSTextView 的 insertText，和输入法上屏同一路径）。
+pub fn self_test_insert_text(text: &str, cx: &mut App) -> bool {
+    let Some(id) = cx.global::<NotesManager>().editing_id.clone() else {
+        return false;
+    };
+    let Some(view) = cx.global::<NotesManager>().windows.get(&id).map(|e| e.view.clone()) else {
+        return false;
+    };
+    view.read(cx).editor.as_ref().is_some_and(|editor| {
+        editor.insert_text_for_test(text);
+        true
+    })
+}
+
+/// 图形演示（录屏取证用，`HELMP_SELF_TEST_NOTES_DEMO`）：依次悬停展开中间 / 顶部耳标（看让位动画）、
+/// 编辑中间那张并写入 Markdown、退出编辑看渲染、改大小，每步打印状态；最后退出。
+pub fn self_test_demo(cx: &mut App) {
+    ensure_manager(cx);
+    let ids: Vec<String> = ordered_visible_notes(cx.global::<NotesManager>())
+        .into_iter()
+        .map(|n| n.id.clone())
+        .collect();
+    let (Some(mid), Some(top)) = (ids.get(2).cloned(), ids.first().cloned()) else {
+        println!("self-test notes-demo: 需要至少 3 张便签");
+        cx.quit();
+        return;
+    };
+    DEMO_PIN_HOVER.store(true, Ordering::Relaxed);
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let report = |label: &str, cx: &mut AsyncApp| {
+            let state = cx.update(self_test_debug_state);
+            println!("self-test notes-demo {label}: {state}");
+        };
+        cx.background_executor().timer(Duration::from_millis(1200)).await;
+        cx.update(|cx| set_hovered_dock(Some(mid.clone()), cx));
+        cx.background_executor().timer(Duration::from_millis(1300)).await;
+        report("hover-mid", cx);
+        cx.update(|cx| set_hovered_dock(None, cx));
+        cx.background_executor().timer(Duration::from_millis(1000)).await;
+        cx.update(|cx| set_hovered_dock(Some(top.clone()), cx));
+        cx.background_executor().timer(Duration::from_millis(1300)).await;
+        report("hover-top", cx);
+        cx.update(|cx| set_hovered_dock(None, cx));
+        cx.background_executor().timer(Duration::from_millis(1000)).await;
+        cx.update(|cx| {
+            set_hovered_dock(Some(mid.clone()), cx);
+            begin_edit(&mid, cx);
+        });
+        cx.background_executor().timer(Duration::from_millis(500)).await;
+        cx.update(|cx| self_test_insert_text("\n- [ ] 新任务 **加粗** 和 `code`", cx));
+        cx.background_executor().timer(Duration::from_millis(1500)).await;
+        report("editing", cx);
+        cx.update(|cx| finish_edit_window(&mid, EditEndMode::EndSessionNoReturn, cx));
+        cx.update(|cx| set_hovered_dock(Some(mid.clone()), cx));
+        cx.background_executor().timer(Duration::from_millis(1500)).await;
+        report("rendered", cx);
+        let frame = cx.update(|cx| {
+            cx.global::<NotesManager>()
+                .windows
+                .get(&mid)
+                .and_then(|e| e.native.as_ref()?.frame_tl())
+        });
+        if let Some(frame) = frame {
+            cx.update(|cx| commit_resize(&mid, Frame { w: 420.0, h: 340.0, ..frame }, cx));
+        }
+        cx.background_executor().timer(Duration::from_millis(1500)).await;
+        report("resized", cx);
+        cx.update(|cx| set_hovered_dock(None, cx));
+        cx.background_executor().timer(Duration::from_millis(1000)).await;
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
 }
 
 pub fn self_test_clear() {
@@ -1340,7 +1424,7 @@ fn poll_hover_step(cx: &mut App) -> bool {
         mgr.unhover_started = None;
         return false;
     }
-    if any_dragging {
+    if any_dragging || DEMO_PIN_HOVER.load(Ordering::Relaxed) {
         return true;
     }
     let Some((mx, my)) = mouse_location_tl() else {
@@ -1406,10 +1490,36 @@ fn open_note_window(
         (Ok(_), None) => return None,
     };
     let mut native_handle = None;
-    let _ = handle.update(cx, |_, window, _| {
+    let (tx, rx) = async_channel::unbounded::<EditorEvent>();
+    let _ = handle.update(cx, |_, window, cx| {
         native::setup(window, plan.frame, plan.radius, !visible);
         native_handle = NoteFrameHandle::of(window);
+        let colors = editor_colors(&style::palette(window));
+        let editor = native_handle
+            .as_ref()
+            .and_then(|h| RichEditor::attach(h.ns_window(), &note.text, colors, tx));
+        if editor.is_none() {
+            // 挂不上原生编辑器时卡片退回纯文本显示，不能编辑；上报以便排查。
+            telemetry::report("notes.editor_attach", &anyhow::anyhow!("便签原生编辑器挂载失败"));
+        }
+        view.update(cx, |w, cx| {
+            w.editor = editor;
+            cx.notify();
+        });
     });
+    // 原生编辑器的事件回到 GPUI 主循环里处理；窗口关掉后编辑器释放、channel 关闭，任务随之结束。
+    let weak = view.downgrade();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Ok(event) = rx.recv().await {
+            let alive = handle
+                .update(cx, |_, _, cx| weak.update(cx, |w, cx| w.on_editor_event(event, cx)).is_ok())
+                .unwrap_or(false);
+            if !alive {
+                break;
+            }
+        }
+    })
+    .detach();
     Some(WindowEntry {
         handle,
         view,
@@ -1510,7 +1620,10 @@ pub struct NoteWindow {
     drag: Option<DragSession>,
     resize: Option<ResizeSession>,
     snap_preview: Option<Edge>,
-    textarea: Entity<TextareaState>,
+    /// 正文的原生所见即所得编辑器（窗口建好后挂上；挂不上时卡片只显示纯文本）。
+    editor: Option<RichEditor>,
+    /// 这次编辑开始时的正文，退出编辑时比对，决定要不要记 `note_markdown_used`。
+    session_start_text: Option<String>,
     focus: FocusHandle,
     hover_task: Option<Task<()>>,
     unhover_task: Option<Task<()>>,
@@ -1529,28 +1642,8 @@ impl NoteWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let initial_text = note.text.clone();
-        let textarea = cx.new(|cx| {
-            let mut ta = TextareaState::new(window, cx)
-                .placeholder(tr("写点什么…（Esc 完成）", "Write something… (Esc to finish)"));
-            ta.set_value(initial_text.clone(), window, cx);
-            ta
-        });
-
-        let id_for_change = note.id.clone();
         let id_for_blur = note.id.clone();
         let subs = vec![
-            cx.subscribe_in(&textarea, window, move |this, ta, event: &InputEvent, _, cx| {
-                if let InputEvent::Change = event {
-                    let value = ta.read(cx).value().to_string();
-                    if value != this.text {
-                        this.text = value.clone();
-                        update_note_text(&id_for_change, value, cx);
-                        this.schedule_debounced_save(cx);
-                        cx.notify();
-                    }
-                }
-            }),
             cx.observe_window_activation(window, move |this, window, cx| {
                 let editing = this.editing;
                 if this.blur_guard.on_activation(editing, window.is_window_active()) {
@@ -1588,7 +1681,8 @@ impl NoteWindow {
             drag: None,
             resize: None,
             snap_preview: None,
-            textarea,
+            editor: None,
+            session_start_text: None,
             focus,
             hover_task: None,
             unhover_task: None,
@@ -1627,6 +1721,9 @@ impl NoteWindow {
         }
         if self.text != note.text {
             self.text = note.text.clone();
+            if let Some(editor) = &self.editor {
+                editor.set_text(&self.text);
+            }
         }
         if changed {
             cx.notify();
@@ -1653,25 +1750,55 @@ impl NoteWindow {
         self.hover_task = None;
         self.unhover_task = None;
         self.editing = true;
-        let current_text = self.text.clone();
-        self.textarea.update(cx, |ta, cx| {
-            if ta.value().as_ref() != current_text {
-                ta.set_value(current_text, window, cx);
-            }
-        });
+        self.session_start_text = Some(self.text.clone());
+        // 点正文进来的：AppKit 已经把光标落在点的位置，保留它；从耳标 / Scope 进来的放到末尾。
+        let clicked_into_text = self.editor.as_ref().is_some_and(RichEditor::is_first_responder);
+        if let Some(editor) = &self.editor {
+            editor.set_text(&self.text);
+        }
         if let Some(handle) = NoteFrameHandle::of(window) {
             handle.set_editing(true);
         }
         self.blur_guard.enter(window.is_window_active());
-        self.focus_editor(window, cx);
+        if let Some(editor) = &self.editor {
+            editor.set_editing(true, !clicked_into_text);
+        }
         cx.notify();
     }
 
-    fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.textarea.update(cx, |ta, cx| {
-            let end = end_position(&ta.value());
-            ta.set_cursor_position(end, window, cx);
-        });
+    fn focus_editor(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        if let Some(editor) = &self.editor {
+            editor.set_editing(true, false);
+        }
+    }
+
+    /// 原生编辑器发回的事件（打字、点正文、Esc、点链接）。
+    fn on_editor_event(&mut self, event: EditorEvent, cx: &mut Context<Self>) {
+        match event {
+            EditorEvent::Changed(value) => {
+                if value != self.text {
+                    self.text = value.clone();
+                    update_note_text(&self.id, value, cx);
+                    self.schedule_debounced_save(cx);
+                    cx.notify();
+                }
+            }
+            EditorEvent::BeginEdit => {
+                let id = self.id.clone();
+                cx.defer(move |cx| begin_edit(&id, cx));
+            }
+            EditorEvent::Escape => {
+                if self.editing {
+                    let id = self.id.clone();
+                    cx.defer(move |cx| finish_edit_window(&id, EditEndMode::EndSessionReturnFocus, cx));
+                }
+            }
+            EditorEvent::OpenUrl(url) => {
+                if crate::effects::dry("open", &url).is_none() {
+                    cx.open_url(&url);
+                }
+            }
+        }
     }
 
     fn leave_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1694,10 +1821,23 @@ impl NoteWindow {
         self.editing = false;
         self.blur_guard.reset();
         self.save_task = None;
-        let value = self.textarea.read(cx).value().to_string();
+        // 先退出原生编辑（会把没上屏的组字收尾），再读最终正文。
+        let value = match &self.editor {
+            Some(editor) => {
+                editor.set_editing(false, false);
+                editor.text()
+            }
+            None => self.text.clone(),
+        };
         if value != self.text {
             self.text = value.clone();
             update_note_text(&self.id, value, cx);
+        }
+        if self.session_start_text.take().is_some_and(|start| start != self.text) {
+            let kinds = markdown::used_kinds(&self.text);
+            if !kinds.is_empty() {
+                telemetry::note_markdown_used(&kinds);
+            }
         }
         if let Some(handle) = NoteFrameHandle::of(window) {
             handle.set_editing(false);
@@ -2142,18 +2282,16 @@ impl NoteWindow {
         }
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    /// 编辑时按键都进原生编辑器（Esc 走 [`EditorEvent::Escape`]）；这里兜底 GPUI 视图仍拿着焦点的情况。
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.editing {
             return;
         }
         let key = event.keystroke.key.as_str();
         let mods = &event.keystroke.modifiers;
         if key == "escape" && !mods.modified() {
-            // 如果中文输入法仍在组字状态（有 marked text），把 Esc 留给输入法消候选词。
-            let composing = self.textarea.update(cx, |ta, cx| {
-                gpui_kit::EntityInputHandler::marked_text_range(ta, window, cx).is_some()
-            });
-            if composing {
+            // 中文输入法还在组字时，把 Esc 留给输入法消候选词。
+            if self.editor.as_ref().is_some_and(RichEditor::has_marked_text) {
                 return;
             }
             cx.stop_propagation();
@@ -2243,22 +2381,18 @@ fn apply_resize(notes: &mut [Note], id: &str, frame: Frame, visible: Frame) -> O
     Some((w, h))
 }
 
-fn end_position(text: &str) -> Position {
-    let line = text.matches('\n').count();
-    let last = text.rsplit('\n').next().unwrap_or_default();
-    Position::new(
-        u32::try_from(line).unwrap_or(u32::MAX),
-        u32::try_from(last.encode_utf16().count()).unwrap_or(u32::MAX),
-    )
+/// 首个去掉 Markdown 标记后仍非空的行（`## 标题`、`- [ ] 买菜` 不能把 `#`、`[` 显示出来）。
+fn first_plain_line(text: &str) -> String {
+    text.lines()
+        .map(markdown::plain_line)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
 }
 
 /// 卡片微缩标题栏摘要（取首行非空文字，截断至 24 个字符）。
 pub fn summary_title(text: &str) -> String {
-    let first = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("");
+    let first = first_plain_line(text);
+    let first = first.as_str();
     if first.is_empty() {
         return tr("便签", "Note").to_string();
     }
@@ -2270,17 +2404,27 @@ pub fn summary_title(text: &str) -> String {
 
 /// 书签耳标上的竖排短字（最多 2~3 字，避免在小高度压缩下溢出）。
 pub fn tab_chars(text: &str) -> Vec<String> {
-    let first = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_else(|| tr("便签", "Note"));
+    let first = first_plain_line(text);
+    let first = if first.is_empty() { tr("便签", "Note") } else { first.as_str() };
     first
         .chars()
         .filter(|ch| !ch.is_whitespace())
         .take(3)
         .map(|ch| ch.to_string())
         .collect()
+}
+
+fn editor_colors(pal: &Palette) -> Colors {
+    let rgba = |c: Hsla| {
+        let c = Rgba::from(c);
+        [f64::from(c.r), f64::from(c.g), f64::from(c.b), f64::from(c.a)]
+    };
+    Colors {
+        fg: rgba(pal.fg),
+        muted: rgba(pal.muted),
+        accent: rgba(pal.accent),
+        code_bg: rgba(pal.key_bg),
+    }
 }
 
 /// 缩放把手：右下角三角形排布的六个小点（贴右边时镜像到左下角）。
@@ -2307,7 +2451,9 @@ impl Render for NoteWindow {
         let pal = style::palette(window);
         let id = self.id.clone();
 
-        if self.docked && !self.expanded && !self.collapsing {
+        let card = !(self.docked && !self.expanded && !self.collapsing);
+        self.layout_editor(card, &pal, window);
+        if !card {
             return self.render_tab(&pal, cx);
         }
         self.render_card(id, &pal, window, cx)
@@ -2315,6 +2461,25 @@ impl Render for NoteWindow {
 }
 
 impl NoteWindow {
+    /// 每帧把原生编辑器摆到卡片正文区（耳标态隐藏），顺带同步亮 / 暗色。
+    fn layout_editor(&self, card: bool, pal: &Palette, window: &Window) {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        editor.set_colors(editor_colors(pal));
+        let size = window.viewport_size();
+        let (w, h) = (f64::from(size.width), f64::from(size.height));
+        // 耳标 ↔ 卡片过渡的前几帧窗口还很窄，这时露出编辑器会把字挤成一列，先不显示；
+        // 收回耳标的过渡中窗口从大往小缩，正文跟着重排会闪，直接收起编辑器只留卡片外框。
+        let body = (card && !self.collapsing && w >= MIN_EDITOR_W).then_some((
+            BODY_PAD_X,
+            BODY_TOP,
+            w - BODY_PAD_X * 2.0,
+            h - BODY_TOP - BODY_PAD_BOTTOM,
+        ));
+        editor.layout(body, h);
+    }
+
     fn render_tab(&mut self, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let accent = style::tint(crate::provider::Tint::Orange);
         let strip_color = if self.hovered { pal.accent } else { accent };
@@ -2447,51 +2612,43 @@ impl NoteWindow {
                     ),
             );
 
-        let body = if self.editing {
-            div()
-                .flex_1()
-                .min_h_0()
-                .px(px(10.))
-                .py(px(8.))
-                .text_size(px(13.))
-                .text_color(pal.fg)
-                .child(
-                    Textarea::new(&self.textarea)
-                        .appearance(false)
-                        .bordered(false)
-                        .h_full(),
-                )
-                .into_any_element()
-        } else {
-            let empty = self.text.trim().is_empty();
-            let preview_text = if empty {
-                tr("点击输入便签内容…", "Click to write a note…").to_string()
+        // 正文由原生编辑器画在 body 区上方（见 `layout_editor`）；这里只画空便签的占位提示，
+        // 以及原生编辑器挂不上时的纯文本兜底。
+        let empty = self.text.trim().is_empty();
+        let body_text = if empty {
+            Some(if self.editing {
+                tr("写点什么…（支持 Markdown，Esc 完成）", "Write something… (Markdown, Esc to finish)")
+                    .to_string()
             } else {
-                self.text.clone()
-            };
-            div()
-                .id(SharedString::from(format!("note-body-{}", self.id)))
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px(px(11.))
-                .py(px(9.))
-                .cursor(CursorStyle::IBeam)
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    let id = this.id.clone();
-                    cx.defer(move |cx| begin_edit(&id, cx));
-                }))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .line_height(px(19.))
-                        .text_color(if empty { pal.muted } else { pal.fg })
-                        .whitespace_normal()
-                        .child(preview_text),
-                )
-                .into_any_element()
+                tr("点击输入便签内容…", "Click to write a note…").to_string()
+            })
+        } else if self.editor.is_none() {
+            Some(self.text.clone())
+        } else {
+            None
         };
+        let body = div()
+            .id(SharedString::from(format!("note-body-{}", self.id)))
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(BODY_PAD_X as f32))
+            .pt(px((BODY_TOP - HEADER_H) as f32))
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                let id = this.id.clone();
+                cx.defer(move |cx| begin_edit(&id, cx));
+            }))
+            .children(body_text.map(|text| {
+                div()
+                    .text_size(px(13.))
+                    .line_height(px(19.))
+                    .text_color(if empty { pal.muted } else { pal.fg })
+                    .whitespace_normal()
+                    .child(text)
+            }))
+            .into_any_element();
 
         let grip_on_left = self.grip_on_left();
         let resizing = self.resize.map(|r| r.last_frame_tl);
@@ -2732,6 +2889,9 @@ mod tests {
         assert_eq!(summary_title("\n  发版检查\n第二行"), "发版检查");
         assert_eq!(tab_chars("\n  发版检查\n第二行"), ["发", "版", "检"]);
         assert_eq!(summary_title("   \n"), "便签");
+        // Markdown 标记不能出现在耳标和标题上。
+        assert_eq!(summary_title("## 发版检查\n- [ ] a"), "发版检查");
+        assert_eq!(tab_chars("- [x] **买菜**"), ["买", "菜"]);
     }
 
     #[test]

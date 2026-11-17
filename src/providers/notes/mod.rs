@@ -4,14 +4,16 @@
 //! - Scope「便签」列出全部便签（含已归档），支持正文与拼音搜索；⌘K 菜单提供「钉回桌面」「删除」。
 //! - 桌面便签窗口、队列重排、全局快捷键与菜单栏联动见 [`window`]。
 
+mod markdown;
 mod native;
+mod rich;
 mod screen;
 pub mod store;
 mod window;
 
 pub use window::{
     NotesRequest, all_hidden, dock_all, flush_on_quit, handle, menu_generation,
-    restore_on_launch, self_test_begin_edit, self_test_clear, self_test_debug_state,
+    restore_on_launch, self_test_begin_edit, self_test_clear, self_test_debug_state, self_test_demo, self_test_insert_text,
     self_test_select, self_test_target, toggle_visibility,
 };
 
