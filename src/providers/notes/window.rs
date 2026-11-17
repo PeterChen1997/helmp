@@ -274,6 +274,8 @@ pub struct NotesManager {
     editing_return_pid: i32,
     dirty_save: bool,
     hover_poll_running: bool,
+    /// 上次同步时展开的停靠便签，用来判断耳标是在让位 / 归位（要滑动）还是队列重排（直接到位）。
+    last_open_docked: Option<String>,
     hover_candidate: Option<(String, Instant)>,
     unhover_started: Option<(String, Instant)>,
     screen_observer: Option<ScreenObserver>,
@@ -297,6 +299,7 @@ impl NotesManager {
             editing_return_pid: 0,
             dirty_save: false,
             hover_poll_running: false,
+            last_open_docked: None,
             hover_candidate: None,
             unhover_started: None,
             screen_observer: None,
@@ -892,7 +895,19 @@ fn plan_windows(
         let edge = if side == 0 { Edge::Left } else { Edge::Right };
         let screen = resolve_display(screens, &display_uuid).unwrap_or(primary);
         let ids: Vec<&str> = list.iter().map(|n| n.id.as_str()).collect();
-        for (id, tab_frame) in store::dock_layout(&ids, edge, screen.visible) {
+        let mut layout = store::dock_layout(&ids, edge, screen.visible);
+        // 这一列有展开的卡片时，其余耳标让位（编辑中的优先于悬停的）。
+        let open = [editing_id, hovered_dock_id]
+            .into_iter()
+            .flatten()
+            .find_map(|id| list.iter().find(|n| n.id == id));
+        if let Some(open) = open
+            && let Some((_, tab)) = layout.iter().find(|(id, _)| *id == open.id)
+        {
+            let card = expanded_frame_for_docked(*tab, open.size, edge, screen.visible);
+            layout = store::make_way(&layout, &open.id, card, screen.visible);
+        }
+        for (id, tab_frame) in layout {
             docked_frames.insert(id, (tab_frame, edge, screen.visible));
         }
     }
@@ -1012,8 +1027,15 @@ fn sync_all_windows(cx: &mut App) {
 }
 
 fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
-    let (plans, snapshots_by_id, hidden_all) = {
-        let mgr = cx.global::<NotesManager>();
+    let (plans, snapshots_by_id, hidden_all, open_changed) = {
+        let mgr = cx.global_mut::<NotesManager>();
+        let open = open_docked_id(
+            &mgr.notes,
+            mgr.editing_id.as_deref(),
+            mgr.hovered_dock_id.as_deref(),
+        );
+        let open_changed = mgr.last_open_docked != open;
+        mgr.last_open_docked = open;
         let plans = plan_windows(
             &mgr.notes,
             screens,
@@ -1026,7 +1048,7 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
-        (plans, map, mgr.hidden_all)
+        (plans, map, mgr.hidden_all, open_changed)
     };
 
     let wanted_ids: std::collections::HashSet<String> =
@@ -1080,7 +1102,15 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
             {
                 let tween_from = native_handle
                     .frame_tl()
-                    .filter(|from| animates_dock_transition(plan.docked, was_visible, *from, plan.frame));
+                    .filter(|from| {
+                        animates_dock_transition(
+                            plan.docked,
+                            was_visible,
+                            *from,
+                            plan.frame,
+                            open_changed,
+                        )
+                    });
                 native_ops.push(NativeOp {
                     id: plan.id.clone(),
                     handle: native_handle,
@@ -1150,8 +1180,14 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
                     if t >= 1.0 {
                         break;
                     }
-                    for (handle, from, to, _) in &tweens {
-                        handle.set_frame_tl(tween_frame(*from, *to, t), CARD_CORNER_RADIUS);
+                    for (handle, from, to, radius) in &tweens {
+                        // 让位的耳标宽度不变，保持耳标圆角；耳标 ↔ 卡片过渡中按卡片画。
+                        let r = if (from.w - to.w).abs() < 0.5 {
+                            *radius
+                        } else {
+                            CARD_CORNER_RADIUS
+                        };
+                        handle.set_frame_tl(tween_frame(*from, *to, t), r);
                     }
                 }
                 for (handle, _, to, radius) in &tweens {
@@ -1183,9 +1219,29 @@ fn tween_frame(from: Frame, to: Frame, t: f64) -> Frame {
     }
 }
 
-/// 只有原本就显示着、尺寸要变的停靠窗口（耳标 ↔ 卡片）才做过渡；只挪位置的队列重排直接到位。
-fn animates_dock_transition(docked: bool, was_visible: bool, from: Frame, to: Frame) -> bool {
-    docked && was_visible && ((from.w - to.w).abs() >= 0.5 || (from.h - to.h).abs() >= 0.5)
+/// 只有原本就显示着的停靠窗口才过渡：尺寸要变（耳标 ↔ 卡片、让位时压缩）总是过渡；
+/// 只挪位置的，只有展开的卡片换了（`open_changed`，即耳标在让位 / 归位）才滑过去，
+/// 新建、删除带来的队列重排仍直接到位。
+fn animates_dock_transition(
+    docked: bool,
+    was_visible: bool,
+    from: Frame,
+    to: Frame,
+    open_changed: bool,
+) -> bool {
+    let resized = (from.w - to.w).abs() >= 0.5 || (from.h - to.h).abs() >= 0.5;
+    let moved = (from.x - to.x).abs() >= 0.5 || (from.y - to.y).abs() >= 0.5;
+    docked && was_visible && (resized || (moved && open_changed))
+}
+
+/// 这次同步哪张停靠便签是展开的（编辑中优先于悬停）；和上次不同就说明耳标要让位或归位。
+fn open_docked_id(notes: &[Note], editing_id: Option<&str>, hovered_id: Option<&str>) -> Option<String> {
+    [editing_id, hovered_id].into_iter().flatten().find_map(|id| {
+        notes
+            .iter()
+            .find(|n| n.id == id && matches!(n.placement, Placement::Docked { .. }))
+            .map(|n| n.id.clone())
+    })
 }
 
 /// 收起过渡播完后把视图切回耳标（过渡中一直画卡片，避免耳标内容被拉伸到卡片大小）。
@@ -2763,6 +2819,43 @@ mod tests {
     }
 
     #[test]
+    fn expanded_card_never_covers_other_tabs_in_its_column() {
+        // CARM-143：多张耳标时打开一张会盖住其他的。悬停或编辑任意一张时，同列其余耳标都要让开；
+        // 收起后回到原位。编辑中的优先于悬停的（两者不同时只让编辑那张展开的位置）。
+        let screens = sample_screens();
+        let notes: Vec<Note> = (0..6)
+            .map(|i| {
+                store::new_note(
+                    "便签",
+                    i,
+                    Placement::Docked { edge: Edge::Right, display: "main".into(), order: i as u32 },
+                )
+            })
+            .collect();
+        let rest = plan_windows(&notes, &screens, false, None, None);
+        for open in &notes {
+            for (hovered, editing) in [(Some(open.id.as_str()), None), (None, Some(open.id.as_str()))] {
+                let planned = plan_windows(&notes, &screens, false, hovered, editing);
+                let card = planned.iter().find(|p| p.id == open.id).unwrap();
+                assert!(card.expanded);
+                for tab in planned.iter().filter(|p| p.id != open.id && p.visible) {
+                    let f = tab.frame;
+                    assert!(
+                        f.y + f.h <= card.frame.y || f.y >= card.frame.y + card.frame.h,
+                        "{f:?} 被 {:?} 盖住",
+                        card.frame
+                    );
+                }
+            }
+        }
+        // 编辑 a 时悬停 f：按编辑那张让位，f 不展开成第二张卡片也不被盖住。
+        let both = plan_windows(&notes, &screens, false, Some(&notes[5].id), Some(&notes[0].id));
+        assert!(both[0].expanded);
+        let collapsed = plan_windows(&notes, &screens, false, None, None);
+        assert_eq!(collapsed, rest, "收起后耳标回到原位");
+    }
+
+    #[test]
     fn hidden_all_hides_windows_without_losing_positions() {
         let screens = sample_screens();
         let notes = vec![Note {
@@ -3103,16 +3196,19 @@ mod tests {
     }
 
     #[test]
-    fn only_visible_docked_size_changes_are_tweened() {
-        // 只有耳标 ↔ 卡片（尺寸变化）才过渡；队列重排只挪位置要直接到位，否则新建一张便签整列耳标都会漂；
+    fn only_visible_docked_size_changes_and_make_way_moves_are_tweened() {
+        // 耳标 ↔ 卡片（尺寸变化）总是过渡；只挪位置的，展开的卡片换了（让位 / 归位，CARM-143）才滑，
+        // 新建 / 删除的队列重排要直接到位，否则新建一张便签整列耳标都会漂（CARM-142）；
         // 刚显示出来的窗口和自由浮窗也不做过渡。
         let tab = Frame { x: 1490.0, y: 400.0, w: 22.0, h: 64.0 };
         let card = Frame { x: 1232.0, y: 332.0, w: 280.0, h: 200.0 };
         let moved_tab = Frame { y: 480.0, ..tab };
-        assert!(animates_dock_transition(true, true, tab, card));
-        assert!(animates_dock_transition(true, true, card, tab));
-        assert!(!animates_dock_transition(true, true, tab, moved_tab));
-        assert!(!animates_dock_transition(true, false, tab, card));
-        assert!(!animates_dock_transition(false, true, tab, card));
+        assert!(animates_dock_transition(true, true, tab, card, false));
+        assert!(animates_dock_transition(true, true, card, tab, false));
+        assert!(!animates_dock_transition(true, true, tab, moved_tab, false));
+        assert!(animates_dock_transition(true, true, tab, moved_tab, true));
+        assert!(!animates_dock_transition(true, true, tab, tab, true));
+        assert!(!animates_dock_transition(true, false, tab, card, true));
+        assert!(!animates_dock_transition(false, true, tab, card, true));
     }
 }

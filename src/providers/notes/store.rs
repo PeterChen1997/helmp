@@ -269,6 +269,84 @@ pub fn dock_layout(ids: &[&str], edge: Edge, visible: Frame) -> Vec<(String, Fra
         .collect()
 }
 
+/// 某张耳标展开成卡片时给同列其他耳标让位（像 Dock）：卡片上方的往上挤、下方的往下挤，
+/// 本来就不挨着卡片的不动；一侧放不下时先压缩高度，压到最小仍放不下就藏掉离卡片最远的。
+/// `layout` 是 `dock_layout` 的结果；返回仍显示的耳标（展开的那张保留原耳标位置，供收起时用）。
+pub fn make_way(
+    layout: &[(String, Frame)],
+    open_id: &str,
+    card: Frame,
+    visible: Frame,
+) -> Vec<(String, Frame)> {
+    let Some(open) = layout.iter().position(|(id, _)| id == open_id) else {
+        return layout.to_vec();
+    };
+    // 离卡片由近到远。
+    let above: Vec<&(String, Frame)> = layout[..open].iter().rev().collect();
+    let below: Vec<&(String, Frame)> = layout[open + 1..].iter().collect();
+    let mut out = vec![layout[open].clone()];
+    // 上方：紧贴卡片顶边往上排，原位已经更靠上的不动。
+    let top_limit = card.y - TAB_GAP;
+    out.extend(
+        make_way_side(&above, top_limit - visible.y)
+            .into_iter()
+            .map(|(id, frame, offset, keep)| {
+                let packed = top_limit - offset - frame.h;
+                let y = if keep { frame.y.min(packed) } else { packed };
+                (id, Frame { y: y.floor(), ..frame })
+            }),
+    );
+    // 下方：紧贴卡片底边往下排，原位已经更靠下的不动。
+    let bottom_start = card.y + card.h + TAB_GAP;
+    out.extend(
+        make_way_side(&below, visible.y + visible.h - bottom_start)
+            .into_iter()
+            .map(|(id, frame, offset, keep)| {
+                let packed = bottom_start + offset;
+                let y = if keep { frame.y.max(packed) } else { packed };
+                (id, Frame { y: y.ceil(), ..frame })
+            }),
+    );
+    out.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
+    out
+}
+
+/// 一侧能留下哪些耳标、多高：返回 (id, 改过高度的 Frame, 离卡片的累计偏移, 是否可保留原位)。
+/// `tabs` 按离卡片由近到远，`space` 是这一侧可用的高度。
+fn make_way_side(tabs: &[&(String, Frame)], space: f64) -> Vec<(String, Frame, f64, bool)> {
+    let Some(first) = tabs.first() else {
+        return Vec::new();
+    };
+    let fits = |count: usize, h: f64| {
+        count as f64 * h + count.saturating_sub(1) as f64 * TAB_GAP <= space
+    };
+    let natural_h = first.1.h;
+    let (count, height, keep) = if fits(tabs.len(), natural_h) {
+        (tabs.len(), natural_h, true)
+    } else {
+        let mut count = tabs.len();
+        while count > 0 && !fits(count, TAB_MIN_H) {
+            count -= 1;
+        }
+        if count == 0 {
+            return Vec::new();
+        }
+        // 压缩后整侧紧贴卡片重排，不再保留原位。
+        let h = ((space - TAB_GAP * (count - 1) as f64) / count as f64)
+            .floor()
+            .clamp(TAB_MIN_H, natural_h);
+        (count, h, false)
+    };
+    tabs.iter()
+        .take(count)
+        .enumerate()
+        .map(|(index, (id, frame))| {
+            let offset = index as f64 * (height + TAB_GAP);
+            (id.clone(), Frame { h: height, ..*frame }, offset, keep)
+        })
+        .collect()
+}
+
 /// 只计算同显示器同侧；极限值饱和，避免损坏数据导致溢出 panic。
 pub fn next_order(notes: &[Note], edge: Edge, display: &str) -> u32 {
     notes
@@ -753,6 +831,93 @@ mod tests {
         let layout = dock_layout(&["a", "b"], Edge::Right, screen);
         assert_eq!(layout.len(), 1);
         assert_eq!(layout[0].1, screen);
+    }
+
+    /// 让位后的其余耳标不能碰到卡片（上下各留 TAB_GAP），展开的那张原地不动。
+    fn assert_clear_of_card(layout: &[(String, Frame)], open: &str, card: Frame) {
+        for (id, frame) in layout.iter().filter(|(id, _)| id != open) {
+            let clear = frame.y + frame.h + TAB_GAP <= card.y + 1e-9
+                || frame.y >= card.y + card.h + TAB_GAP - 1e-9;
+            assert!(clear, "{id} {frame:?} 被卡片 {card:?} 盖住");
+        }
+    }
+
+    fn card_on(tab: Frame, visible: Frame) -> Frame {
+        // 与 `expanded_frame_for_docked` 相同：280×200 以耳标中心对齐、夹在可用区内。
+        let y = (tab.y + tab.h / 2.0 - 100.0)
+            .clamp(visible.y, visible.y + visible.h - 200.0)
+            .round();
+        Frame { x: visible.x + visible.w - 280.0, y, w: 280.0, h: 200.0 }
+    }
+
+    #[test]
+    fn opening_a_tab_pushes_neighbours_aside_instead_of_covering_them() {
+        // 用户反馈：多张耳标时打开一张会盖住其他的。展开后其余耳标都要让开、保持原顺序、留在屏幕内。
+        let ids = ["a", "b", "c", "d", "e"];
+        let layout = dock_layout(&ids, Edge::Right, visible());
+        let open_tab = layout[2].1;
+        let card = card_on(open_tab, visible());
+        let moved = make_way(&layout, "c", card, visible());
+        assert_eq!(moved.len(), 5, "空间够时一张都不能藏");
+        assert_eq!(
+            moved.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ids,
+            "让位不能打乱顺序"
+        );
+        assert_eq!(moved.iter().find(|(id, _)| id == "c").unwrap().1, open_tab);
+        assert_clear_of_card(&moved, "c", card);
+        let others: Vec<_> = moved.iter().filter(|(id, _)| id != "c").cloned().collect();
+        assert_inside_and_separated(&others, visible());
+        // 只往外挤、高度不变：贴着卡片的那张紧挨卡片，离得远的不会被推得比需要的更远。
+        let b = moved.iter().find(|(id, _)| id == "b").unwrap().1;
+        assert_eq!(b.y + b.h + TAB_GAP, card.y);
+        assert_eq!(b.h, layout[1].1.h);
+    }
+
+    #[test]
+    fn each_side_shifts_as_a_block_by_just_enough() {
+        // 像 Dock 一样整侧平移同样的距离：相邻耳标间距不变，也不会被推得比需要的更远。
+        let tall = Frame { h: 2000.0, ..visible() };
+        let ids = ["a", "b", "c", "d", "e", "f", "g"];
+        let layout = dock_layout(&ids, Edge::Left, tall);
+        let card = card_on(layout[3].1, tall);
+        let moved = make_way(&layout, "d", card, tall);
+        assert_clear_of_card(&moved, "d", card);
+        let shift = |i: usize| moved[i].1.y - layout[i].1.y;
+        assert!(shift(0) < 0.0 && shift(0) == shift(1) && shift(1) == shift(2));
+        assert!(shift(4) > 0.0 && shift(4) == shift(5) && shift(5) == shift(6));
+        assert_eq!(moved[2].1.y + moved[2].1.h + TAB_GAP, card.y);
+        assert_eq!(moved[4].1.y, card.y + card.h + TAB_GAP);
+    }
+
+    #[test]
+    fn crowded_column_compresses_then_hides_farthest_tabs_without_overlap() {
+        // 一列塞满耳标时一侧放不下：先压缩高度，再藏掉离卡片最远的，不能越界或叠在卡片上。
+        let ids: Vec<String> = (0..20).map(|i| format!("n{i:02}")).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let layout = dock_layout(&refs, Edge::Right, visible());
+        for open in [0, 3, layout.len() / 2, layout.len() - 1] {
+            let open_id = layout[open].0.clone();
+            let card = card_on(layout[open].1, visible());
+            let moved = make_way(&layout, &open_id, card, visible());
+            assert!(moved.iter().any(|(id, _)| *id == open_id));
+            assert_clear_of_card(&moved, &open_id, card);
+            let others: Vec<_> = moved.iter().filter(|(id, _)| *id != open_id).cloned().collect();
+            assert_inside_and_separated(&others, visible());
+            // 藏掉的只能是两头最远的：留下的仍是原顺序里连续的一段。
+            let kept: Vec<usize> = moved
+                .iter()
+                .map(|(id, _)| layout.iter().position(|(l, _)| l == id).unwrap())
+                .collect();
+            assert!(kept.windows(2).all(|w| w[1] == w[0] + 1), "{kept:?}");
+        }
+    }
+
+    #[test]
+    fn make_way_without_open_tab_returns_layout_unchanged() {
+        let layout = dock_layout(&["a", "b"], Edge::Right, visible());
+        let card = card_on(layout[0].1, visible());
+        assert_eq!(make_way(&layout, "missing", card, visible()), layout);
     }
 
     #[test]
