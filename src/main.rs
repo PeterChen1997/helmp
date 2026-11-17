@@ -118,8 +118,9 @@ fn run_gui(engine: Engine) {
             menubar::install(cx);
             providers::notes::restore_on_launch(cx);
             telemetry::launched();
-            // 退出时进程直接结束、不会走到 Sentry guard 的 drop：先把排队的错误发完。
-            cx.on_app_quit(|_| {
+            // 退出时进程直接结束、不会走到 Sentry guard 的 drop：同步冲刷 debounce 内的便签编辑，并把排队的错误发完。
+            cx.on_app_quit(|cx| {
+                providers::notes::flush_on_quit(cx);
                 telemetry::flush();
                 async {}
             })

@@ -10,9 +10,9 @@ pub mod store;
 mod window;
 
 pub use window::{
-    NotesRequest, all_hidden, dock_all, handle, menu_generation, restore_on_launch,
-    self_test_clear, self_test_debug_state, self_test_select, self_test_target,
-    toggle_visibility,
+    NotesRequest, all_hidden, dock_all, flush_on_quit, handle, menu_generation,
+    restore_on_launch, self_test_clear, self_test_debug_state, self_test_select,
+    self_test_target, toggle_visibility,
 };
 
 use std::cmp::Reverse;
@@ -31,7 +31,27 @@ const ENTRY_KEYWORDS: [&str; 5] = ["便签", "bq", "notes", "note", "sticky"];
 const NEW_KEYWORDS: [&str; 4] = ["新建便签", "记便签", "new note", "create note"];
 
 #[derive(Default)]
-pub struct Notes;
+pub struct Notes {
+    #[cfg(test)]
+    snapshot_override: Option<Vec<Note>>,
+}
+
+impl Notes {
+    #[cfg(test)]
+    fn with_snapshot(notes: Vec<Note>) -> Self {
+        Self {
+            snapshot_override: Some(notes),
+        }
+    }
+
+    fn current_notes(&self) -> Vec<Note> {
+        #[cfg(test)]
+        if let Some(notes) = &self.snapshot_override {
+            return notes.clone();
+        }
+        window::snapshot()
+    }
+}
 
 impl Provider for Notes {
     fn id(&self) -> &'static str {
@@ -43,9 +63,10 @@ impl Provider for Notes {
         if text.is_empty() {
             return Vec::new();
         }
+        let notes = self.current_notes();
         let mut items = Vec::new();
         if let Some(score) = best(text, &ENTRY_KEYWORDS) {
-            let count = window::snapshot().len();
+            let count = notes.len();
             items.push(Item {
                 id: "notes:open".into(),
                 title: tr("便签", "Notes").into(),
@@ -61,7 +82,6 @@ impl Provider for Notes {
         if let Some(score) = best(text, &NEW_KEYWORDS) {
             items.push(new_note_item(score));
         }
-        let notes = window::snapshot();
         for note in &notes {
             if let Some(score) = note_match_score(note, text) {
                 items.push(note_item(note, score.min(700)));
@@ -71,7 +91,7 @@ impl Provider for Notes {
     }
 
     fn scope(&self) -> Option<Scope> {
-        let count = window::snapshot().len();
+        let count = self.current_notes().len();
         Some(Scope {
             id: PROVIDER_ID.into(),
             label: tr("便签", "Notes").into(),
@@ -86,7 +106,7 @@ impl Provider for Notes {
     }
 
     fn query_scoped(&self, query: &str, _filter: &str) -> Vec<Item> {
-        let notes = window::snapshot();
+        let notes = self.current_notes();
         let text = query.trim();
         let mut items = Vec::new();
 
@@ -294,17 +314,16 @@ fn note_item(note: &Note, score: u32) -> Item {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::notes::window::set_snapshot;
 
     #[test]
     fn scope_uses_s_prefix_and_quick_create_ranks_first() {
+        // 每个单测注入独立快照，避免并行执行时互相覆盖全局 SNAPSHOT。
         // 输入 `s 内容` 进入便签 Scope 时，第一项必须是「新建并吸边」，回车直接吸到主屏右侧队尾。
-        set_snapshot(&[store::new_note(
+        let provider = Notes::with_snapshot(vec![store::new_note(
             "旧便签内容",
             100,
             Placement::Archived,
         )]);
-        let provider = Notes;
         let scope = provider.scope().unwrap();
         assert!(scope.prefixes.contains(&"s ".to_string()));
 
@@ -336,9 +355,8 @@ mod tests {
         active.id = "id-active".into();
         let mut archived = store::new_note("上周周报草稿", 100, Placement::Archived);
         archived.id = "id-archived".into();
-        set_snapshot(&[active, archived]);
+        let provider = Notes::with_snapshot(vec![active, archived]);
 
-        let provider = Notes;
         let all = provider.query_scoped("", "");
         assert_eq!(all.len(), 3); // 2 notes + "新建便签"
         assert_eq!(all[0].id, "notes:id-active");
@@ -382,5 +400,23 @@ mod tests {
             .expect("`s ` 前缀应命中 notes");
         assert_eq!(scope.id, "notes");
         assert_eq!(rest, "周五前归档旧接口");
+    }
+
+    #[test]
+    fn independent_snapshots_do_not_interfere_across_providers() {
+        // 确认每个测试注入的独立快照互相隔离，不会因为共享全局状态而串台。
+        let mut a = store::new_note("便签甲", 10, Placement::Archived);
+        a.id = "only-a".into();
+        let mut b = store::new_note("便签乙", 20, Placement::Archived);
+        b.id = "only-b".into();
+        let pa = Notes::with_snapshot(vec![a]);
+        let pb = Notes::with_snapshot(vec![b]);
+
+        let ra = pa.query_scoped("", "");
+        let rb = pb.query_scoped("", "");
+        assert!(ra.iter().any(|i| i.id == "notes:only-a"));
+        assert!(!ra.iter().any(|i| i.id == "notes:only-b"));
+        assert!(rb.iter().any(|i| i.id == "notes:only-b"));
+        assert!(!rb.iter().any(|i| i.id == "notes:only-a"));
     }
 }

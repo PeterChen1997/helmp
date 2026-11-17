@@ -85,7 +85,7 @@ pub fn path() -> Result<PathBuf> {
 }
 
 /// 文件不存在才返回空；损坏或读取失败必须报错，避免后续覆盖用户便签。
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn load_from(path: &Path) -> Result<Vec<Note>> {
     load_from_inner(path, false)
 }
@@ -180,14 +180,18 @@ pub fn save(notes: &[Note]) {
     }
 }
 
-fn load_recovering_from(path: &Path, write_blocked: &AtomicBool) -> Result<Vec<Note>> {
+pub(super) fn load_recovering_from(path: &Path, write_blocked: &AtomicBool) -> Result<Vec<Note>> {
     write_blocked.store(true, Ordering::Relaxed);
     let result = load_from_inner(path, true);
     write_blocked.store(result.is_err(), Ordering::Relaxed);
     result
 }
 
-fn save_checked_to(path: &Path, notes: &[Note], write_blocked: &AtomicBool) -> Result<()> {
+pub(super) fn save_checked_to(
+    path: &Path,
+    notes: &[Note],
+    write_blocked: &AtomicBool,
+) -> Result<()> {
     // 读取 IO 错误或坏文件备份失败时持续拒写；不在每次保存时重读、反序列化整个文件。
     anyhow::ensure!(
         !write_blocked.load(Ordering::Relaxed),

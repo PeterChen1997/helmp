@@ -3,18 +3,23 @@
 //!
 //! 参照 `src/panel.rs` 与 `src/capture/native.rs` 模式在模块内独立实现，不改动 `src/capture/`。
 
+use std::ptr::NonNull;
+
 use block2::RcBlock;
 use gpui_kit::Window;
 use objc2::rc::Retained;
-use objc2::runtime::Bool;
+use objc2::runtime::{Bool, ProtocolObject};
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSColor, NSEvent, NSGlassEffectView,
-    NSGlassEffectViewStyle, NSImage, NSPopUpMenuWindowLevel, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSApplicationDidChangeScreenParametersNotification, NSAutoresizingMaskOptions,
+    NSBezierPath, NSColor, NSEvent, NSGlassEffectView, NSGlassEffectViewStyle, NSImage,
+    NSPopUpMenuWindowLevel, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
-use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    NSEdgeInsets, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSSize,
+};
 
 use super::screen::{cocoa_to_tl, point_cocoa_to_tl, primary_height, tl_to_cocoa};
 use super::store::Frame;
@@ -251,6 +256,36 @@ pub fn left_mouse_pressed() -> bool {
     (NSEvent::pressedMouseButtons() & 1) != 0
 }
 
+/// 保活屏幕参数变化观察者，析构时自动向通知中心注销。
+pub struct NotificationObserver(Retained<ProtocolObject<dyn NSObjectProtocol>>);
+
+impl Drop for NotificationObserver {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` 是 `addObserverForName:object:queue:usingBlock:` 返回的注册令牌。
+        unsafe {
+            NSNotificationCenter::defaultCenter().removeObserver(self.0.as_ref());
+        }
+    }
+}
+
+/// 订阅显示器增删、分辨率及可见区域（Dock / 菜单栏）变化通知。
+pub fn observe_screen_parameters(on_change: impl Fn() + Send + Sync + 'static) -> NotificationObserver {
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+        on_change();
+    });
+    let center = NSNotificationCenter::defaultCenter();
+    // SAFETY: 传入静态通知名与合法 block，返回的 token 由 `NotificationObserver` 持有并在 Drop 时注销。
+    let token = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationDidChangeScreenParametersNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    NotificationObserver(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +301,36 @@ mod tests {
         let editing = note_style_mask(true);
         assert!(editing.contains(NSWindowStyleMask::Borderless));
         assert!(!editing.contains(NSWindowStyleMask::NonactivatingPanel));
+    }
+
+    #[test]
+    fn screen_parameters_observer_receives_notification_and_unregisters_on_drop() {
+        // 运行中显示器热插拔或 Dock 变更依赖该通知唤醒布局重排；Drop 时必须注销避免悬空观察者。
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+        let observer = observe_screen_parameters(move || {
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+        });
+        let center = NSNotificationCenter::defaultCenter();
+        // SAFETY: 向默认通知中心发送标准屏幕参数变化通知，仅通知已注册 observer。
+        unsafe {
+            center.postNotificationName_object(
+                NSApplicationDidChangeScreenParametersNotification,
+                None,
+            );
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        drop(observer);
+        // SAFETY: 同上，用于验证 observer Drop 后不再收到回调。
+        unsafe {
+            center.postNotificationName_object(
+                NSApplicationDidChangeScreenParametersNotification,
+                None,
+            );
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 }

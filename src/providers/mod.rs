@@ -46,7 +46,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(processes::Processes::default()),
         Arc::new(window::Window),
         Arc::new(snippets::Snippets::default()),
-        Arc::new(notes::Notes),
+        Arc::new(notes::Notes::default()),
         Arc::new(websearch::WebSearch::new()),
         Arc::new(files::Files::new()),
         Arc::new(settings_panes::SettingsPanes),

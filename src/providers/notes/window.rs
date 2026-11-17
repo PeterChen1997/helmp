@@ -180,7 +180,7 @@ pub fn snapshot() -> Vec<Note> {
     guard.clone()
 }
 
-pub fn set_snapshot(notes: &[Note]) {
+fn set_snapshot(notes: &[Note]) {
     INITIALIZED.store(true, Ordering::Relaxed);
     *snapshot_lock().write().expect("notes snapshot poisoned") = notes.to_vec();
     MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -223,6 +223,29 @@ struct WindowEntry {
     handle: AnyWindowHandle,
     view: Entity<NoteWindow>,
     native: Option<NoteFrameHandle>,
+    visible: bool,
+}
+
+struct ScreenObserver {
+    _gpui: Subscription,
+    _native: native::NotificationObserver,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditEndMode {
+    /// 便签之间转移编辑：退出旧便签编辑态，保留外层会话捕获的归还 PID 与 hand-over。
+    TransferToAnotherNote,
+    /// 编辑会话结束但不主动归还焦点（失焦到其他 App / 窗口、拖拽、菜单栏收边/隐藏、退出应用）。
+    EndSessionNoReturn,
+    /// 编辑会话结束并把焦点归还给编辑前记录的 App（Esc、归档或删除正在编辑的便签）。
+    EndSessionReturnFocus,
+}
+
+#[derive(Debug, Clone)]
+struct HoverCandidate {
+    id: String,
+    frame: Frame,
+    visible: bool,
 }
 
 /// 全局便签管理器（主线程 `Global`）：持有真源 `notes`、各窗口句柄、悬停与编辑协调态。
@@ -237,6 +260,7 @@ pub struct NotesManager {
     hover_poll_running: bool,
     hover_candidate: Option<(String, Instant)>,
     unhover_started: Option<(String, Instant)>,
+    screen_observer: Option<ScreenObserver>,
 }
 
 impl Global for NotesManager {}
@@ -244,6 +268,10 @@ impl Global for NotesManager {}
 impl NotesManager {
     fn new(notes: Vec<Note>) -> Self {
         set_snapshot(&notes);
+        Self::from_notes(notes)
+    }
+
+    fn from_notes(notes: Vec<Note>) -> Self {
         Self {
             notes,
             windows: HashMap::new(),
@@ -255,7 +283,134 @@ impl NotesManager {
             hover_poll_running: false,
             hover_candidate: None,
             unhover_started: None,
+            screen_observer: None,
         }
+    }
+
+    fn start_edit_session(&mut self, id: &str, capture_pid: impl FnOnce() -> i32) -> Option<i32> {
+        self.editing_id = Some(id.to_string());
+        if self.editing_return_pid == 0 {
+            let pid = capture_pid();
+            self.editing_return_pid = pid;
+            if pid != 0 {
+                return Some(pid);
+            }
+        }
+        None
+    }
+
+    fn end_edit_session(&mut self, id: &str, mode: EditEndMode) -> (i32, bool) {
+        if self.editing_id.as_deref() == Some(id) {
+            self.editing_id = None;
+        }
+        match mode {
+            EditEndMode::TransferToAnotherNote => (0, false),
+            EditEndMode::EndSessionNoReturn => {
+                self.editing_return_pid = 0;
+                (0, true)
+            }
+            EditEndMode::EndSessionReturnFocus => {
+                let pid = std::mem::take(&mut self.editing_return_pid);
+                (pid, true)
+            }
+        }
+    }
+
+    fn apply_text_edit(&mut self, id: &str, text: String, update_global_snapshot: bool) -> bool {
+        let Some(note) = self.notes.iter_mut().find(|n| n.id == id) else {
+            return false;
+        };
+        if note.text == text {
+            return false;
+        }
+        note.text = text;
+        note.updated_at = now_unix_secs();
+        self.dirty_save = true;
+        if update_global_snapshot {
+            set_snapshot(&self.notes);
+        }
+        true
+    }
+
+    fn flush_dirty_with(
+        &mut self,
+        pending_editor: Option<(&str, String)>,
+        update_global_snapshot: bool,
+        save_fn: impl FnOnce(&[Note]),
+    ) {
+        if let Some((id, text)) = pending_editor {
+            self.apply_text_edit(id, text, update_global_snapshot);
+        }
+        if self.dirty_save {
+            self.dirty_save = false;
+            save_fn(&self.notes);
+        }
+    }
+
+    fn step_dock_hover(
+        &mut self,
+        mx: f64,
+        my: f64,
+        now: Instant,
+        candidates: &[HoverCandidate],
+    ) -> (Option<String>, Option<String>) {
+        let mut clear_open = None;
+        if let Some(open_id) = self.hovered_dock_id.clone() {
+            let inside_open = candidates
+                .iter()
+                .find(|c| c.visible && c.id == open_id)
+                .is_some_and(|c| point_in_frame(mx, my, c.frame, 4.0));
+            if inside_open {
+                self.unhover_started = None;
+                self.hover_candidate = None;
+                return (None, None);
+            }
+            let close_now = match &self.unhover_started {
+                Some((id, since)) if id == &open_id => {
+                    now.saturating_duration_since(*since) >= HOVER_CLOSE_DELAY
+                }
+                _ => {
+                    self.unhover_started = Some((open_id.clone(), now));
+                    false
+                }
+            };
+            if close_now {
+                self.unhover_started = None;
+                clear_open = Some(open_id);
+            }
+        } else {
+            self.unhover_started = None;
+        }
+
+        let hit_id = candidates
+            .iter()
+            .find(|c| {
+                c.visible
+                    && self.hovered_dock_id.as_deref() != Some(c.id.as_str())
+                    && point_in_frame(mx, my, c.frame, 2.0)
+            })
+            .map(|c| c.id.clone());
+
+        let Some(hit_id) = hit_id else {
+            self.hover_candidate = None;
+            return (clear_open, None);
+        };
+
+        let open_now = match &self.hover_candidate {
+            Some((id, since)) if id == &hit_id => {
+                now.saturating_duration_since(*since) >= HOVER_OPEN_DELAY
+            }
+            _ => {
+                self.hover_candidate = Some((hit_id.clone(), now));
+                false
+            }
+        };
+        if open_now {
+            self.hover_candidate = None;
+            self.unhover_started = None;
+            return (clear_open, Some(hit_id));
+        }
+        (clear_open, None)
     }
 }
 
@@ -269,6 +424,7 @@ pub fn now_unix_secs() -> i64 {
 pub fn restore_on_launch(cx: &mut App) {
     let notes = store::load();
     cx.set_global(NotesManager::new(notes));
+    ensure_screen_observer(cx);
     sync_all_windows(cx);
 }
 
@@ -277,6 +433,43 @@ fn ensure_manager(cx: &mut App) {
         let notes = store::load();
         cx.set_global(NotesManager::new(notes));
     }
+    ensure_screen_observer(cx);
+}
+
+fn ensure_screen_observer(cx: &mut App) {
+    if !cx.has_global::<NotesManager>() || cx.global::<NotesManager>().screen_observer.is_some() {
+        return;
+    }
+    let (tx, rx) = async_channel::bounded::<()>(1);
+    let tx_gpui = tx.clone();
+    let gpui_sub = cx.observe_displays(move |_, _| {
+        let _ = tx_gpui.try_send(());
+    });
+    let native_sub = native::observe_screen_parameters(move || {
+        let _ = tx.try_send(());
+    });
+    cx.global_mut::<NotesManager>().screen_observer = Some(ScreenObserver {
+        _gpui: gpui_sub,
+        _native: native_sub,
+    });
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while rx.recv().await.is_ok() {
+            while rx.try_recv().is_ok() {}
+            cx.update(handle_screens_changed);
+        }
+    })
+    .detach();
+}
+
+fn handle_screens_changed(cx: &mut App) {
+    if !cx.has_global::<NotesManager>() {
+        return;
+    }
+    let screens = current_screens();
+    if screens.is_empty() {
+        return;
+    }
+    sync_all_windows_for_screens(&screens, cx);
 }
 
 /// 处理来自启动器 / 全局快捷键的便签请求（主线程）。
@@ -296,13 +489,12 @@ pub fn handle(request: NotesRequest, cx: &mut App) {
 /// 菜单栏「全部收边」：退出编辑、取消隐藏，将全部桌面便签收到各自所在屏幕（优先右侧）队列。
 pub fn dock_all(cx: &mut App) {
     ensure_manager(cx);
-    exit_any_edit(false, cx);
+    exit_any_edit(EditEndMode::EndSessionNoReturn, cx);
     let screens = current_screens();
     let Some(primary) = screens.first().cloned() else {
         return;
     };
-    let mut changed = false;
-    {
+    let docked_count = {
         let mgr = cx.global_mut::<NotesManager>();
         mgr.hovered_dock_id = None;
         if mgr.hidden_all {
@@ -324,6 +516,7 @@ pub fn dock_all(cx: &mut App) {
                 _ => None,
             })
             .collect();
+        let count = updates.len();
         for (idx, edge, display) in updates {
             let order = store::next_order(&mgr.notes, edge, &display);
             mgr.notes[idx].placement = Placement::Docked {
@@ -332,14 +525,18 @@ pub fn dock_all(cx: &mut App) {
                 order,
             };
             mgr.notes[idx].updated_at = now_unix_secs();
-            changed = true;
         }
-        if changed {
+        if count > 0 {
             store::save(&mgr.notes);
             set_snapshot(&mgr.notes);
         } else {
             MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
+        count
+    };
+    // 口径与逐张拖动吸边一致：每张由 Floating 变为 Docked 的便签记一次 `NoteEvent::Docked`（仅传枚举）。
+    for _ in 0..docked_count {
+        telemetry::note(NoteEvent::Docked);
     }
     sync_all_windows(cx);
 }
@@ -349,7 +546,7 @@ pub fn toggle_visibility(cx: &mut App) {
     ensure_manager(cx);
     let hide_now = !cx.global::<NotesManager>().hidden_all;
     if hide_now {
-        exit_any_edit(false, cx);
+        exit_any_edit(EditEndMode::EndSessionNoReturn, cx);
     }
     {
         let mgr = cx.global_mut::<NotesManager>();
@@ -458,7 +655,7 @@ fn delete_note(id: &str, cx: &mut App) {
         .as_deref()
         == Some(id);
     if was_editing {
-        exit_any_edit(true, cx);
+        exit_any_edit(EditEndMode::EndSessionReturnFocus, cx);
     }
     let removed_entry = {
         let mgr = cx.global_mut::<NotesManager>();
@@ -487,7 +684,7 @@ fn archive_note(id: &str, cx: &mut App) {
         .as_deref()
         == Some(id);
     if was_editing {
-        exit_any_edit(true, cx);
+        exit_any_edit(EditEndMode::EndSessionReturnFocus, cx);
     }
     let removed_entry = {
         let mgr = cx.global_mut::<NotesManager>();
@@ -521,18 +718,20 @@ fn begin_edit(id: &str, cx: &mut App) {
         return;
     }
     if let Some(prev) = prev_id {
-        finish_edit_window(&prev, false, cx);
+        finish_edit_window(&prev, EditEndMode::TransferToAnotherNote, cx);
     }
-    {
+    let hand_over_pid = {
         let mgr = cx.global_mut::<NotesManager>();
-        if mgr.editing_return_pid == 0 && !offscreen() {
-            let pid = crate::panel::app_to_return_to();
-            mgr.editing_return_pid = pid;
-            if pid != 0 {
-                crate::panel::hand_over_previous_app(pid);
+        mgr.start_edit_session(id, || {
+            if offscreen() {
+                0
+            } else {
+                crate::panel::app_to_return_to()
             }
-        }
-        mgr.editing_id = Some(id.to_string());
+        })
+    };
+    if let Some(pid) = hand_over_pid {
+        crate::panel::hand_over_previous_app(pid);
     }
     sync_all_windows(cx);
     if let Some(entry) = cx.global::<NotesManager>().windows.get(id) {
@@ -544,7 +743,7 @@ fn begin_edit(id: &str, cx: &mut App) {
     }
 }
 
-fn finish_edit_window(id: &str, return_focus: bool, cx: &mut App) {
+fn finish_edit_window(id: &str, mode: EditEndMode, cx: &mut App) {
     let entry = cx
         .global::<NotesManager>()
         .windows
@@ -555,39 +754,61 @@ fn finish_edit_window(id: &str, return_focus: bool, cx: &mut App) {
             view.update(cx, |w, cx| w.leave_edit_mode(window, cx));
         });
     }
-    let (pid, ns_win) = {
+    let (return_pid, clear_hand_over, ns_win) = {
         let mgr = cx.global_mut::<NotesManager>();
-        if mgr.editing_id.as_deref() == Some(id) {
-            mgr.editing_id = None;
-        }
-        let pid = if return_focus {
-            std::mem::take(&mut mgr.editing_return_pid)
-        } else {
-            0
-        };
+        let (return_pid, clear_hand_over) = mgr.end_edit_session(id, mode);
         let ns_win = mgr
             .windows
             .get(id)
             .and_then(|e| e.native.clone());
-        (pid, ns_win)
+        (return_pid, clear_hand_over, ns_win)
     };
-    if return_focus && pid != 0 && !offscreen() {
+    if clear_hand_over {
         crate::panel::hand_over_previous_app(0);
+    }
+    if return_pid != 0 && !offscreen() {
         if let Some(handle) = ns_win {
-            crate::panel::return_focus(pid, Some(handle.ns_window()));
+            crate::panel::return_focus(return_pid, Some(handle.ns_window()));
         } else {
-            crate::panel::return_focus(pid, None);
+            crate::panel::return_focus(return_pid, None);
         }
     }
     flush_dirty_save(cx);
     sync_all_windows(cx);
 }
 
-fn exit_any_edit(return_focus: bool, cx: &mut App) {
+fn exit_any_edit(mode: EditEndMode, cx: &mut App) {
     let current = cx.global::<NotesManager>().editing_id.clone();
     if let Some(id) = current {
-        finish_edit_window(&id, return_focus, cx);
+        finish_edit_window(&id, mode, cx);
     }
+}
+
+/// 应用退出前同步结束正在编辑的便签并把 500ms debounce 内尚未写盘的修改落盘。
+pub fn flush_on_quit(cx: &mut App) {
+    if !cx.has_global::<NotesManager>() {
+        return;
+    }
+    let current = cx.global::<NotesManager>().editing_id.clone();
+    if let Some(id) = current {
+        let entry = cx
+            .global::<NotesManager>()
+            .windows
+            .get(&id)
+            .map(|e| (e.handle, e.view.clone()));
+        if let Some((handle, view)) = entry {
+            let _ = handle.update(cx, |_, window, cx| {
+                view.update(cx, |w, cx| w.leave_edit_mode_for_quit(window, cx));
+            });
+        }
+        let (_, clear_hand_over) = cx
+            .global_mut::<NotesManager>()
+            .end_edit_session(&id, EditEndMode::EndSessionNoReturn);
+        if clear_hand_over {
+            crate::panel::hand_over_previous_app(0);
+        }
+    }
+    flush_dirty_save(cx);
 }
 
 fn set_hovered_dock(id: Option<String>, cx: &mut App) {
@@ -607,25 +828,13 @@ fn clear_hovered_dock(id: &str, cx: &mut App) {
 }
 
 fn update_note_text(id: &str, text: String, cx: &mut App) {
-    let mgr = cx.global_mut::<NotesManager>();
-    let Some(note) = mgr.notes.iter_mut().find(|n| n.id == id) else {
-        return;
-    };
-    if note.text == text {
-        return;
-    }
-    note.text = text;
-    note.updated_at = now_unix_secs();
-    mgr.dirty_save = true;
-    set_snapshot(&mgr.notes);
+    cx.global_mut::<NotesManager>()
+        .apply_text_edit(id, text, true);
 }
 
 fn flush_dirty_save(cx: &mut App) {
-    let mgr = cx.global_mut::<NotesManager>();
-    if mgr.dirty_save {
-        mgr.dirty_save = false;
-        store::save(&mgr.notes);
-    }
+    cx.global_mut::<NotesManager>()
+        .flush_dirty_with(None, true, store::save);
 }
 
 /// 纯函数：算出所有非归档便签的目标展示形态。
@@ -779,11 +988,15 @@ fn sync_all_windows(cx: &mut App) {
     if screens.is_empty() {
         return;
     }
+    sync_all_windows_for_screens(&screens, cx);
+}
+
+fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
     let (plans, snapshots_by_id, hidden_all) = {
         let mgr = cx.global::<NotesManager>();
         let plans = plan_windows(
             &mgr.notes,
-            &screens,
+            screens,
             mgr.hidden_all,
             mgr.hovered_dock_id.as_deref(),
             mgr.editing_id.as_deref(),
@@ -820,18 +1033,30 @@ fn sync_all_windows(cx: &mut App) {
         let Some(note) = snapshots_by_id.get(&plan.id).cloned() else {
             continue;
         };
-        let existing = cx
-            .global::<NotesManager>()
-            .windows
-            .get(&plan.id)
-            .map(|e| (e.handle, e.view.clone(), e.native.clone()));
+        let existing = {
+            let mgr = cx.global_mut::<NotesManager>();
+            mgr.windows.get_mut(&plan.id).map(|e| {
+                e.visible = plan.visible;
+                (e.handle, e.view.clone(), e.native.clone())
+            })
+        };
         if let Some((handle, view, native_opt)) = existing {
+            let dragging = view.read(cx).drag.is_some();
             let _ = handle.update(cx, |_, _, cx| {
                 view.update(cx, |w, cx| {
-                    w.sync_state(&note, plan.docked, plan.dock_edge, plan.expanded, cx);
+                    w.sync_state(
+                        &note,
+                        plan.docked,
+                        plan.dock_edge,
+                        plan.expanded,
+                        plan.visible,
+                        cx,
+                    );
                 });
             });
-            if let Some(native_handle) = native_opt {
+            if !dragging
+                && let Some(native_handle) = native_opt
+            {
                 native_ops.push((
                     native_handle,
                     plan.frame,
@@ -925,7 +1150,7 @@ fn poll_hover_step(cx: &mut App) -> bool {
     if offscreen() || !cx.has_global::<NotesManager>() {
         return false;
     }
-    let (should_stop, any_dragging, hovered_dock_id, docked_frames) = {
+    let (should_stop, any_dragging, candidates) = {
         let mgr = cx.global::<NotesManager>();
         let has_docked = mgr
             .notes
@@ -933,20 +1158,21 @@ fn poll_hover_step(cx: &mut App) -> bool {
             .any(|n| matches!(n.placement, Placement::Docked { .. }));
         let stop = mgr.hidden_all || mgr.editing_id.is_some() || !has_docked;
         let dragging = mgr.windows.values().any(|e| e.view.read(cx).drag.is_some());
-        let frames: Vec<(String, Frame)> = mgr
+        let candidates: Vec<HoverCandidate> = mgr
             .notes
             .iter()
             .filter(|n| matches!(n.placement, Placement::Docked { .. }))
             .filter_map(|n| {
-                let frame = mgr
-                    .windows
-                    .get(&n.id)
-                    .and_then(|e| e.native.as_ref())
-                    .and_then(|h| h.frame_tl())?;
-                Some((n.id.clone(), frame))
+                let entry = mgr.windows.get(&n.id)?;
+                let frame = entry.native.as_ref()?.frame_tl()?;
+                Some(HoverCandidate {
+                    id: n.id.clone(),
+                    frame,
+                    visible: entry.visible,
+                })
             })
             .collect();
-        (stop, dragging, mgr.hovered_dock_id.clone(), frames)
+        (stop, dragging, candidates)
     };
     if should_stop {
         let mgr = cx.global_mut::<NotesManager>();
@@ -962,61 +1188,17 @@ fn poll_hover_step(cx: &mut App) -> bool {
         return true;
     };
 
-    if let Some(open_id) = hovered_dock_id.as_deref() {
-        let inside_open = docked_frames
-            .iter()
-            .find(|(id, _)| id == open_id)
-            .is_some_and(|(_, f)| point_in_frame(mx, my, *f, 4.0));
-        if inside_open {
-            let mgr = cx.global_mut::<NotesManager>();
-            mgr.unhover_started = None;
-            mgr.hover_candidate = None;
-            return true;
-        }
-        let close_now = {
-            let mgr = cx.global_mut::<NotesManager>();
-            match &mgr.unhover_started {
-                Some((id, since)) if id == open_id => since.elapsed() >= HOVER_CLOSE_DELAY,
-                _ => {
-                    mgr.unhover_started = Some((open_id.to_string(), Instant::now()));
-                    false
-                }
-            }
-        };
-        if close_now {
-            let id = open_id.to_string();
-            cx.global_mut::<NotesManager>().unhover_started = None;
-            clear_hovered_dock(&id, cx);
-        }
-    } else {
-        cx.global_mut::<NotesManager>().unhover_started = None;
+    let (clear_open, set_open) = cx.global_mut::<NotesManager>().step_dock_hover(
+        mx,
+        my,
+        Instant::now(),
+        &candidates,
+    );
+    if let Some(id) = clear_open {
+        clear_hovered_dock(&id, cx);
     }
-
-    let hit_id = docked_frames
-        .into_iter()
-        .find(|(id, f)| hovered_dock_id.as_deref() != Some(id.as_str()) && point_in_frame(mx, my, *f, 2.0))
-        .map(|(id, _)| id);
-
-    let Some(hit_id) = hit_id else {
-        cx.global_mut::<NotesManager>().hover_candidate = None;
-        return true;
-    };
-
-    let open_now = {
-        let mgr = cx.global_mut::<NotesManager>();
-        match &mgr.hover_candidate {
-            Some((id, since)) if id == &hit_id => since.elapsed() >= HOVER_OPEN_DELAY,
-            _ => {
-                mgr.hover_candidate = Some((hit_id.clone(), Instant::now()));
-                false
-            }
-        }
-    };
-    if open_now {
-        let mgr = cx.global_mut::<NotesManager>();
-        mgr.hover_candidate = None;
-        mgr.unhover_started = None;
-        set_hovered_dock(Some(hit_id), cx);
+    if let Some(id) = set_open {
+        set_hovered_dock(Some(id), cx);
     }
     true
 }
@@ -1047,8 +1229,11 @@ fn open_note_window(
     let docked = plan.docked;
     let dock_edge = plan.dock_edge;
     let expanded = plan.expanded;
+    let visible = !hidden_all && plan.visible;
     let opened = crate::settings::open_transparent_window(options, cx, |window, cx| {
-        let entity = cx.new(|cx| NoteWindow::new(note_clone, docked, dock_edge, expanded, window, cx));
+        let entity = cx.new(|cx| {
+            NoteWindow::new(note_clone, docked, dock_edge, expanded, visible, window, cx)
+        });
         view_out = Some(entity.clone());
         entity
     });
@@ -1063,13 +1248,14 @@ fn open_note_window(
     };
     let mut native_handle = None;
     let _ = handle.update(cx, |_, window, _| {
-        native::setup(window, plan.frame, plan.radius, hidden_all || !plan.visible);
+        native::setup(window, plan.frame, plan.radius, !visible);
         native_handle = NoteFrameHandle::of(window);
     });
     Some(WindowEntry {
         handle,
         view,
         native: native_handle,
+        visible,
     })
 }
 
@@ -1091,6 +1277,7 @@ pub struct NoteWindow {
     docked: bool,
     dock_edge: Option<Edge>,
     expanded: bool,
+    visible: bool,
     editing: bool,
     activated_for_edit: bool,
     hovered: bool,
@@ -1110,6 +1297,7 @@ impl NoteWindow {
         docked: bool,
         dock_edge: Option<Edge>,
         expanded: bool,
+        visible: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -1153,7 +1341,9 @@ impl NoteWindow {
                         let _ = this.update_in(cx, |this, window, cx| {
                             if this.editing && this.activated_for_edit && !window.is_window_active()
                             {
-                                cx.defer(move |cx| finish_edit_window(&id, false, cx));
+                                cx.defer(move |cx| {
+                                    finish_edit_window(&id, EditEndMode::EndSessionNoReturn, cx);
+                                });
                             }
                         });
                     })
@@ -1168,6 +1358,7 @@ impl NoteWindow {
             docked,
             dock_edge,
             expanded,
+            visible,
             editing: false,
             activated_for_edit: false,
             hovered: false,
@@ -1188,15 +1379,23 @@ impl NoteWindow {
         docked: bool,
         dock_edge: Option<Edge>,
         expanded: bool,
+        visible: bool,
         cx: &mut Context<Self>,
     ) {
         let changed = self.docked != docked
             || self.dock_edge != dock_edge
             || self.expanded != expanded
+            || self.visible != visible
             || self.text != note.text;
         self.docked = docked;
         self.dock_edge = dock_edge;
         self.expanded = expanded;
+        self.visible = visible;
+        if !visible {
+            self.hovered = false;
+            self.hover_task = None;
+            self.unhover_task = None;
+        }
         if self.text != note.text {
             self.text = note.text.clone();
         }
@@ -1242,6 +1441,19 @@ impl NoteWindow {
     }
 
     fn leave_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_edit_mode_inner(window, cx, true);
+    }
+
+    fn leave_edit_mode_for_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_edit_mode_inner(window, cx, false);
+    }
+
+    fn leave_edit_mode_inner(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        interactive: bool,
+    ) {
         if !self.editing {
             return;
         }
@@ -1255,6 +1467,9 @@ impl NoteWindow {
         }
         if let Some(handle) = NoteFrameHandle::of(window) {
             handle.set_editing(false);
+        }
+        if !interactive {
+            return;
         }
         self.focus.focus(window, cx);
         // 停靠便签退出编辑后，若鼠标不在其上，直接把悬停标记也收掉。
@@ -1280,6 +1495,12 @@ impl NoteWindow {
     }
 
     fn on_hover(&mut self, hovered: &bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible {
+            self.hovered = false;
+            self.hover_task = None;
+            self.unhover_task = None;
+            return;
+        }
         self.hovered = *hovered;
         if *hovered {
             self.unhover_task = None;
@@ -1290,8 +1511,10 @@ impl NoteWindow {
                     cx.background_executor().timer(HOVER_OPEN_DELAY).await;
                     let still_hovered = window_handle
                         .update(cx, |_, window, cx| {
-                            this.read_with(cx, |w, _| w.hovered && w.mouse_inside_window(window))
-                                .unwrap_or(false)
+                            this.read_with(cx, |w, _| {
+                                w.visible && w.hovered && w.mouse_inside_window(window)
+                            })
+                            .unwrap_or(false)
                         })
                         .unwrap_or(false);
                     if still_hovered {
@@ -1333,7 +1556,7 @@ impl NoteWindow {
         }
         if self.editing {
             let id = self.id.clone();
-            cx.defer(move |cx| finish_edit_window(&id, false, cx));
+            cx.defer(move |cx| finish_edit_window(&id, EditEndMode::EndSessionNoReturn, cx));
         }
         let Some(handle) = NoteFrameHandle::of(window) else {
             return;
@@ -1560,7 +1783,7 @@ impl NoteWindow {
             }
             cx.stop_propagation();
             let id = self.id.clone();
-            cx.defer(move |cx| finish_edit_window(&id, true, cx));
+            cx.defer(move |cx| finish_edit_window(&id, EditEndMode::EndSessionReturnFocus, cx));
         }
     }
 }
@@ -2035,5 +2258,259 @@ mod tests {
         let planned = plan_windows(&notes, &screens, true, None, None);
         assert_eq!(planned.len(), 1);
         assert!(!planned[0].visible);
+    }
+
+    #[test]
+    fn blur_clears_editing_return_pid_while_note_to_note_transfer_preserves_it() {
+        // 失焦结束编辑会话必须清掉归还 PID（避免下次从其他 App 编辑后 Esc 误跳回旧 App）；
+        // 只有从一张便签直接切到另一张便签编辑时，才保留首次捕获的外部 App PID。
+        let mut mgr = NotesManager::from_notes(Vec::new());
+
+        assert_eq!(mgr.start_edit_session("n1", || 101), Some(101));
+        assert_eq!(mgr.editing_return_pid, 101);
+
+        // 便签间转移：退出 n1 但保留归还 PID 101，也不应清理 hand-over。
+        assert_eq!(
+            mgr.end_edit_session("n1", EditEndMode::TransferToAnotherNote),
+            (0, false)
+        );
+        assert_eq!(mgr.editing_return_pid, 101);
+        assert_eq!(mgr.start_edit_session("n2", || 999), None);
+        assert_eq!(mgr.editing_return_pid, 101);
+
+        // 失焦结束编辑（切到 App B）：不主动 return_focus，但必须清零 PID 并要求清理 hand-over。
+        assert_eq!(
+            mgr.end_edit_session("n2", EditEndMode::EndSessionNoReturn),
+            (0, true)
+        );
+        assert_eq!(mgr.editing_id, None);
+        assert_eq!(mgr.editing_return_pid, 0);
+
+        // 从 App B 再次 begin_edit：PID 已清零，必须重新捕获 B(202)。
+        assert_eq!(mgr.start_edit_session("n1", || 202), Some(202));
+        assert_eq!(mgr.editing_return_pid, 202);
+
+        // 按 Esc 结束会话：返回新捕获的 202 并清空 PID 与 hand-over。
+        assert_eq!(
+            mgr.end_edit_session("n1", EditEndMode::EndSessionReturnFocus),
+            (202, true)
+        );
+        assert_eq!(mgr.editing_id, None);
+        assert_eq!(mgr.editing_return_pid, 0);
+    }
+
+    #[test]
+    fn hidden_overflow_tabs_never_enter_hovered_on_pointer_hit() {
+        // 880pt 可见区同侧 25 张停靠便签时第 25 张溢出并隐藏在左上角；
+        // 即使鼠标停在那块不可见坐标超过 150ms，也不得触发悬停展开。
+        let screens = vec![sample_screens().remove(0)]; // visible.h = 880
+        let notes: Vec<Note> = (0..25)
+            .map(|i| Note {
+                id: format!("n{i}"),
+                text: format!("便签 {i}"),
+                created_at: i as i64,
+                updated_at: i as i64,
+                placement: Placement::Docked {
+                    edge: Edge::Right,
+                    display: "main".into(),
+                    order: i as u32,
+                },
+                size: None,
+            })
+            .collect();
+
+        let planned = plan_windows(&notes, &screens, false, None, None);
+        assert_eq!(planned.len(), 25);
+        assert!(planned[..24].iter().all(|p| p.visible));
+        assert!(!planned[24].visible);
+
+        let candidates: Vec<HoverCandidate> = planned
+            .iter()
+            .map(|p| HoverCandidate {
+                id: p.id.clone(),
+                frame: p.frame,
+                visible: p.visible,
+            })
+            .collect();
+        let hidden_frame = planned[24].frame;
+        let mx = hidden_frame.x + hidden_frame.w / 2.0;
+        let my = hidden_frame.y + hidden_frame.h / 2.0;
+
+        let mut mgr = NotesManager::from_notes(notes.clone());
+        let t0 = Instant::now();
+        assert_eq!(
+            mgr.step_dock_hover(mx, my, t0, &candidates),
+            (None, None)
+        );
+        assert_eq!(
+            mgr.step_dock_hover(mx, my, t0 + Duration::from_millis(200), &candidates),
+            (None, None)
+        );
+        assert_eq!(mgr.hover_candidate, None);
+        assert_eq!(mgr.hovered_dock_id, None);
+
+        // 停在第一张真正可见的耳标上超过 150ms，应该正常进入 hovered。
+        let visible_frame = planned[0].frame;
+        let vx = visible_frame.x + visible_frame.w / 2.0;
+        let vy = visible_frame.y + visible_frame.h / 2.0;
+        assert_eq!(
+            mgr.step_dock_hover(vx, vy, t0, &candidates),
+            (None, None)
+        );
+        assert_eq!(
+            mgr.step_dock_hover(vx, vy, t0 + Duration::from_millis(200), &candidates),
+            (None, Some("n0".into()))
+        );
+    }
+
+    #[test]
+    fn runtime_display_changes_replan_missing_screen_and_shrunk_visible_area() {
+        // 运行中拔掉外屏或分辨率/可见区缩小时，必须将原外屏停靠便签并入主屏重排、
+        // 把超出容量的耳标收起隐藏，并将浮窗约束回新的可见区域。
+        let initial_screens = sample_screens();
+        let mut notes: Vec<Note> = (0..10)
+            .map(|i| Note {
+                id: format!("main-{i}"),
+                text: format!("M{i}"),
+                created_at: i,
+                updated_at: i,
+                placement: Placement::Docked {
+                    edge: Edge::Right,
+                    display: "main".into(),
+                    order: i as u32,
+                },
+                size: None,
+            })
+            .collect();
+        notes.push(Note {
+            id: "ext-dock".into(),
+            text: "外屏停靠".into(),
+            created_at: 20,
+            updated_at: 20,
+            placement: Placement::Docked {
+                edge: Edge::Right,
+                display: "side".into(),
+                order: 100,
+            },
+            size: None,
+        });
+        notes.push(Note {
+            id: "ext-float".into(),
+            text: "外屏浮窗".into(),
+            created_at: 21,
+            updated_at: 21,
+            placement: Placement::Floating {
+                frame: Frame {
+                    x: 2000.0,
+                    y: 400.0,
+                    w: 280.0,
+                    h: 200.0,
+                },
+            },
+            size: None,
+        });
+
+        let initial_plan = plan_windows(&notes, &initial_screens, false, None, None);
+        assert!(initial_plan.iter().all(|p| p.visible));
+        assert_eq!(
+            initial_plan.iter().find(|p| p.id == "ext-dock").unwrap().frame.x,
+            1512.0 + 1920.0 - TAB_W
+        );
+
+        // 模拟外屏断开且主屏可见区高度缩小为 300pt（仅能容纳 8 张，第 9 张起隐藏）。
+        let shrunk_main = vec![DisplayInfo {
+            id: 1,
+            uuid: "main".into(),
+            frame: Frame {
+                x: 0.0,
+                y: 0.0,
+                w: 1280.0,
+                h: 400.0,
+            },
+            visible: Frame {
+                x: 0.0,
+                y: 30.0,
+                w: 1280.0,
+                h: 300.0,
+            },
+        }];
+        let replanned = plan_windows(&notes, &shrunk_main, false, None, None);
+        let visible_docked: Vec<&PlannedWindow> = replanned
+            .iter()
+            .filter(|p| p.docked && p.visible)
+            .collect();
+        assert_eq!(visible_docked.len(), 8);
+        for pair in visible_docked.windows(2) {
+            assert!(pair[1].frame.y >= pair[0].frame.y + pair[0].frame.h);
+        }
+        for p in &visible_docked {
+            assert_eq!(p.frame.x, 1280.0 - TAB_W);
+            assert!(p.frame.y >= 30.0 && p.frame.y + p.frame.h <= 330.0);
+        }
+        assert!(!replanned.iter().find(|p| p.id == "ext-dock").unwrap().visible);
+
+        let floated = replanned.iter().find(|p| p.id == "ext-float").unwrap();
+        assert!(floated.frame.x >= 0.0 && floated.frame.x + floated.frame.w <= 1280.0);
+        assert!(floated.frame.y >= 30.0 && floated.frame.y + floated.frame.h <= 330.0);
+    }
+
+    #[test]
+    fn quit_flushes_debounced_and_in_editor_text_so_reload_reads_latest() {
+        // 500ms debounce 尚未触发时立即退出，必须同步结束编辑并写盘；重启重新加载能读到最新内容。
+        struct TempNotesFile(std::path::PathBuf);
+        impl TempNotesFile {
+            fn new() -> Self {
+                static SEQ: AtomicU64 = AtomicU64::new(0);
+                let dir = std::env::temp_dir().join(format!(
+                    "helmp-notes-quit-{}-{}",
+                    std::process::id(),
+                    SEQ.fetch_add(1, Ordering::Relaxed)
+                ));
+                std::fs::create_dir_all(&dir).unwrap();
+                Self(dir)
+            }
+            fn file(&self) -> std::path::PathBuf {
+                self.0.join(store::FILE)
+            }
+        }
+        impl Drop for TempNotesFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let dir = TempNotesFile::new();
+        let write_blocked = AtomicBool::new(true);
+        let initial = store::new_note("草稿 v1", 100, Placement::Archived);
+        let note_id = initial.id.clone();
+        assert!(
+            store::load_recovering_from(&dir.file(), &write_blocked)
+                .unwrap()
+                .is_empty()
+        );
+        store::save_checked_to(&dir.file(), &[initial], &write_blocked).unwrap();
+
+        let loaded = store::load_recovering_from(&dir.file(), &write_blocked).unwrap();
+        let mut mgr = NotesManager::from_notes(loaded);
+
+        // 模拟输入还在 500ms debounce 期内（dirty_save = true，尚未写盘）。
+        assert!(mgr.apply_text_edit(&note_id, "草稿 v2（debounce 中）".into(), false));
+        assert!(mgr.dirty_save);
+        assert_eq!(store::load_from(&dir.file()).unwrap()[0].text, "草稿 v1");
+
+        // 模拟临退出瞬间编辑器内又有最新正文，同步冲刷写盘（不等待 500ms）。
+        mgr.flush_dirty_with(
+            Some((&note_id, "草稿 v3（立即退出前最后输入）".into())),
+            false,
+            |notes| {
+                store::save_checked_to(&dir.file(), notes, &write_blocked).unwrap();
+            },
+        );
+        assert!(!mgr.dirty_save);
+
+        // 模拟重启应用后从磁盘重新加载，必须读到最后输入的内容。
+        let reloaded = store::load_from(&dir.file()).unwrap();
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0].text, "草稿 v3（立即退出前最后输入）");
     }
 }
