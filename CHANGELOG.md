@@ -6,6 +6,18 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-11-17
+
+### Added
+
+- Sticky notes. Type `s` followed by your text in the launcher (or `note ` / `便签 `) and press Return to pin a note to the right edge of the screen. Docked notes line up as bookmark tabs along the edge and expand when you hover over them; click to edit in place, or drag a note anywhere to float it and drag it back near an edge to dock it again. The Notes scope lists every note, including closed ones, with text and pinyin search; ⌘K offers Pin to Desktop and Delete. The menu bar adds Dock All Notes and Hide/Show All Notes, and New Note can be bound to a global shortcut in Settings › Extensions (unbound by default). Notes are saved on your Mac and survive restarts, including text typed right before quitting. Usage statistics only record that a note was created, docked or deleted, never its text.
+
+### 简体中文
+
+#### 新增
+
+- 便签。在启动器里输入 `s` 加内容（也可以用 `note ` / `便签 ` 开头），回车就把便签贴到屏幕右边缘。吸边的便签像书签耳标一样沿边排队，鼠标移上去展开，点一下原地编辑；拖到别处就变成浮动便签，再拖回边缘附近会重新吸边。「便签」Scope 列出全部便签（含已关闭的），支持正文和拼音搜索，⌘K 里有「钉回桌面」「删除」。菜单栏新增「全部收边」和「隐藏 / 显示全部便签」，「新建便签」可在「设置 › 扩展」里绑定全局快捷键（默认不绑定）。便签保存在本机，重启后还在，退出前刚输入的内容也不会丢。使用统计只记录新建、吸边、删除这几个动作，不发送便签内容。
+
 ## [0.4.10] - 2026-11-17
 
 ### Changed
