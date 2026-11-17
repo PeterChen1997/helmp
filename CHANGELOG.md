@@ -6,6 +6,20 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-11-17
+
+### Fixed
+
+- Sticky notes now leave edit mode and tuck back to the screen edge when you switch to another app after typing; hovering the tab still expands the note afterwards.
+- Expanding and collapsing a docked note on hover is now a smooth 160 ms animation instead of an instant jump.
+
+### 简体中文
+
+#### 修复
+
+- 便签输入后切到别的 App，会退出编辑并收回边缘，之后悬停耳标仍能展开。
+- 吸边便签悬停展开 / 收起改为 160ms 平滑过渡，不再一下跳过去。
+
 ## [0.4.11] - 2026-11-17
 
 ### Added
