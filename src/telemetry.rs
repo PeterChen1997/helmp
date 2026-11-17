@@ -188,6 +188,32 @@ pub fn clipboard_paste(mode: &'static str, formats: &[&'static str]) {
     );
 }
 
+/// 从插件中心或自定义插件源装好 / 更新了一个插件：只发源的类型和是否更新，不发插件 id 和地址。
+pub fn plugin_installed(custom: bool, update: bool) {
+    track(
+        "plugin_install",
+        json!({ "source": if custom { "custom" } else { "public" }, "update": update }),
+    );
+}
+
+/// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEvent {
+    Added { via: &'static str, auth: bool },
+    Removed,
+    TokenChanged,
+}
+
+pub fn plugin_source(event: SourceEvent) {
+    match event {
+        SourceEvent::Added { via, auth } => {
+            track("plugin_source_add", json!({ "via": via, "auth": auth }))
+        }
+        SourceEvent::Removed => track("plugin_source_remove", json!({})),
+        SourceEvent::TokenChanged => track("plugin_source_token", json!({})),
+    }
+}
+
 fn known_provider(provider: &str) -> &'static str {
     PROVIDERS
         .iter()

@@ -136,6 +136,25 @@ impl Helmp {
         self.command().args(args).output().expect("run helmp")
     }
 
+    /// `helmp <args>`，把 `input` 写进标准输入（如 `--token-stdin`），不论成败都返回完整输出。
+    pub fn output_with_stdin(&self, args: &[&str], input: &str) -> std::process::Output {
+        let mut child = self
+            .command()
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn helmp");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(input.as_bytes())
+            .expect("write stdin");
+        child.wait_with_output().expect("wait helmp")
+    }
+
     /// 以同样的隔离环境起一个长时间运行的子进程（如 `helmp mcp`），stdin / stdout 走管道。
     pub fn spawn(&self, args: &[&str]) -> std::process::Child {
         self.command()

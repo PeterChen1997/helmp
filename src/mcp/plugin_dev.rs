@@ -519,6 +519,8 @@ pub fn list() -> Result<ToolOutput> {
             value["state"] = json!(state);
             value["source"] = json!(source);
             value["dir"] = json!(entry.dir);
+            // 从插件中心或哪个自定义插件源装的（名字）；手动放进来的为 null。
+            value["installed_from"] = json!(installed_from(&config, entry));
             text.push_str(&format!(
                 "{state}\t{}\t{source}\t{}\n",
                 entry.id,
@@ -533,6 +535,19 @@ pub fn list() -> Result<ToolOutput> {
         })
         .collect();
     Ok(ToolOutput::ok(text, json!({"plugins": plugins})))
+}
+
+/// 插件的安装来源：插件中心或自定义插件源的名字；源已删掉时写明；不是从注册表装的为 None。
+fn installed_from(config: &crate::config::Config, entry: &Entry) -> Option<String> {
+    use crate::providers::plugins::center;
+    let record = center::install_record(&entry.id, config, entry.dir.as_deref())?;
+    Some(
+        center::registries(config)
+            .into_iter()
+            .find(|registry| registry.owns(&record))
+            .map(|registry| registry.name)
+            .unwrap_or_else(|| "removed source".into()),
+    )
 }
 
 // ---------------------------------------------------------------- test

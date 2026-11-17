@@ -22,6 +22,7 @@ pub mod permissions;
 pub mod registry;
 pub mod scaffold;
 pub mod secrets;
+pub mod sources;
 pub mod submit;
 pub mod template;
 

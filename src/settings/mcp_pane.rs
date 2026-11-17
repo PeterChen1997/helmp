@@ -125,7 +125,7 @@ fn area_input(window: &mut Window, cx: &mut App, placeholder: &str, value: &str)
 }
 
 /// 带边框的单行输入框。
-fn field(state: &Entity<InputState>, width: f32, pal: &Palette) -> Div {
+pub(super) fn field(state: &Entity<InputState>, width: f32, pal: &Palette) -> Div {
     div()
         .flex()
         .items_center()
@@ -153,7 +153,7 @@ fn area(state: &Entity<TextareaState>, height: f32, pal: &Palette) -> Div {
         .child(Textarea::new(state).appearance(false).h_full())
 }
 
-fn labeled(label: &str, control: impl IntoElement, pal: &Palette) -> Div {
+pub(super) fn labeled(label: &str, control: impl IntoElement, pal: &Palette) -> Div {
     div()
         .flex()
         .items_center()
@@ -162,7 +162,7 @@ fn labeled(label: &str, control: impl IntoElement, pal: &Palette) -> Div {
         .child(control)
 }
 
-fn card(pal: &Palette) -> Div {
+pub(super) fn card(pal: &Palette) -> Div {
     div()
         .flex()
         .flex_col()
@@ -175,7 +175,7 @@ fn card(pal: &Palette) -> Div {
         .border_color(pal.separator)
 }
 
-fn code(text: String, pal: &Palette) -> Div {
+pub(super) fn code(text: String, pal: &Palette) -> Div {
     div()
         .px(px(8.))
         .py(px(5.))

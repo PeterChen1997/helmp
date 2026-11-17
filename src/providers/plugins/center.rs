@@ -8,11 +8,14 @@
 //! - 装好的插件和手动放进来的用户插件一样：默认停用，用户在设置里看过权限、点了「允许并启用」才生效；
 //!   更新后权限变了要重新确认（见 `registry::Entry::state`）。从不自动启用。
 //! - 和自带插件同 id 的插件不安装（不能遮住自带插件），给出说明。
+//! - 自定义插件源（`config.plugin_sources`，见 `sources`）和公开插件中心结构相同，可以带鉴权请求头；
+//!   浏览时合并展示（同 id 公开插件中心优先），更新只从安装记录里的源取。校验、原子安装、默认停用对所有源一样。
 //! - 演练模式（`HELMP_DRY_RUN=1`）下只访问本机地址（端到端测试的假服务）。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -21,7 +24,8 @@ use sha2::{Digest as _, Sha256};
 
 use super::manifest::{self, Text};
 use super::registry::{self, Source};
-use crate::config::{Config, RegistryInstall};
+use super::sources;
+use crate::config::{Config, PluginSource, RegistryInstall};
 use crate::i18n::{tr, trf};
 
 pub const DEFAULT_REGISTRY: &str = "https://cdn.jsdelivr.net/gh/PeterChen1997/helmp-plugins@main/";
@@ -277,60 +281,403 @@ pub fn files_base(base: &str, commit: Option<&str>) -> String {
     format!("{JSDELIVR}{owner}/{repo}@{commit}/{tail}")
 }
 
-fn is_loopback(url: &str) -> bool {
-    let authority = url
-        .split_once("://")
-        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
-        .unwrap_or_default();
-    matches!(
-        manifest::host_of(authority),
-        "127.0.0.1" | "localhost" | "[::1]"
-    )
+/// 一个注册表：公开插件中心，或用户添加的自定义插件源（见 `sources`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registry {
+    /// 显示名；公开插件中心是「插件中心」。
+    pub name: String,
+    /// 目录地址，以 `/` 结尾。
+    pub base: String,
+    /// 用户添加的源（false = 公开插件中心）。
+    pub custom: bool,
+    /// 鉴权请求头名；值在钥匙串里。
+    pub auth_header: Option<String>,
 }
 
-fn get(url: &str, limit: u64) -> Result<Vec<u8>> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        bail!(trf!(
-            "插件中心地址必须是 http(s)：{url}",
-            "The plugin registry must be an http(s) URL: {url}"
-        ));
+impl Registry {
+    pub fn public(config: &Config) -> Self {
+        Self {
+            name: tr("插件中心", "Plugin Center").to_string(),
+            base: registry_base(config),
+            custom: false,
+            auth_header: None,
+        }
     }
-    if crate::effects::dry_run() && !is_loopback(url) {
-        bail!(trf!(
-            "演练模式下不联网：{url}（可用 HELMP_REGISTRY_URL 指向本机地址）",
-            "No network in dry-run mode: {url} (point HELMP_REGISTRY_URL at a local address)"
-        ));
+
+    fn from_source(source: &PluginSource) -> Self {
+        Self {
+            name: source.name.clone(),
+            // 手改坏了的地址原样留着，联网时 `check_url` 会说明哪里不对。
+            base: sources::normalize_url(&source.url).unwrap_or_else(|_| source.url.clone()),
+            custom: true,
+            auth_header: source.auth_header.clone(),
+        }
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .build()
-        .into();
-    let mut response = agent
-        .get(url)
-        .call()
-        .with_context(|| trf!("下载 {url} 失败", "Couldn't download {url}"))?;
-    response
-        .body_mut()
-        .with_config()
-        .limit(limit)
-        .read_to_vec()
+
+    /// 这条安装记录是不是从这个源装的。旧记录（没有 custom 标记）都算公开插件中心，
+    /// 哪怕当时的地址和现在不同（换过 `HELMP_REGISTRY_URL` 或 `plugins_registry_url`）。
+    pub fn owns(&self, record: &RegistryInstall) -> bool {
+        if self.custom {
+            record.custom && record.registry == self.base
+        } else {
+            !record.custom
+        }
+    }
+
+    fn record(&self, version: &str) -> RegistryInstall {
+        RegistryInstall {
+            registry: self.base.clone(),
+            version: version.to_string(),
+            custom: self.custom,
+        }
+    }
+}
+
+/// 全部源：公开插件中心在最前，然后是用户按顺序添加的自定义源。
+pub fn registries(config: &Config) -> Vec<Registry> {
+    let mut all = vec![Registry::public(config)];
+    all.extend(config.plugin_sources.iter().map(Registry::from_source));
+    all
+}
+
+/// 指代公开插件中心的名字（自定义源不能用）。
+pub const PUBLIC_NAMES: [&str; 3] = ["plugin-center", "插件中心", "Plugin Center"];
+
+/// 按名字找源（命令行 `--source`）；公开插件中心的名字不分语言都认。
+pub fn find_registry(config: &Config, name: &str) -> Result<Registry> {
+    if PUBLIC_NAMES.contains(&name) {
+        return Ok(Registry::public(config));
+    }
+    config
+        .plugin_sources
+        .iter()
+        .find(|source| source.name == name)
+        .map(Registry::from_source)
         .with_context(|| {
             trf!(
-                "读取 {url} 失败（或超过 {limit} 字节）",
-                "Couldn't read {url} (or it exceeds {limit} bytes)"
+                "没有叫「{name}」的插件源（helmp plugins source list 查看）",
+                "There's no plugin source named “{name}” (see helmp plugins source list)"
             )
         })
 }
 
-pub fn fetch_index(base: &str) -> Result<Index> {
-    let bytes = get(&format!("{base}index.json"), MAX_INDEX_BYTES)?;
-    let text = String::from_utf8(bytes).map_err(|_| {
-        anyhow!(tr(
-            "插件中心索引不是 UTF-8 文本",
-            "The plugin index isn't UTF-8 text"
+/// 上报给 Sentry 的失败原因：只有源的类型和固定的原因枚举，不带地址、插件 id 和令牌。
+pub fn sentry_message(registry: &Registry, reason: &str) -> String {
+    let kind = if registry.custom { "custom" } else { "public" };
+    format!("{kind} registry: {reason}")
+}
+
+fn report_failure(registry: &Registry, reason: &'static str) {
+    crate::telemetry::report("plugins.registry", &anyhow!(sentry_message(registry, reason)));
+}
+
+/// 联网用的客户端：一个源一个，令牌只在这里读一次。不实现 Debug，令牌不会被打印出来。
+pub struct Client {
+    pub registry: Registry,
+    token: Option<String>,
+}
+
+impl Client {
+    pub fn new(registry: Registry) -> Result<Self> {
+        let token = match &registry.auth_header {
+            Some(_) => sources::token(&registry.base).with_context(|| {
+                trf!(
+                    "读取插件源「{}」的令牌失败（钥匙串）",
+                    "Couldn't read the token for plugin source “{}” from the Keychain",
+                    registry.name
+                )
+            })?,
+            None => None,
+        };
+        Ok(Self { registry, token })
+    }
+
+    fn check_url(&self, url: &str) -> Result<()> {
+        if !url.starts_with("https://") && !url.starts_with("http://") {
+            bail!(trf!(
+                "插件中心地址必须是 http(s)：{url}",
+                "The plugin registry must be an http(s) URL: {url}"
+            ));
+        }
+        if self.registry.custom
+            && let Err(err) = sources::normalize_url(&self.registry.base)
+        {
+            bail!(trf!(
+                "插件源「{}」的地址不可用：{err}",
+                "Plugin source “{}” has an unusable URL: {err}",
+                self.registry.name
+            ));
+        }
+        if crate::effects::dry_run() && !sources::is_loopback(url) {
+            bail!(trf!(
+                "演练模式下不联网：{url}（可用 HELMP_REGISTRY_URL 指向本机地址）",
+                "No network in dry-run mode: {url} (point HELMP_REGISTRY_URL at a local address)"
+            ));
+        }
+        Ok(())
+    }
+
+    /// 取一个文件。自定义源：不自动跟随重定向，只跟随同一主机内的跳转（令牌不会被带到别的主机）；
+    /// 鉴权请求头只发给源自己的主机。HTTP 错误换成说得清哪个源、什么原因的提示。
+    fn get(&self, url: &str, limit: u64) -> Result<Vec<u8>> {
+        self.check_url(url)?;
+        let registry = &self.registry;
+        let home = sources::origin(&registry.base);
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(TIMEOUT))
+            .max_redirects(if registry.custom { 0 } else { 10 })
+            .build()
+            .into();
+        let mut url = url.to_string();
+        for _ in 0..=MAX_REDIRECTS {
+            let mut request = agent.get(&url);
+            if let (Some(header), Some(token)) = (&registry.auth_header, &self.token)
+                && registry.custom
+                && sources::origin(&url) == home
+            {
+                request = request.header(header.as_str(), token.as_str());
+            }
+            let mut response = match request.call() {
+                Ok(response) => response,
+                Err(ureq::Error::StatusCode(code)) => {
+                    report_failure(registry, status_reason(code));
+                    bail!(status_message(registry, code, self.token.is_some()));
+                }
+                Err(err) => {
+                    report_failure(registry, "unreachable");
+                    bail!(trf!(
+                        "连不上{}（{}）：{err}",
+                        "Couldn't reach {} ({}): {err}",
+                        registry.label(),
+                        sources::host(&url)
+                    ));
+                }
+            };
+            if response.status().is_redirection() {
+                let next = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                    .map(|location| resolve(&url, location));
+                match next {
+                    Some(next) if sources::origin(&next) == home => {
+                        url = next;
+                        continue;
+                    }
+                    _ => {
+                        report_failure(registry, "redirect");
+                        bail!(trf!(
+                            "{}把请求转到了另一个主机，为保护令牌已停止。请把源地址改成文件实际所在的地址",
+                            "{} redirected to another host; stopped so the token isn't sent there. Use the address where the files actually live",
+                            registry.label()
+                        ));
+                    }
+                }
+            }
+            return response
+                .body_mut()
+                .with_config()
+                .limit(limit)
+                .read_to_vec()
+                .with_context(|| {
+                    trf!(
+                        "读取 {url} 失败（或超过 {limit} 字节）",
+                        "Couldn't read {url} (or it exceeds {limit} bytes)"
+                    )
+                });
+        }
+        report_failure(registry, "redirect");
+        bail!(trf!(
+            "{}重定向次数太多",
+            "{} redirected too many times",
+            registry.label()
         ))
-    })?;
-    parse_index(&text)
+    }
+
+    pub fn index(&self) -> Result<Index> {
+        let bytes = self.get(&format!("{}index.json", self.registry.base), MAX_INDEX_BYTES)?;
+        let parsed = String::from_utf8(bytes)
+            .map_err(|_| {
+                anyhow!(tr(
+                    "插件中心索引不是 UTF-8 文本",
+                    "The plugin index isn't UTF-8 text"
+                ))
+            })
+            .and_then(|text| parse_index(&text));
+        parsed.map_err(|err| {
+            report_failure(&self.registry, "invalid_index");
+            if self.registry.custom {
+                anyhow!(trf!(
+                    "插件源「{}」：{err:#}",
+                    "Plugin source “{}”: {err:#}",
+                    self.registry.name
+                ))
+            } else {
+                err
+            }
+        })
+    }
+}
+
+const MAX_REDIRECTS: usize = 5;
+
+impl Registry {
+    /// 报错里指代这个源的说法。
+    fn label(&self) -> String {
+        if self.custom {
+            trf!("插件源「{}」", "plugin source “{}”", self.name)
+        } else {
+            tr("插件中心", "the plugin center").to_string()
+        }
+    }
+}
+
+/// 重定向的 Location 相对当前地址解析（绝对地址、`/路径`、相对路径）。
+fn resolve(current: &str, location: &str) -> String {
+    if sources::origin(location).is_some() {
+        return location.to_string();
+    }
+    let origin = sources::origin(current).unwrap_or_default();
+    if location.starts_with('/') {
+        return format!("{origin}{location}");
+    }
+    let dir = current.rsplit_once('/').map(|(dir, _)| dir).unwrap_or(current);
+    format!("{dir}/{location}")
+}
+
+fn status_reason(code: u16) -> &'static str {
+    match code {
+        401 => "http_401",
+        403 => "http_403",
+        404 => "http_404",
+        500..=599 => "http_5xx",
+        _ => "http_other",
+    }
+}
+
+/// `sent_token`：这次请求带了令牌（401 就是令牌不对，而不是没设）。
+fn status_message(registry: &Registry, code: u16, sent_token: bool) -> String {
+    let source = registry.label();
+    match code {
+        401 if sent_token => trf!(
+            "{source}拒绝了令牌（HTTP 401）：令牌不对或已过期。在「设置 › 插件 › 插件源」里更新令牌",
+            "{source} rejected the token (HTTP 401): it's wrong or expired. Update it in Settings › Plugins › Plugin Sources"
+        ),
+        401 => trf!(
+            "{source}需要登录（HTTP 401）：在「设置 › 插件 › 插件源」里给它设置令牌",
+            "{source} needs a token (HTTP 401): set one in Settings › Plugins › Plugin Sources"
+        ),
+        403 => trf!(
+            "{source}拒绝访问（HTTP 403）：这个令牌没有读取权限",
+            "{source} denied access (HTTP 403): the token isn't allowed to read it"
+        ),
+        404 => trf!(
+            "{source}上找不到文件（HTTP 404）：检查地址是不是指向 index.json 所在的目录",
+            "{source} returned HTTP 404: check that the URL points at the folder that holds index.json"
+        ),
+        _ => trf!("{source}返回了 HTTP {code}", "{source} returned HTTP {code}"),
+    }
+}
+
+/// 各个源取到的索引（或失败原因），顺序同 [`registries`]。一个源失败不影响其他源。
+pub struct Catalog {
+    pub sources: Vec<(Registry, Result<Arc<Index>, String>)>,
+}
+
+/// 一个插件在合并视图里的一行。
+pub struct Entry<'a> {
+    pub registry: &'a Registry,
+    pub listing: &'a Listing,
+    /// 同 id 还出现在这些源里，被这一行盖住了。
+    pub shadowed: Vec<&'a str>,
+}
+
+impl Catalog {
+    /// 并行取全部源的索引。
+    pub fn fetch(config: &Config) -> Self {
+        let registries = registries(config);
+        let results: Vec<Result<Index, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = registries
+                .iter()
+                .map(|registry| {
+                    scope.spawn(move || {
+                        Client::new(registry.clone())
+                            .and_then(|client| client.index())
+                            .map_err(|err| format!("{err:#}"))
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap_or_else(|_| Err("panicked".into())))
+                .collect()
+        });
+        Self {
+            sources: registries
+                .into_iter()
+                .zip(results)
+                .map(|(registry, result)| (registry, result.map(Arc::new)))
+                .collect(),
+        }
+    }
+
+    /// 合并后的插件列表。同 id 出现在几个源里时：装过的按安装记录里的源；没装过的公开插件中心优先，
+    /// 然后按源的顺序。其余的记在 `shadowed` 里，界面上明确提示。
+    pub fn entries(&self, config: &Config, entries: &[registry::Entry]) -> Vec<Entry<'_>> {
+        let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut out: Vec<Entry<'_>> = Vec::new();
+        for (registry, result) in &self.sources {
+            let Ok(index) = result else { continue };
+            for listing in &index.plugins {
+                let Some(&at) = seen.get(listing.id.as_str()) else {
+                    seen.insert(&listing.id, out.len());
+                    out.push(Entry {
+                        registry,
+                        listing,
+                        shadowed: Vec::new(),
+                    });
+                    continue;
+                };
+                let local = entries
+                    .iter()
+                    .find(|e| e.id == listing.id && e.source == Source::User)
+                    .and_then(|e| e.dir.as_deref());
+                let owner = install_record(&listing.id, config, local)
+                    .filter(|record| registry.owns(record) && !out[at].registry.owns(record));
+                let first = &mut out[at];
+                if owner.is_some() {
+                    let previous = std::mem::replace(first, Entry {
+                        registry,
+                        listing,
+                        shadowed: Vec::new(),
+                    });
+                    first.shadowed = previous.shadowed;
+                    first.shadowed.push(&previous.registry.name);
+                } else {
+                    first.shadowed.push(&registry.name);
+                }
+            }
+        }
+        out
+    }
+
+    pub fn failures(&self) -> impl Iterator<Item = (&Registry, &str)> {
+        self.sources
+            .iter()
+            .filter_map(|(registry, result)| result.as_ref().err().map(|err| (registry, err.as_str())))
+    }
+}
+
+/// 同 id 被别的源盖住时给用户的提示。
+pub fn shadowed_message(entry: &Entry<'_>) -> Option<String> {
+    (!entry.shadowed.is_empty()).then(|| {
+        let others = entry.shadowed.join(tr("、", ", "));
+        trf!(
+            "「{others}」里也有同 id 的插件，这里用的是「{}」的版本",
+            "“{others}” also lists this id; the version from “{}” is used",
+            entry.registry.name
+        )
+    })
 }
 
 // ---------------------------------------------------------------- 安装
@@ -371,10 +718,14 @@ pub enum Availability {
     },
     /// 插件文件夹里有同 id 的本地插件（不是从插件中心装的）。
     LocalConflict,
+    /// 已经从另一个源装了同 id 的插件（更新只看那个源）。
+    OtherSource,
 }
 
+/// `listing` 是 `from` 这个源里的条目。
 pub fn availability(
     listing: &Listing,
+    from: &Registry,
     config: &Config,
     entries: &[registry::Entry],
 ) -> Availability {
@@ -386,6 +737,7 @@ pub fn availability(
         .find(|entry| entry.id == listing.id && entry.source == Source::User);
     let installed = install_record(&listing.id, config, local.and_then(|e| e.dir.as_deref()));
     match installed {
+        Some(record) if !from.owns(&record) => Availability::OtherSource,
         Some(record) if newer(&listing.version, &record.version) => Availability::UpdateAvailable {
             installed: record.version.clone(),
         },
@@ -411,23 +763,64 @@ pub fn install_record(id: &str, config: &Config, dir: Option<&Path>) -> Option<R
         })
 }
 
-/// 从当前注册表安装或更新 `id`：联网、写插件目录、记进配置、重载插件列表。
-pub fn install(id: &str) -> Result<Installed> {
+/// 安装或更新 `id`：联网、写插件目录、记进配置、重载插件列表。
+///
+/// 选源：装过的只从安装记录里的源更新（`source` 给了别的源就拒绝）；没装过的用 `source` 指定的源，
+/// 没指定就按顺序找（公开插件中心优先）。
+pub fn install(id: &str, source: Option<&str>) -> Result<Installed> {
     if is_bundled(id) {
         bail!(bundled_message(id));
     }
     let config = crate::config::get();
-    let base = registry_base(&config);
-    let index = fetch_index(&base)?;
-    let listing = index.get(id).with_context(|| {
-        trf!(
-            "插件中心里没有 {id}（{base}）",
-            "{id} isn't in the plugin center ({base})"
-        )
-    })?;
     let root = registry::user_dir()?;
-    let previous =
-        install_record(id, &config, Some(&root.join(id))).map(|record| record.version);
+    let record = install_record(id, &config, Some(&root.join(id)));
+    let wanted = source.map(|name| find_registry(&config, name)).transpose()?;
+    let (client, index) = match (&record, wanted) {
+        (Some(record), wanted) => {
+            let Some(owner) = registries(&config).into_iter().find(|r| r.owns(record)) else {
+                bail!(trf!(
+                    "{id} 是从插件源 {} 安装的，这个源已经删掉了：重新添加它才能更新",
+                    "{id} was installed from the plugin source at {}, which has been removed; add it back to update",
+                    sources::host(&record.registry)
+                ));
+            };
+            if let Some(wanted) = wanted
+                && wanted != owner
+            {
+                bail!(trf!(
+                    "{id} 已经从「{}」安装，更新也只从那里取；要换成「{}」的版本，先删掉这个插件",
+                    "{id} is installed from “{}” and only updates from there; to switch to “{}”, remove the plugin first",
+                    owner.name,
+                    wanted.name
+                ));
+            }
+            let client = Client::new(owner)?;
+            let index = client.index()?;
+            (client, index)
+        }
+        (None, Some(wanted)) => {
+            let client = Client::new(wanted)?;
+            let index = client.index()?;
+            (client, index)
+        }
+        (None, None) => find_in_sources(id, &config)?,
+    };
+    let base = client.registry.base.clone();
+    let listing = index.get(id).with_context(|| {
+        if client.registry.custom {
+            trf!(
+                "插件源「{}」里没有 {id}",
+                "{id} isn't in plugin source “{}”",
+                client.registry.name
+            )
+        } else {
+            trf!(
+                "插件中心里没有 {id}（{base}）",
+                "{id} isn't in the plugin center ({base})"
+            )
+        }
+    })?;
+    let previous = record.map(|record| record.version);
     check_local_conflict(id, &root, previous.is_some(), &registry::load_all())?;
     let target = root.join(id);
     if let Some(version) = &previous
@@ -443,19 +836,18 @@ pub fn install(id: &str) -> Result<Installed> {
         });
     }
     let files = files_base(&base, index.commit.as_deref());
-    let record = RegistryInstall {
-        registry: base,
-        version: listing.version.clone(),
-    };
+    let record = client.registry.record(&listing.version);
     let dir = install_into(listing, &root, &record, |path| {
-        get(&format!("{files}plugins/{id}/{path}"), MAX_FILE_BYTES)
-    })?;
+        client.get(&format!("{files}plugins/{id}/{path}"), MAX_FILE_BYTES)
+    })
+    .inspect_err(|_| report_failure(&client.registry, "install_rejected"))?;
     crate::config::update(|config| {
         // 只记来源和版本：enabled / consent 原样保留，新装的插件就是停用状态，
         // 更新后权限变了由 `Entry::state` 判定为待确认。
         config.plugins.entry(id.to_string()).or_default().installed = Some(record);
     })?;
     registry::reload();
+    crate::telemetry::plugin_installed(client.registry.custom, previous.is_some());
     Ok(Installed {
         id: id.to_string(),
         version: listing.version.clone(),
@@ -463,6 +855,35 @@ pub fn install(id: &str) -> Result<Installed> {
         previous,
         up_to_date: false,
     })
+}
+
+/// 按源的顺序找第一个列出了 `id` 的源。都没有时把失败的源一并说明。
+fn find_in_sources(id: &str, config: &Config) -> Result<(Client, Index)> {
+    let mut errors = Vec::new();
+    for registry in registries(config) {
+        let fetched = Client::new(registry).and_then(|client| {
+            let index = client.index()?;
+            Ok((client, index))
+        });
+        match fetched {
+            Ok((client, index)) if index.get(id).is_some() => return Ok((client, index)),
+            Ok(_) => {}
+            Err(err) => errors.push(format!("{err:#}")),
+        }
+    }
+    if config.plugin_sources.is_empty()
+        && let Some(error) = errors.pop()
+    {
+        bail!(error);
+    }
+    let mut message = trf!(
+        "插件中心和已添加的插件源里都没有找到 {id}",
+        "Couldn't find {id} in the plugin center or any added plugin source"
+    );
+    for error in errors {
+        message.push_str(&format!("\n  - {error}"));
+    }
+    bail!(message)
 }
 
 /// 同 id 的本地插件（手动放进来的、或者文件夹名不同）不能被插件中心覆盖。
@@ -768,6 +1189,7 @@ mod tests {
         RegistryInstall {
             registry: "http://127.0.0.1:1/".into(),
             version: "1.2.0".into(),
+            custom: false,
         }
     }
 
@@ -954,21 +1376,23 @@ mod tests {
                     .installed = Some(RegistryInstall {
                     registry: "x".into(),
                     version: version.into(),
+                    custom: false,
                 });
             }
             config
         };
         let memo = listing(&[("plugin.json", MANIFEST.as_bytes())]);
+        let public = Registry::public(&Config::default());
         assert_eq!(
-            availability(&memo, &config_with(None), &[]),
+            availability(&memo, &public, &config_with(None), &[]),
             Availability::NotInstalled
         );
         assert_eq!(
-            availability(&memo, &config_with(Some("1.2.0")), &[]),
+            availability(&memo, &public, &config_with(Some("1.2.0")), &[]),
             Availability::Installed
         );
         assert_eq!(
-            availability(&memo, &config_with(Some("1.1.0")), &[]),
+            availability(&memo, &public, &config_with(Some("1.1.0")), &[]),
             Availability::UpdateAvailable {
                 installed: "1.1.0".into()
             }
@@ -976,7 +1400,7 @@ mod tests {
         let mut flomo = memo.clone();
         flomo.id = "dev.helmp.flomo".into();
         assert_eq!(
-            availability(&flomo, &config_with(None), &[]),
+            availability(&flomo, &public, &config_with(None), &[]),
             Availability::Bundled
         );
     }
@@ -1013,5 +1437,199 @@ mod tests {
         let errors = collect_files(&dir).unwrap_err();
         assert_eq!(errors.len(), 3, "{errors:#?}");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn custom(name: &str, base: &str, auth: bool) -> Registry {
+        Registry {
+            name: name.into(),
+            base: base.into(),
+            custom: true,
+            auth_header: auth.then(|| "Authorization".into()),
+        }
+    }
+
+    fn installed_from(registry: &Registry, version: &str) -> Config {
+        let mut config = Config::default();
+        config
+            .plugins
+            .entry("com.example.memo".into())
+            .or_default()
+            .installed = Some(registry.record(version));
+        config
+    }
+
+    #[test]
+    fn updates_only_come_from_the_source_a_plugin_was_installed_from() {
+        // 同 id 出现在两个源里：从自定义源装的插件不能被公开插件中心的版本「更新」掉（反过来也一样），
+        // 否则任何一个源都能借同名插件替换另一个源装的代码。
+        let memo = listing(&[("plugin.json", MANIFEST.as_bytes())]);
+        let public = Registry::public(&Config::default());
+        let team = custom("Team", "https://plugins.example.com/", true);
+        let config = installed_from(&team, "1.0.0");
+        assert_eq!(
+            availability(&memo, &team, &config, &[]),
+            Availability::UpdateAvailable {
+                installed: "1.0.0".into()
+            }
+        );
+        assert_eq!(availability(&memo, &public, &config, &[]), Availability::OtherSource);
+        let config = installed_from(&public, "1.0.0");
+        assert_eq!(availability(&memo, &team, &config, &[]), Availability::OtherSource);
+        // 旧版本写的记录没有 custom 标记，地址换过也仍算公开插件中心。
+        let mut moved = public.clone();
+        moved.base = "http://127.0.0.1:9/".into();
+        assert!(moved.owns(&config.plugins["com.example.memo"].installed.clone().unwrap()));
+    }
+
+    fn catalog(sources: Vec<(Registry, Vec<Listing>)>) -> Catalog {
+        Catalog {
+            sources: sources
+                .into_iter()
+                .map(|(registry, plugins)| {
+                    let index = Index {
+                        schema: INDEX_SCHEMA,
+                        commit: None,
+                        plugins,
+                    };
+                    (registry, Ok(Arc::new(index)))
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merged_listing_prefers_the_public_center_and_says_so() {
+        let memo = listing(&[("plugin.json", MANIFEST.as_bytes())]);
+        let mut other = memo.clone();
+        other.id = "com.example.other".into();
+        let public = Registry::public(&Config::default());
+        let team = custom("Team", "https://plugins.example.com/", false);
+        let mut both = catalog(vec![
+            (public.clone(), vec![memo.clone()]),
+            (team.clone(), vec![memo.clone(), other]),
+        ]);
+        both.sources.push((custom("Down", "https://down.example.com/", false), Err("offline".into())));
+        let config = Config::default();
+        let entries = both.entries(&config, &[]);
+        let rows: Vec<_> = entries
+            .iter()
+            .map(|e| (e.listing.id.as_str(), e.registry.name.as_str(), e.shadowed.clone()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("com.example.memo", public.name.as_str(), vec!["Team"]),
+                ("com.example.other", "Team", vec![]),
+            ]
+        );
+        assert!(shadowed_message(&entries[0]).unwrap().contains("Team"));
+        assert_eq!(both.failures().count(), 1, "一个源失败不影响其他源");
+        // 已经从 Team 装了：这一行跟着安装记录走，更新从 Team 取。
+        let config = installed_from(&team, "1.0.0");
+        let entries = both.entries(&config, &[]);
+        assert_eq!(entries[0].registry.name, "Team");
+        assert_eq!(entries[0].shadowed, [public.name.as_str()]);
+    }
+
+    /// 本机假服务：按路径回复 (状态码, 额外响应头, 正文)，记下每个请求的路径和请求头。
+    fn serve(
+        reply: impl Fn(&str) -> (u16, String, String) + Send + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{BufRead as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                let path = request.split_whitespace().nth(1).unwrap_or_default().to_string();
+                log.lock().unwrap().push(request);
+                let (status, headers, body) = reply(&path);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\n{headers}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        (url, seen)
+    }
+
+    const TOKEN: &str = "Bearer s3cr3t-token-value";
+
+    fn client(registry: Registry, token: Option<&str>) -> Client {
+        Client {
+            registry,
+            token: token.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_token_only_goes_to_the_sources_own_host() {
+        // 同主机内的跳转照常跟随并带令牌；跳到别的主机就停下，令牌一次都不能发过去。
+        let (elsewhere, elsewhere_seen) = serve(|_| (200, String::new(), "{}".into()));
+        let target = format!("{elsewhere}steal");
+        let (base, seen) = serve(move |path| match path {
+            "/moved" => (302, "location: /index.json\r\n".into(), String::new()),
+            "/away" => (302, format!("location: {target}\r\n"), String::new()),
+            _ => (200, String::new(), "ok".into()),
+        });
+        let source = client(custom("Team", &base, true), Some(TOKEN));
+        assert_eq!(source.get(&format!("{base}moved"), 100).unwrap(), b"ok");
+        let requests = seen.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.contains(TOKEN)), "{requests:?}");
+
+        let err = crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            format!("{:#}", source.get(&format!("{base}away"), 100).unwrap_err())
+        });
+        assert!(err.contains("another host"), "{err}");
+        assert!(elsewhere_seen.lock().unwrap().is_empty(), "不能跟随到别的主机");
+        // 文件地址如果不在源自己的主机上（索引写错或被改），同样不带令牌。
+        source.get(&format!("{elsewhere}file"), 100).unwrap();
+        let other = elsewhere_seen.lock().unwrap().clone();
+        assert_eq!(other.len(), 1);
+        assert!(!other[0].contains("s3cr3t"), "{other:?}");
+    }
+
+    #[test]
+    fn auth_failures_name_the_source_and_never_leak_the_token() {
+        // 401 / 403 要说清是哪个源、该去哪里改；报错文案和 Sentry 事件里都不能出现令牌和地址。
+        let (base, _) = serve(|path| match path {
+            "/index.json" => (401, String::new(), "{}".into()),
+            _ => (403, String::new(), "{}".into()),
+        });
+        let events = sentry::test::with_captured_events(|| crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let source = client(custom("Team", &base, true), Some(TOKEN));
+            let err = format!("{:#}", source.index().unwrap_err());
+            assert!(err.contains("“Team”") && err.contains("401"), "{err}");
+            assert!(err.contains("Plugin Sources"), "{err}");
+            assert!(!err.contains("s3cr3t"), "{err}");
+            let err = format!("{:#}", source.get(&format!("{base}plugins/x"), 10).unwrap_err());
+            assert!(err.contains("403"), "{err}");
+            let missing = client(custom("Team", &base, true), None);
+            let err = format!("{:#}", missing.index().unwrap_err());
+            assert!(err.contains("needs a token"), "{err}");
+        }));
+        assert_eq!(events.len(), 3, "每次失败都上报");
+        for event in &events {
+            let text = format!("{event:?}");
+            assert!(!text.contains("s3cr3t"), "{text}");
+            assert!(!text.contains("127.0.0.1"), "Sentry 里不能有源的地址：{text}");
+        }
+        assert_eq!(
+            events[0].message.as_deref(),
+            Some("plugins.registry: custom registry: http_401")
+        );
     }
 }

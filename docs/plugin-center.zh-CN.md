@@ -34,12 +34,81 @@ Helmp 不在后台检查更新。在设置里打开「浏览插件中心」（�
 
 剩下需要信任的是：维护者的审核、GitHub、jsDelivr 的 TLS，以及插件启用后以你的身份运行的脚本。只启用权限让你放心的插件。
 
+## 自定义插件源
+
+除了公开的插件中心，Helmp 还能从**自定义插件源**浏览和安装插件：结构相同、由你自己托管的注册表，类似 Homebrew tap 或团队的私有商店。插件中心总是第一个源，自定义源排在它后面。
+
+### 添加插件源
+
+- **设置 › 插件 › 插件源 › 添加插件源**：填名字、地址，需要的话再填鉴权请求头名和令牌。
+- **终端**：`helmp plugins source add <名字> <地址> [--header <请求头名>] [--token-stdin]`，例如 `printf 'Bearer …' | helmp plugins source add Team https://plugins.example.com/team/ --token-stdin`。`helmp plugins source list` 列出插件源（从不打印令牌）；`helmp plugins source remove <名字>` 删除插件源和它的令牌。
+- **链接**：`helmp://add-plugin-source?url=<地址>&name=<名字>` 打开设置并预填表单。你点「添加」之前什么都不会加；链接里也不能带令牌，带了其他任何参数的链接都不认。
+
+地址必须是 `https`（只有 `localhost` / `127.0.0.1` 可以用 `http`，测试用），不能带用户名、密码、查询参数或片段。
+
+### 目录结构
+
+插件源就是一个用 HTTPS 提供的目录，结构和插件中心完全一样：
+
+```text
+<地址>/index.json
+<地址>/plugins/<id>/plugin.json
+<地址>/plugins/<id>/<index.json 里列出的其他文件>
+```
+
+`index.json`（`"schema": 1`）列出每个插件的 `id`、`version`、`name`、`author`、可选的 `description`、`permissions` 和 `permissions_text`，以及 `files`：每个文件的 `path`、`sha256`、`size` 和 `executable`。对于 `plugins/<id>/…` 这样的目录，可以这样生成：
+
+```sh
+python3 - <<'PY'
+import hashlib, json, os, subprocess
+plugins = []
+for pid in sorted(os.listdir("plugins")):
+    root = os.path.join("plugins", pid)
+    info = json.loads(subprocess.run(["helmp", "plugins", "validate", root, "--json"],
+                                     capture_output=True, text=True, check=True).stdout)
+    manifest = json.load(open(os.path.join(root, "plugin.json")))
+    files = []
+    for dirpath, _, names in os.walk(root):
+        for name in sorted(names):
+            path = os.path.join(dirpath, name)
+            data = open(path, "rb").read()
+            files.append({"path": os.path.relpath(path, root), "sha256": hashlib.sha256(data).hexdigest(),
+                          "size": len(data), "executable": os.access(path, os.X_OK)})
+    plugins.append({"id": pid, "version": info["version"], "name": manifest["name"],
+                    "author": manifest["author"], "description": manifest.get("description"),
+                    "permissions": info["permissions"], "permissions_text": {"en": info["permissions_text"]},
+                    "files": sorted(files, key=lambda f: f["path"])})
+json.dump({"schema": 1, "commit": None, "plugins": plugins}, open("index.json", "w"), indent=2)
+PY
+```
+
+限制和插件中心一样（每个插件最多 64 个文件、单个文件 512 KiB、总共 2 MiB，不能有隐藏文件和符号链接），并且要能通过 `helmp plugins validate`。
+
+### 鉴权
+
+插件源需要令牌时，填请求头名（默认 `Authorization`）和令牌的值，Helmp 原样发送（比如 `Bearer <令牌>`，或用 `--header X-Api-Key` 直接发密钥）。私有 GitHub 仓库可以用 `raw.githubusercontent.com` 的地址加 `Authorization: token <PAT>`，也可以放在任何支持请求头鉴权的 HTTPS 服务上。
+
+- 令牌存在 macOS 钥匙串（服务名 `dev.helmp.plugin-sources`），从不写进 `config.json`、日志、报错文案或崩溃报告。
+- 只发给这个插件源自己的主机。重定向只在同一主机内跟随；跳到别的主机会直接停下，不会把令牌带过去。
+- HTTP 401 / 403、源连不上时，按源分别说明（哪个源、什么原因）。一个源失败不影响其他源。
+
+### 浏览、安装与更新
+
+设置里的插件列表（以及 `helmp plugins available`）合并展示所有源的插件，并标出来源。同一个 id 出现在多个源里时，插件中心优先，其次是列表里靠前的源，插件旁边会明确提示。要从指定的源安装，在设置里点那一行，或用 `helmp plugins install <id> --source <名字>`。
+
+插件只会从安装它的那个源更新，别的源发布同 id 的插件也替换不了它。删掉那个源后，插件仍然保留，只是不会再有更新。
+
+其余和插件中心完全一样：校验 SHA-256、原子安装、装好默认停用、权限变化要重新确认。
+
+**只添加你信任的源。** 自定义源没有经过插件中心维护者的审核。令牌要当密码看待：主机支持的话给每个人单独发只读令牌，泄露了就换掉。
+
 ## 设置项
 
 | 设置 | 作用 |
 |---|---|
 | `config.json` 里的 `plugins_registry_url` | 注册表地址（`index.json` 所在的目录）。默认是 `https://cdn.jsdelivr.net/gh/PeterChen1997/helmp-plugins@main/` |
 | 环境变量 `HELMP_REGISTRY_URL` | 优先于上面的设置，比如指向本机的测试服务 |
+| `config.json` 里的 `plugin_sources` | 自定义插件源（`name`、`url`、可选的 `auth_header`）。令牌在钥匙串里，不在这里。在设置里或用 `helmp plugins source` 管理 |
 | 环境变量 `HELMP_REGISTRY_REPO` | `helmp plugins submit` 开 PR 的 GitHub 仓库，默认是 `PeterChen1997/helmp-plugins` |
 
 ## 发布你的插件

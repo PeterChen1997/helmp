@@ -26,6 +26,7 @@ The scheme is declared in the `Info.plist` that `script/bundle.sh` writes, so li
 | `helmp://plugin/<plugin-id>/<command-id>` | Invoke a [plugin](plugins.md) command |
 | `helmp://plugin/<plugin-id>/<command-id>?q=<text>` | Same, with `<text>` as the command's input (typed inside its scope) |
 | `helmp://install-plugin?id=<plugin-id>` | Install a plugin from the [Plugin Center](plugin-center.md) and open Settings › Plugins on it |
+| `helmp://add-plugin-source?url=<url>&name=<name>` | Open Settings › Plugins with a [custom plugin source](plugin-center.md#custom-plugin-sources) filled in. It's only added when you click **Add**; links can't carry a token |
 
 Extension ids for `scope/`:
 
@@ -90,6 +91,7 @@ open "helmp://show?q=wx"
 | `helmp://plugin/<插件 id>/<命令 id>` | 调用某个[插件](plugins.zh-CN.md)命令 |
 | `helmp://plugin/<插件 id>/<命令 id>?q=<文字>` | 同上，`<文字>` 作为命令的输入（相当于进入命令范围后输入） |
 | `helmp://install-plugin?id=<插件 id>` | 从[插件中心](plugin-center.zh-CN.md)安装插件，并打开「设置 › 插件」定位到它 |
+| `helmp://add-plugin-source?url=<地址>&name=<名字>` | 打开「设置 › 插件」并预填一个[自定义插件源](plugin-center.zh-CN.md#自定义插件源)。你点「添加」才会加上；链接里不能带令牌 |
 
 `scope/` 可用的扩展 id：
 

@@ -5,7 +5,10 @@
 //! - secret 偏好设置用掩码输入框，失焦或回车时写进钥匙串，界面上从不回显已存的值。
 //! - 顶部：打开插件文件夹、重新加载、新建插件（生成模板并在访达中显示）、开发者文档、插件中心（落地页）。
 //! - 「从插件中心安装」：用户点「浏览」（或通过 `helmp://install-plugin` 安装）时才联网取索引，
-//!   列出插件和安装 / 更新按钮；装好后定位到这个插件并显示权限确认卡片，从不自动启用。
+//!   合并列出插件中心和自定义插件源的插件（标出来源）和安装 / 更新按钮；装好后定位到这个插件并显示
+//!   权限确认卡片，从不自动启用。一个源取不到只在那个源的位置说明原因。
+//! - 「插件源」：公开插件中心之外的自定义源（列表、添加、换令牌、删除），界面沿用 MCP 页服务器列表的样式。
+//!   令牌用掩码输入框，保存进钥匙串，从不回显。`helmp://add-plugin-source` 只预填添加表单，要用户点「添加」。
 //!
 //! 插件列表每次渲染现取 `registry::current()`，目录轮询热重载后这里自然跟着变。
 
@@ -20,10 +23,11 @@ use crate::i18n::{tr, trf};
 use crate::provider::Action;
 use crate::providers::plugins::manifest::{PrefKind, Preference};
 use crate::providers::plugins::registry::{self, Entry, Source, State};
-use crate::providers::plugins::center::{self, Availability, Index, Listing};
-use crate::providers::plugins::{self, scaffold, secrets};
+use crate::providers::plugins::center::{self, Availability, Catalog, Listing, Registry};
+use crate::providers::plugins::{self, scaffold, secrets, sources};
 use crate::style::{self, Palette};
 
+use super::mcp_pane::{card, code, field, labeled};
 use super::model;
 use super::widgets;
 
@@ -53,14 +57,35 @@ pub struct PluginsPane {
     center: CenterState,
     /// 正在安装的插件 id（同一时间只装一个）。
     installing: Option<String>,
+    /// 添加插件源的表单（点「添加插件源」或 `helmp://add-plugin-source` 打开）。
+    source_form: Option<SourceForm>,
+    /// 展开的插件源（名字）、它的令牌输入框，以及钥匙串里是否已存了令牌。
+    source_open: Option<(String, Entity<InputState>, bool)>,
+    /// 等待再点一次确认删除的插件源。
+    confirm_remove: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
 enum CenterState {
     Idle,
     Loading,
-    Loaded(Arc<Index>),
-    Failed(String),
+    Loaded(Arc<Catalog>),
+}
+
+struct SourceForm {
+    name: Entity<InputState>,
+    url: Entity<InputState>,
+    header: Entity<InputState>,
+    token: Entity<InputState>,
+}
+
+fn line_input(window: &mut Window, cx: &mut App, placeholder: &str, value: &str, masked: bool) -> Entity<InputState> {
+    let (placeholder, value) = (placeholder.to_string(), value.to_string());
+    cx.new(|cx| {
+        let mut state = InputState::new(window, cx).masked(masked).placeholder(placeholder);
+        state.set_value(value, window, cx);
+        state
+    })
 }
 
 pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
@@ -73,6 +98,9 @@ pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
         status: None,
         center: CenterState::Idle,
         installing: None,
+        source_form: None,
+        source_open: None,
+        confirm_remove: None,
         _subscriptions: Vec::new(),
     })
     .into()
@@ -284,16 +312,11 @@ impl PluginsPane {
         self.center = CenterState::Loading;
         cx.notify();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = cx
-                .background_spawn(async move {
-                    center::fetch_index(&center::registry_base(&config::get()))
-                })
+            let catalog = cx
+                .background_spawn(async move { Catalog::fetch(&config::get()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.center = match result {
-                    Ok(index) => CenterState::Loaded(Arc::new(index)),
-                    Err(err) => CenterState::Failed(format!("{err:#}")),
-                };
+                this.center = CenterState::Loaded(Arc::new(catalog));
                 cx.notify();
             });
         })
@@ -301,7 +324,8 @@ impl PluginsPane {
     }
 
     /// 从插件中心安装或更新（列表里的按钮、`helmp://install-plugin`）。装好后定位到插件并弹出权限确认。
-    pub fn install_from_center(&mut self, id: String, cx: &mut Context<Self>) {
+    /// `source` 是自定义插件源的名字；None = 按默认顺序（装过的按原来的源，没装过的公开插件中心优先）。
+    pub fn install_from_center(&mut self, id: String, source: Option<String>, cx: &mut Context<Self>) {
         if center::is_bundled(&id) {
             // 自带插件不用装：定位过去，告诉用户在这里启用。
             self.selected = Some(id.clone());
@@ -322,7 +346,7 @@ impl PluginsPane {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let task_id = id.clone();
             let result = cx
-                .background_spawn(async move { center::install(&task_id) })
+                .background_spawn(async move { center::install(&task_id, source.as_deref()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.installing = None;
@@ -398,29 +422,36 @@ impl PluginsPane {
                 None,
                 cx,
             )],
-            CenterState::Failed(err) => vec![line(
-                trf!("获取插件中心失败：{err}", "Couldn't load the plugin center: {err}"),
-                true,
-                Some(tr("重试", "Retry")),
-                cx,
-            )],
-            CenterState::Loaded(index) if index.plugins.is_empty() => vec![line(
-                tr("插件中心暂时没有插件", "The plugin center has no plugins yet").into(),
-                false,
-                None,
-                cx,
-            )],
-            CenterState::Loaded(index) => {
-                let index = Arc::clone(index);
+            CenterState::Loaded(catalog) => {
+                let catalog = Arc::clone(catalog);
                 let entries = registry::current();
-                index
-                    .plugins
-                    .iter()
-                    .map(|listing| {
-                        let availability = center::availability(listing, config, &entries);
-                        self.center_row(listing, availability, pal, cx)
+                let mut rows: Vec<AnyElement> = catalog
+                    .failures()
+                    .map(|(registry, err)| {
+                        let text = if registry.custom {
+                            err.to_string()
+                        } else {
+                            trf!("获取插件中心失败：{err}", "Couldn't load the plugin center: {err}")
+                        };
+                        line(text, true, Some(tr("重试", "Retry")), cx)
                     })
-                    .collect()
+                    .collect();
+                let listed = catalog.entries(config, &entries);
+                if listed.is_empty() && rows.is_empty() {
+                    rows.push(line(
+                        tr("插件中心暂时没有插件", "The plugin center has no plugins yet").into(),
+                        false,
+                        None,
+                        cx,
+                    ));
+                }
+                for entry in &listed {
+                    let availability =
+                        center::availability(entry.listing, entry.registry, config, &entries);
+                    let note = center::shadowed_message(entry);
+                    rows.push(self.center_row(entry.listing, entry.registry, availability, note, pal, cx));
+                }
+                rows
             }
         };
         widgets::group(rows, pal)
@@ -429,7 +460,9 @@ impl PluginsPane {
     fn center_row(
         &self,
         listing: &Listing,
+        from: &Registry,
         availability: Availability,
+        note: Option<String>,
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -445,17 +478,21 @@ impl PluginsPane {
             Availability::LocalConflict => {
                 (tr("本地已有同 id 插件", "Local copy exists").to_string(), false)
             }
+            Availability::OtherSource => {
+                (tr("已从其他源安装", "Installed from another source").to_string(), false)
+            }
         };
         let id = listing.id.clone();
+        let source = from.custom.then(|| from.name.clone());
         let button = widgets::push_button(
             SharedString::from(format!("plugin-center-install-{}", listing.id)),
             label,
             !enabled || self.installing.is_some(),
             cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.install_from_center(id.clone(), cx)
+                this.install_from_center(id.clone(), source.clone(), cx)
             }),
         );
-        let mut meta = format!("v{} · {}", listing.version, listing.author);
+        let mut meta = format!("v{} · {} · {}", listing.version, listing.author, from.name);
         if let Availability::UpdateAvailable { installed } = &availability {
             meta.push_str(&trf!("（已装 {installed}）", " (installed: {installed})"));
         }
@@ -480,6 +517,9 @@ impl PluginsPane {
             trf!("权限：{permissions}", "Permissions: {permissions}"),
             pal,
         ));
+        if let Some(note) = note {
+            text = text.child(widgets::error_text(note, pal));
+        }
         div()
             .flex()
             .items_center()
@@ -496,6 +536,309 @@ impl PluginsPane {
             .into_any_element()
     }
 
+
+    // ------------------------------------------------------------ 插件源
+
+    /// 打开添加插件源的表单；`helmp://add-plugin-source` 带来的地址和名字预填进去（令牌永远要用户自己填）。
+    pub fn open_source_form(
+        &mut self,
+        url: &str,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.source_form = Some(SourceForm {
+            name: line_input(window, cx, tr("如 团队插件", "e.g. Team Plugins"), name, false),
+            url: line_input(window, cx, "https://plugins.example.com/", url, false),
+            header: line_input(window, cx, sources::DEFAULT_HEADER, "", false),
+            token: line_input(
+                window,
+                cx,
+                tr("可选，如 Bearer …", "Optional, e.g. Bearer …"),
+                "",
+                true,
+            ),
+        });
+        self.status = None;
+        cx.notify();
+    }
+
+    fn save_source_form(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = &self.source_form else { return };
+        let read = |state: &Entity<InputState>| state.read(cx).value().trim().to_string();
+        let token = read(&form.token);
+        let header = Some(read(&form.header)).filter(|h| !h.is_empty());
+        let source = config::PluginSource {
+            name: read(&form.name),
+            url: read(&form.url),
+            auth_header: header,
+        };
+        match sources::add(source, Some(token.as_str()), "settings") {
+            Ok(source) => {
+                self.source_form = None;
+                // 新源要重新取一次才会出现在列表里。
+                if matches!(self.center, CenterState::Loaded(_)) {
+                    self.center = CenterState::Idle;
+                    self.load_center(cx);
+                }
+                self.status = Some(Ok(trf!(
+                    "已添加插件源「{}」",
+                    "Added plugin source “{}”",
+                    source.name
+                )));
+            }
+            Err(err) => self.status = Some(Err(format!("{err:#}"))),
+        }
+        cx.notify();
+    }
+
+    fn toggle_source(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_remove = None;
+        if self.source_open.as_ref().is_some_and(|(open, _, _)| open == name) {
+            self.source_open = None;
+            cx.notify();
+            return;
+        }
+        let url = config::get()
+            .plugin_sources
+            .iter()
+            .find(|source| source.name == name)
+            .map(|source| sources::normalize_url(&source.url).unwrap_or(source.url.clone()));
+        let stored = match url.as_deref().map(sources::token) {
+            Some(Ok(token)) => token.is_some(),
+            Some(Err(err)) => {
+                self.status = Some(Err(format!("{err:#}")));
+                false
+            }
+            None => false,
+        };
+        let input = line_input(window, cx, &token_placeholder(stored), "", true);
+        self.source_open = Some((name.to_string(), input, stored));
+        cx.notify();
+    }
+
+    fn save_token(&mut self, name: &str, clear: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, input, stored)) = &mut self.source_open else { return };
+        let token = if clear {
+            String::new()
+        } else {
+            input.read(cx).value().trim().to_string()
+        };
+        if token.is_empty() && !clear {
+            return;
+        }
+        match sources::update_token(name, &token) {
+            Ok(()) => {
+                *stored = !clear;
+                let placeholder = token_placeholder(!clear);
+                input.update(cx, |state, cx| {
+                    state.set_value(String::new(), window, cx);
+                    state.set_placeholder(placeholder, window, cx);
+                });
+                self.status = Some(Ok(if clear {
+                    tr("已从钥匙串删除令牌", "Removed the token from the Keychain").into()
+                } else {
+                    tr("令牌已存入钥匙串", "Token saved to the Keychain").into()
+                }));
+            }
+            Err(err) => self.status = Some(Err(format!("{err:#}"))),
+        }
+        cx.notify();
+    }
+
+    fn remove_source(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.confirm_remove.as_deref() != Some(name) {
+            self.confirm_remove = Some(name.to_string());
+            cx.notify();
+            return;
+        }
+        self.confirm_remove = None;
+        match sources::remove(name) {
+            Ok(source) => {
+                self.source_open = None;
+                if matches!(self.center, CenterState::Loaded(_)) {
+                    self.center = CenterState::Idle;
+                    self.load_center(cx);
+                }
+                self.status = Some(Ok(trf!(
+                    "已删除插件源「{}」（从它装的插件留着，但不会再有更新）",
+                    "Removed plugin source “{}” (plugins installed from it stay, without updates)",
+                    source.name
+                )));
+            }
+            Err(err) => self.status = Some(Err(format!("{err:#}"))),
+        }
+        cx.notify();
+    }
+
+    fn render_source_form(&self, pal: &Palette, cx: &mut Context<Self>) -> Option<Div> {
+        let form = self.source_form.as_ref()?;
+        Some(
+            card(pal)
+                .child(widgets::label(tr("添加插件源", "Add Plugin Source"), pal))
+                .child(labeled(tr("名字", "Name"), field(&form.name, 260., pal), pal))
+                .child(labeled(tr("地址", "URL"), field(&form.url, 380., pal), pal))
+                .child(labeled(tr("鉴权请求头", "Auth header"), field(&form.header, 260., pal), pal))
+                .child(labeled(tr("令牌", "Token"), field(&form.token, 380., pal), pal))
+                .child(widgets::help_text(
+                    tr(
+                        "地址是 index.json 所在的目录，必须是 https。令牌只存进钥匙串，只发给这个地址的主机。\
+                         只添加你信任的源：它的插件同样默认停用、启用前要确认权限。",
+                        "The URL is the folder that holds index.json and must use https. The token is kept in the Keychain and only sent to that host. \
+                         Only add sources you trust: their plugins also start turned off and need your OK before they run.",
+                    ),
+                    pal,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(widgets::push_button(
+                            "plugin-source-save",
+                            tr("添加", "Add"),
+                            false,
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.save_source_form(cx)),
+                        ))
+                        .child(widgets::push_button(
+                            "plugin-source-cancel",
+                            tr("取消", "Cancel"),
+                            false,
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.source_form = None;
+                                cx.notify();
+                            }),
+                        )),
+                ),
+        )
+    }
+
+    /// 「插件源」分组：公开插件中心（固定）+ 用户添加的源。
+    fn sources_group(&self, config: &Config, pal: &Palette, cx: &mut Context<Self>) -> Div {
+        let rows = center::registries(config)
+            .into_iter()
+            .map(|registry| self.source_row(registry, pal, cx))
+            .collect();
+        widgets::group(rows, pal)
+    }
+
+    fn source_row(&self, registry: Registry, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let open = self
+            .source_open
+            .as_ref()
+            .filter(|(name, _, _)| registry.custom && *name == registry.name);
+        let tag = match (&registry.auth_header, registry.custom) {
+            (_, false) => tr("默认", "Default"),
+            (Some(_), true) => tr("需要令牌", "Token"),
+            (None, true) => tr("公开", "Public"),
+        };
+        let name = registry.name.clone();
+        let line = div()
+            .id(SharedString::from(format!("plugin-source-row-{}", registry.base)))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .min_h(px(48.))
+            .px(px(14.))
+            .py(px(6.))
+            .when(registry.custom, |el| el.cursor_pointer())
+            .when(open.is_some(), |el| el.bg(pal.accent.opacity(0.08)))
+            .when(registry.custom, |el| {
+                el.on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.toggle_source(&name, window, cx)
+                }))
+            })
+            .child(widgets::tinted_icon(
+                "globe",
+                if registry.custom {
+                    crate::provider::Tint::Teal
+                } else {
+                    crate::provider::Tint::Gray
+                },
+                px(24.),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(widgets::label(registry.name.clone(), pal).truncate())
+                            .child(div().text_size(px(11.)).text_color(pal.muted).child(tag)),
+                    )
+                    .child(widgets::help_text(registry.base.clone(), pal).truncate()),
+            );
+        let mut column = div().flex().flex_col().child(line);
+        if let Some((_, input, stored)) = open {
+            column = column.child(self.source_details(&registry, input, *stored, pal, cx));
+        }
+        column.into_any_element()
+    }
+
+    fn source_details(
+        &self,
+        registry: &Registry,
+        input: &Entity<InputState>,
+        stored: bool,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let header = registry
+            .auth_header
+            .clone()
+            .unwrap_or_else(|| sources::DEFAULT_HEADER.to_string());
+        let (save, clear, remove) = (registry.name.clone(), registry.name.clone(), registry.name.clone());
+        let confirming = self.confirm_remove.as_deref() == Some(registry.name.as_str());
+        let mut controls = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(field(input, 320., pal))
+            .child(widgets::push_button(
+                "plugin-source-token-save",
+                tr("保存令牌", "Save Token"),
+                false,
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.save_token(&save, false, window, cx)),
+            ));
+        if stored {
+            controls = controls.child(widgets::danger_button(
+                "plugin-source-token-clear",
+                tr("清除", "Clear"),
+                false,
+                pal,
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.save_token(&clear, true, window, cx)),
+            ));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .pl(px(50.))
+            .pr(px(14.))
+            .pb(px(12.))
+            .child(code(registry.base.clone(), pal))
+            .child(widgets::help_text(
+                trf!("令牌（请求头 {header}）：", "Token (sent as the {header} header):"),
+                pal,
+            ))
+            .child(controls)
+            .child(div().flex().child(widgets::danger_button(
+                "plugin-source-remove",
+                if confirming {
+                    tr("再点一次确认删除", "Click again to remove")
+                } else {
+                    tr("删除插件源", "Remove Source")
+                },
+                false,
+                pal,
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.remove_source(&remove, cx)),
+            )))
+    }
 
     fn toolbar(&self, pal: &Palette, cx: &mut Context<Self>) -> Div {
         div()
@@ -686,15 +1029,20 @@ impl PluginsPane {
         };
         // 插件中心有更新的版本（索引已加载、且是从插件中心装的）。
         let update = match &self.center {
-            CenterState::Loaded(index) => index
-                .get(&entry.id)
-                .filter(|listing| {
-                    matches!(
-                        center::availability(listing, config, std::slice::from_ref(entry)),
-                        Availability::UpdateAvailable { .. }
-                    )
-                })
-                .map(|_| tr("有更新", "Update available")),
+            CenterState::Loaded(catalog) => {
+                let local = std::slice::from_ref(entry);
+                catalog
+                    .entries(config, local)
+                    .into_iter()
+                    .find(|row| {
+                        row.listing.id == entry.id
+                            && matches!(
+                                center::availability(row.listing, row.registry, config, local),
+                                Availability::UpdateAvailable { .. }
+                            )
+                    })
+                    .map(|_| tr("有更新", "Update available"))
+            }
             _ => None,
         };
         let id = entry.id.clone();
@@ -1031,6 +1379,14 @@ fn set_pref(config: &mut Config, plugin_id: &str, pref_id: &str, value: String) 
     }
 }
 
+fn token_placeholder(stored: bool) -> String {
+    if stored {
+        tr("已存入钥匙串（输入新值可替换）", "Saved in the Keychain (type to replace)").into()
+    } else {
+        tr("未设置", "Not set").into()
+    }
+}
+
 fn placeholder(pref: &Preference, stored: bool) -> String {
     if pref.kind == PrefKind::Secret && stored {
         return tr(
@@ -1120,6 +1476,32 @@ impl Render for PluginsPane {
             )))
             .child(widgets::group_header(tr("从插件中心安装", "Install from Plugin Center"), &pal))
             .child(self.center_group(&config, &pal, cx).mb(px(18.)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(widgets::group_header(tr("插件源", "Plugin Sources"), &pal))
+                    .when(self.source_form.is_none(), |el| {
+                        el.child(widgets::push_button(
+                            "plugin-source-add",
+                            tr("添加插件源", "Add Source"),
+                            false,
+                            cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.open_source_form("", "", window, cx)
+                            }),
+                        ))
+                    }),
+            )
+            .when_some(self.render_source_form(&pal, cx), |el, form| el.child(form))
+            .child(self.sources_group(&config, &pal, cx).mb(px(6.)))
+            .child(div().mb(px(18.)).ml(px(4.)).child(widgets::help_text(
+                tr(
+                    "自定义插件源和插件中心结构相同，可以是团队或个人托管的私有注册表。点开一个源可以换令牌或删除。",
+                    "Custom sources are registries laid out like the plugin center, such as a team's private one. Click a source to change its token or remove it.",
+                ),
+                &pal,
+            )))
             .child(widgets::group_header(tr("内置功能", "Built-in Features"), &pal))
             .child(self.builtin_group(&pal, cx))
     }

@@ -45,6 +45,10 @@ pub struct Config {
     /// 环境变量 `HELMP_REGISTRY_URL` 优先（测试指向本地假服务）。见 `providers::plugins::center`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_registry_url: Option<String>,
+    /// 自定义插件源（公开插件中心之外、结构相同的注册表），见 `providers::plugins::sources`。
+    /// 鉴权请求头的值只存钥匙串。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_sources: Vec<PluginSource>,
     /// 自动更新：更新源地址（见 `updates::feed`、docs/updates.md）。
     #[serde(default)]
     pub updates: UpdatesConfig,
@@ -73,6 +77,7 @@ impl Default for Config {
             plugins: BTreeMap::new(),
             mcp: Default::default(),
             plugins_registry_url: None,
+            plugin_sources: Vec::new(),
             updates: UpdatesConfig::default(),
             onboarding_done: false,
             mcp_server: McpServerConfig::default(),
@@ -181,6 +186,22 @@ pub struct RegistryInstall {
     pub registry: String,
     /// 安装的版本。
     pub version: String,
+    /// 从自定义插件源装的（`registry` 是那个源的地址）；false = 公开插件中心（旧记录都是）。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub custom: bool,
+}
+
+/// 一个自定义插件源。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PluginSource {
+    /// 显示名，也是命令行里指代它的名字（唯一）。
+    pub name: String,
+    /// 注册表目录地址（`index.json` 所在），以 `/` 结尾。
+    pub url: String,
+    /// 鉴权请求头的名字（如 `Authorization`）；值在钥匙串里。None = 不鉴权。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_header: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

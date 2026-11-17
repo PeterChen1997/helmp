@@ -50,6 +50,10 @@ toml = "1"
 dispatch2 = "0.3"
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
+[dev-dependencies]
+# 单测里截下 Sentry 事件，断言上报内容不带地址和令牌。
+sentry = { version = "0.49", default-features = false, features = ["test"] }
+
 [features]
 # 截 README 配图：图形自检的 `snap:<名字>` 用 GPUI 的离屏渲染把面板存成 PNG（不需要屏幕录制权限）。
 # 只给 `cargo build --release --features readme-shots` 用，发布包不带。

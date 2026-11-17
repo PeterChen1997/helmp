@@ -66,7 +66,27 @@ pub fn install_plugin(cx: &mut App, id: &str) {
             .and_then(|root| root.read(cx).view().clone().downcast::<SettingsView>().ok())
             .and_then(|view| view.read(cx).plugins.clone().downcast::<plugins_pane::PluginsPane>().ok());
         if let Some(pane) = pane {
-            pane.update(cx, |pane, cx| pane.install_from_center(id, cx));
+            pane.update(cx, |pane, cx| pane.install_from_center(id, None, cx));
+        }
+    });
+}
+
+/// `helmp://add-plugin-source?url=…&name=…`：打开设置 › 插件，把地址和名字预填进「添加插件源」表单。
+/// 只预填，用户点「添加」才会真的加上；令牌也要用户自己填。
+pub fn add_plugin_source(cx: &mut App, url: &str, name: &str) {
+    open_page(cx, Page::Plugins);
+    let Some(handle) = cx.try_global::<SettingsWindow>().map(|global| global.0) else {
+        return;
+    };
+    let (url, name) = (url.to_string(), name.to_string());
+    let _ = handle.update(cx, |_, window, cx| {
+        let pane = window
+            .root::<base::Root>()
+            .flatten()
+            .and_then(|root| root.read(cx).view().clone().downcast::<SettingsView>().ok())
+            .and_then(|view| view.read(cx).plugins.clone().downcast::<plugins_pane::PluginsPane>().ok());
+        if let Some(pane) = pane {
+            pane.update(cx, |pane, cx| pane.open_source_form(&url, &name, window, cx));
         }
     });
 }

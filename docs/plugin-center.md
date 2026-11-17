@@ -34,12 +34,81 @@ An update downloads and verifies the new version, then replaces the folder. If t
 
 What's left to trust: the maintainer's review, GitHub, jsDelivr's TLS, and the scripts a plugin runs with your user's permissions once you turn it on. Only turn on plugins whose permissions make sense to you.
 
+## Custom plugin sources
+
+Besides the public Plugin Center, Helmp can browse and install from **custom plugin sources**: registries with the same layout that you host yourself, like a Homebrew tap or a team's private store. The Plugin Center is always the first source; custom sources are added after it.
+
+### Add a source
+
+- **Settings › Plugins › Plugin Sources › Add Source**: a name, the URL, and optionally an auth header name and a token.
+- **Terminal**: `helmp plugins source add <name> <url> [--header <name>] [--token-stdin]`, for example `printf 'Bearer …' | helmp plugins source add Team https://plugins.example.com/team/ --token-stdin`. `helmp plugins source list` shows the sources (never the token); `helmp plugins source remove <name>` removes one and its token.
+- **Link**: `helmp://add-plugin-source?url=<url>&name=<name>` opens Settings with the form filled in. Nothing is added until you click **Add**, and links can't carry a token: a link with any other parameter is ignored.
+
+The URL must use `https` (plain `http` is only accepted for `localhost` / `127.0.0.1`, for testing) and can't contain a user name, password, query or fragment.
+
+### Layout
+
+A source is a folder served over HTTPS, laid out exactly like the Plugin Center:
+
+```text
+<url>/index.json
+<url>/plugins/<id>/plugin.json
+<url>/plugins/<id>/<other files listed in index.json>
+```
+
+`index.json` (`"schema": 1`) lists each plugin's `id`, `version`, `name`, `author`, optional `description`, `permissions` and `permissions_text`, and `files`: every file's `path`, `sha256`, `size` and `executable`. One way to generate it, for a folder `plugins/<id>/…`:
+
+```sh
+python3 - <<'PY'
+import hashlib, json, os, subprocess
+plugins = []
+for pid in sorted(os.listdir("plugins")):
+    root = os.path.join("plugins", pid)
+    info = json.loads(subprocess.run(["helmp", "plugins", "validate", root, "--json"],
+                                     capture_output=True, text=True, check=True).stdout)
+    manifest = json.load(open(os.path.join(root, "plugin.json")))
+    files = []
+    for dirpath, _, names in os.walk(root):
+        for name in sorted(names):
+            path = os.path.join(dirpath, name)
+            data = open(path, "rb").read()
+            files.append({"path": os.path.relpath(path, root), "sha256": hashlib.sha256(data).hexdigest(),
+                          "size": len(data), "executable": os.access(path, os.X_OK)})
+    plugins.append({"id": pid, "version": info["version"], "name": manifest["name"],
+                    "author": manifest["author"], "description": manifest.get("description"),
+                    "permissions": info["permissions"], "permissions_text": {"en": info["permissions_text"]},
+                    "files": sorted(files, key=lambda f: f["path"])})
+json.dump({"schema": 1, "commit": None, "plugins": plugins}, open("index.json", "w"), indent=2)
+PY
+```
+
+The same limits apply as in the Plugin Center (64 files, 512 KiB per file, 2 MiB per plugin, no hidden files or symlinks), and `helmp plugins validate` must pass.
+
+### Authentication
+
+If the source needs a token, set the header name (default `Authorization`) and the token value, which Helmp sends verbatim (for example `Bearer <token>`, or a bare key with `--header X-Api-Key`). For a private GitHub repository, serve the raw files through any HTTPS host that accepts a header token; plain `raw.githubusercontent.com` URLs work with `Authorization: token <PAT>`.
+
+- The token is stored in the macOS Keychain (service `dev.helmp.plugin-sources`), never in `config.json`, logs, error messages or crash reports.
+- It's only sent to the source's own host. Redirects are followed only within that host; a redirect to another host stops the download instead of forwarding the token.
+- HTTP 401 / 403 and unreachable sources are reported per source (which source, what went wrong). One failing source never hides the others.
+
+### Browsing, installing and updating
+
+The plugin list in Settings (and `helmp plugins available`) merges all sources and shows where each plugin comes from. If the same id appears in several sources, the Plugin Center wins, then the first source in the list, and Helmp says so next to the plugin. To install from a specific source, use its row in Settings or `helmp plugins install <id> --source <name>`.
+
+A plugin is only ever updated from the source it was installed from, so another source can't replace it by publishing the same id. If you remove that source, the plugin stays installed but gets no more updates.
+
+Everything else is the same as for the Plugin Center: SHA-256 checks, atomic install, plugins start turned off, and permission changes need your approval again.
+
+**Only add sources you trust.** Custom sources aren't reviewed by the Plugin Center maintainers. Treat a source's token like a password: give each person their own read-only token if your host supports it, and rotate it if it leaks.
+
 ## Settings
 
 | Setting | What it does |
 |---|---|
 | `plugins_registry_url` in `config.json` | Registry base URL (the folder that holds `index.json`). Default: `https://cdn.jsdelivr.net/gh/PeterChen1997/helmp-plugins@main/` |
 | `HELMP_REGISTRY_URL` environment variable | Overrides the above, for example to point at a local test server |
+| `plugin_sources` in `config.json` | Custom plugin sources (`name`, `url`, optional `auth_header`). Tokens live in the Keychain, not here. Manage them in Settings or with `helmp plugins source` |
 | `HELMP_REGISTRY_REPO` environment variable | The GitHub repository `helmp plugins submit` opens pull requests against. Default: `PeterChen1997/helmp-plugins` |
 
 ## Publish your plugin

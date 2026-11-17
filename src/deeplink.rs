@@ -11,6 +11,9 @@
 //! helmp://install-plugin?id=<插件 id>
 //!                                从插件中心安装（落地页的「在 Helmp 中安装」按钮）：下载并校验后打开
 //!                                设置 › 插件，定位到这个插件并显示权限确认卡片；从不自动启用
+//! helmp://add-plugin-source?url=<地址>[&name=<名字>]
+//!                                打开设置 › 插件，把自定义插件源预填进「添加插件源」表单；用户点「添加」才会加上。
+//!                                地址必须是 https；链接里带令牌类参数（token、header 等）的一律不认
 //! ```
 //!
 //! 验收专用：设置了环境变量 `HELMP_SNAPSHOT_DIR` 时，`helmp://debug/snapshot?q=名字` 把 Helmp
@@ -37,6 +40,7 @@ pub enum Link {
         query: Option<String>,
     },
     InstallPlugin { id: String },
+    AddPluginSource { url: String, name: String },
     Snapshot { name: String },
 }
 
@@ -79,6 +83,20 @@ pub fn parse(url: &str) -> Option<Link> {
         ("install-plugin", None) => param("id")
             .filter(|id| crate::providers::plugins::manifest::valid_id(id))
             .map(|id| Link::InstallPlugin { id }),
+        // 令牌只能由用户自己在设置里填：网页里的链接带上任何别的参数都不认，免得把令牌、
+        // 请求头之类的东西塞进来。地址先按插件源的规则检查（https、不带用户名密码和查询串）。
+        ("add-plugin-source", None)
+            if query
+                .split('&')
+                .filter(|pair| !pair.is_empty())
+                .all(|pair| matches!(pair.split('=').next(), Some("url" | "name"))) =>
+        {
+            let url = param("url")
+                .and_then(|url| crate::providers::plugins::sources::normalize_url(&url).ok())?;
+            let name = param("name").unwrap_or_default();
+            let name: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
+            Some(Link::AddPluginSource { url, name })
+        }
         ("debug", Some("snapshot")) if snapshot_dir().is_some() => Some(Link::Snapshot {
             name: q.unwrap_or_else(|| "snapshot".into()),
         }),
@@ -191,6 +209,9 @@ pub fn open(link: Link, cx: &mut App) {
         }),
         // 安装要联网，放到设置页里在后台做；结果（或失败原因）显示在插件页上。
         Link::InstallPlugin { id } => cx.defer(move |cx| crate::settings::install_plugin(cx, &id)),
+        Link::AddPluginSource { url, name } => {
+            cx.defer(move |cx| crate::settings::add_plugin_source(cx, &url, &name))
+        }
         Link::Snapshot { name } => snapshot(&name),
     }
 }
@@ -312,6 +333,37 @@ mod tests {
             "helmp://install-plugin?id=..%2F..%2Fx",
             "helmp://install-plugin?id=Evil%20Id",
             "helmp://install-plugin/extra?id=dev.helmp.flomo",
+        ] {
+            assert_eq!(parse(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn add_plugin_source_links_only_prefill_and_never_carry_tokens() {
+        // 网页上的链接只能把地址和名字带进添加表单（用户确认后才添加），不能夹带令牌或请求头。
+        assert_eq!(
+            parse("helmp://add-plugin-source?url=https%3A%2F%2Fplugins.example.com%2Fteam&name=Team+Plugins"),
+            Some(Link::AddPluginSource {
+                url: "https://plugins.example.com/team/".into(),
+                name: "Team Plugins".into()
+            })
+        );
+        assert_eq!(
+            parse("helmp://add-plugin-source?url=https://plugins.example.com/"),
+            Some(Link::AddPluginSource {
+                url: "https://plugins.example.com/".into(),
+                name: String::new()
+            })
+        );
+        for url in [
+            "helmp://add-plugin-source",
+            "helmp://add-plugin-source?name=Team",
+            "helmp://add-plugin-source?url=http://plugins.example.com/",
+            "helmp://add-plugin-source?url=https://plugins.example.com/&token=abc",
+            "helmp://add-plugin-source?url=https://plugins.example.com/&header=X-Key",
+            "helmp://add-plugin-source?url=https%3A%2F%2Fplugins.example.com%2F%3Ftoken%3Dabc",
+            "helmp://add-plugin-source?url=https://user:pw@plugins.example.com/",
+            "helmp://add-plugin-source/extra?url=https://plugins.example.com/",
         ] {
             assert_eq!(parse(url), None, "{url}");
         }

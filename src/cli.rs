@@ -16,8 +16,16 @@
 //! helmp plugins validate <目录> [--json]
 //!                               校验一个插件目录（开发者用）：通过打印 OK 与推导出的权限，否则列出问题并失败退出；
 //!                               --json 输出 {ok, id, version, commands, permissions, permissions_text, errors}
-//! helmp plugins available       列出插件中心的插件：id \t 版本 \t 状态 \t 名称
-//! helmp plugins install <id>    从插件中心安装或更新（校验每个文件的 sha256，装好后默认停用，要在设置里确认权限）
+//! helmp plugins available       列出插件中心和自定义插件源的插件：id \t 版本 \t 状态 \t 名称 \t 来源
+//!                               （取不到的源在 stderr 说明原因，其余照常列出）
+//! helmp plugins install <id> [--source <名字>]
+//!                               从插件中心（或指定的插件源）安装或更新（校验每个文件的 sha256，装好后默认停用，
+//!                               要在设置里确认权限）；装过的只从原来的源更新
+//! helmp plugins source list     列出插件源：名字 \t 地址 \t 鉴权请求头 \t 令牌是否已存（从不打印令牌）
+//! helmp plugins source add <名字> <地址> [--header <请求头名>] [--token-stdin]
+//!                               添加自定义插件源；--token-stdin 从标准输入读令牌存进钥匙串
+//! helmp plugins source remove <名字>
+//!                               删除插件源和它的令牌（已装的插件留着）
 //! helmp plugins submit <目录> [--yes]
 //!                               以 PR 形式提交到插件中心；不带 --yes 只说明将要做什么并失败退出
 //! helmp mcp [install <claude|codex|cursor> | status]
@@ -131,12 +139,15 @@ fn plugins(args: &[String]) -> Result<()> {
         }
         Some("available") => plugins_available(),
         Some("install") => {
-            let id = args.get(1).context(tr(
-                "用法：helmp plugins install <插件 id>",
-                "Usage: helmp plugins install <plugin id>",
-            ))?;
-            plugins_install(id)
+            let usage = tr(
+                "用法：helmp plugins install <插件 id> [--source <插件源名字>]",
+                "Usage: helmp plugins install <plugin id> [--source <source name>]",
+            );
+            let (source, rest) = take_option(&args[1..], "--source").context(usage)?;
+            let id = rest.first().context(usage)?;
+            plugins_install(id, source.as_deref())
         }
+        Some("source") => plugins_source(&args[1..]),
         Some("submit") => {
             let yes = args.iter().any(|arg| arg == "--yes");
             let dir = args[1..].iter().find(|arg| *arg != "--yes").context(tr(
@@ -146,8 +157,8 @@ fn plugins(args: &[String]) -> Result<()> {
             plugins_submit(std::path::Path::new(dir), yes)
         }
         Some(other) => bail!(trf!(
-            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、submit <目录>）",
-            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, submit <folder>)"
+            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、source、submit <目录>）",
+            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, source, submit <folder>)"
         )),
     }
 }
@@ -185,28 +196,66 @@ fn validate_json(entry: &crate::providers::plugins::registry::Entry) -> Result<(
     Ok(())
 }
 
-/// `helmp plugins available`：插件中心里的插件及其在本机的状态。
+/// 从参数里取出 `--名字 值`，返回 (值, 其余参数)。只写了 `--名字` 没给值时报错（None）。
+fn take_option(args: &[String], name: &str) -> Option<(Option<String>, Vec<String>)> {
+    let mut value = None;
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == name {
+            value = Some(iter.next()?.clone());
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    Some((value, rest))
+}
+
+/// `helmp plugins available`：插件中心和各插件源里的插件及其在本机的状态。
 fn plugins_available() -> Result<()> {
     use crate::providers::plugins::{center, registry};
     let config = crate::config::get();
-    let index = center::fetch_index(&center::registry_base(&config))?;
+    let catalog = center::Catalog::fetch(&config);
+    let failures: Vec<_> = catalog.failures().collect();
+    if failures.len() == catalog.sources.len()
+        && let [(_, error)] = failures.as_slice()
+    {
+        bail!(error.to_string());
+    }
+    for (_, error) in &failures {
+        eprintln!("helmp: {error}");
+    }
+    if failures.len() == catalog.sources.len() {
+        bail!(tr("所有插件源都取不到", "Couldn't load any plugin source"));
+    }
     let entries = registry::load_all();
-    for listing in &index.plugins {
-        let state = match center::availability(listing, &config, &entries) {
+    for entry in catalog.entries(&config, &entries) {
+        let listing = entry.listing;
+        let state = match center::availability(listing, entry.registry, &config, &entries) {
             center::Availability::Bundled => "bundled".to_string(),
             center::Availability::NotInstalled => "not-installed".to_string(),
             center::Availability::Installed => "installed".to_string(),
             center::Availability::UpdateAvailable { installed } => format!("update-available({installed})"),
             center::Availability::LocalConflict => "local-conflict".to_string(),
+            center::Availability::OtherSource => "installed-from-other-source".to_string(),
         };
-        println!("{}\t{}\t{state}\t{}", listing.id, listing.version, listing.name.get());
+        println!(
+            "{}\t{}\t{state}\t{}\t{}",
+            listing.id,
+            listing.version,
+            listing.name.get(),
+            entry.registry.name
+        );
+        if let Some(note) = center::shadowed_message(&entry) {
+            eprintln!("helmp: {}: {note}", listing.id);
+        }
     }
     Ok(())
 }
 
-fn plugins_install(id: &str) -> Result<()> {
+fn plugins_install(id: &str, source: Option<&str>) -> Result<()> {
     use crate::providers::plugins::{center, registry};
-    let done = center::install(id)?;
+    let done = center::install(id, source)?;
     if done.up_to_date {
         println!(
             "{}",
@@ -248,6 +297,103 @@ fn plugins_install(id: &str) -> Result<()> {
         ),
     }
     Ok(())
+}
+
+/// `helmp plugins source list | add | remove`。令牌只从标准输入读，从不打印。
+fn plugins_source(args: &[String]) -> Result<()> {
+    use crate::providers::plugins::{center, sources};
+    let usage = tr(
+        "用法：helmp plugins source list | add <名字> <地址> [--header <请求头名>] [--token-stdin] | remove <名字>",
+        "Usage: helmp plugins source list | add <name> <url> [--header <name>] [--token-stdin] | remove <name>",
+    );
+    match args.first().map(String::as_str) {
+        None | Some("list") => {
+            let config = crate::config::get();
+            for registry in center::registries(&config) {
+                let token = match (&registry.auth_header, registry.custom) {
+                    (_, false) | (None, _) => "-",
+                    (Some(_), true) => match sources::token(&registry.base) {
+                        Ok(Some(_)) => "token-saved",
+                        Ok(None) => "no-token",
+                        Err(_) => "keychain-error",
+                    },
+                };
+                println!(
+                    "{}\t{}\t{}\t{token}",
+                    registry.name,
+                    registry.base,
+                    registry.auth_header.as_deref().unwrap_or("-")
+                );
+            }
+            Ok(())
+        }
+        Some("add") => {
+            let token_stdin = args.iter().any(|arg| arg == "--token-stdin");
+            let rest: Vec<String> = args[1..]
+                .iter()
+                .filter(|arg| *arg != "--token-stdin")
+                .cloned()
+                .collect();
+            let (header, rest) = take_option(&rest, "--header").context(usage)?;
+            let [name, url] = rest.as_slice() else {
+                bail!(usage);
+            };
+            let token = if token_stdin {
+                let mut token = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut token)
+                    .context(tr("读取标准输入失败", "Couldn't read standard input"))?;
+                let token = token.trim().to_string();
+                if token.is_empty() {
+                    bail!(tr(
+                        "--token-stdin 读到的令牌是空的",
+                        "--token-stdin got an empty token"
+                    ));
+                }
+                Some(token)
+            } else {
+                None
+            };
+            let source = sources::add(
+                crate::config::PluginSource {
+                    name: name.clone(),
+                    url: url.clone(),
+                    auth_header: header,
+                },
+                token.as_deref(),
+                "cli",
+            )?;
+            println!(
+                "{}",
+                trf!(
+                    "已添加插件源「{}」：{}",
+                    "Added plugin source “{}”: {}",
+                    source.name,
+                    source.url
+                )
+            );
+            if token.is_some() {
+                println!(
+                    "{}",
+                    tr("令牌已存入钥匙串。", "The token is saved in the Keychain.")
+                );
+            }
+            Ok(())
+        }
+        Some("remove") => {
+            let name = args.get(1).context(usage)?;
+            let source = sources::remove(name)?;
+            println!(
+                "{}",
+                trf!(
+                    "已删除插件源「{}」（从它装的插件留着，但不会再有更新）",
+                    "Removed plugin source “{}” (plugins installed from it stay, without updates)",
+                    source.name
+                )
+            );
+            Ok(())
+        }
+        Some(_) => bail!(usage),
+    }
 }
 
 fn plugins_submit(dir: &std::path::Path, yes: bool) -> Result<()> {

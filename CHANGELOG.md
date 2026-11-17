@@ -9,6 +9,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 ### Added
 
 - Sticky notes now render Markdown as you write: headings, bullet lists, checkboxes, bold, italic, inline code and links. The markers (`#`, `**`, `- [ ]`) only show faintly on the line with the cursor, so formatting stays editable. Click a checkbox to tick it without entering edit mode; links open in your browser (http/https only). Notes are still stored as plain Markdown, and Chinese input methods work as in any native text field.
+- Custom plugin sources: besides the public Plugin Center, browse and install plugins from registries you host yourself (same layout, optional auth header). Manage them in Settings › Plugins › Plugin Sources, with `helmp plugins source add|list|remove`, or open `helmp://add-plugin-source?url=…` to pre-fill the form. Tokens live in the Keychain and are only sent to the source's own host; plugins update only from the source they were installed from, and the same checks apply as in the Plugin Center. See [docs/plugin-center.md](docs/plugin-center.md#custom-plugin-sources).
 - Drag the grip in the corner of a note to resize it (bottom-right, or bottom-left for notes docked on the right edge). Sizes range from 220×140 up to 640×720, capped at half the screen width and three quarters of its height, and each note remembers its own size.
 
 ### Changed
@@ -20,6 +21,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 #### 新增
 
 - 便签支持所见即所得的 Markdown：标题、列表、复选框、粗体、斜体、行内代码和链接。`#`、`**`、`- [ ]` 这些标记只在光标所在行淡淡显示，格式随时可改；复选框不进编辑也能直接点；链接点了用浏览器打开（只开 http/https）。正文仍按 Markdown 原文保存，中文输入法和普通原生输入框一样好用。
+- 自定义插件源：除了公开的插件中心，还能从自己托管的注册表（结构相同，可带鉴权请求头）浏览和安装插件。在「设置 › 插件 › 插件源」里、用 `helmp plugins source add|list|remove` 管理，或打开 `helmp://add-plugin-source?url=…` 预填表单。令牌只存钥匙串、只发给源自己的主机；插件只从安装它的源更新，校验规则和插件中心一样。详见 [docs/plugin-center.zh-CN.md](docs/plugin-center.zh-CN.md#自定义插件源)。
 - 拖便签角上的把手可以改大小（右下角；贴在右边的便签在左下角）。最小 220×140，最大 640×720，且不超过屏幕宽度一半、高度四分之三；每张便签各自记住大小。
 
 #### 变更

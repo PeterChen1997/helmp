@@ -1,6 +1,8 @@
 //! 插件中心端到端测试：真实的 helmp 可执行文件 + 隔离环境（见 tests/support）。
 //!
 //! - 注册表用本机假服务（MockServer）提供 `index.json` 与插件文件，`HELMP_REGISTRY_URL` 指向它。
+//! - 自定义插件源是另一个假服务，要求鉴权请求头；令牌经 `--token-stdin` 存进测试模式的「钥匙串」
+//!   （数据目录里的 test-plugin-sources.json），用例断言它不出现在 config.json 和任何输出里。
 //! - 提交（`helmp plugins submit`）用 PATH 里的假 `gh`（记录参数、按需输出）和本机的裸 git 仓库，
 //!   `HELMP_REGISTRY_REPO` 指向一个不存在的假仓库名：不碰真实 GitHub，也不联网。
 
@@ -9,6 +11,7 @@ mod support;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -290,6 +293,241 @@ fn validate_json_reports_permissions_for_the_registry_script() {
     std::fs::write(dir.join("plugin.json"), "{").unwrap();
     let err = h.cli_err(&["plugins", "validate", dir.to_str().unwrap(), "--json"]);
     assert!(err.contains("validation failed"), "{err}");
+}
+
+// ---------------------------------------------------------------- 自定义插件源
+
+const TEAM_ID: &str = "com.example.team";
+const TOKEN: &str = "Bearer team-s3cr3t-7781";
+
+fn team_manifest(version: &str) -> String {
+    json!({
+        "schemaVersion": 1, "id": TEAM_ID, "name": "Team Tool", "version": version,
+        "author": "Example Team", "license": "MIT",
+        "commands": [{"id": "open", "title": "Team Docs", "keywords": ["teamdocs"],
+                      "action": {"type": "open", "url": "https://docs.example.com/?q={{query|url}}"}}]
+    })
+    .to_string()
+}
+
+/// 一个插件在索引里的条目（文件只有 plugin.json）。
+fn listing(id: &str, version: &str, manifest: &str) -> Value {
+    json!({
+        "id": id, "version": version, "name": id, "author": "Tests", "permissions": [],
+        "files": [{"path": "plugin.json", "sha256": sha256(manifest), "size": manifest.len(), "executable": false}]
+    })
+}
+
+/// 要求 `authorization: <TOKEN>` 的假插件源：列出 com.example.team（版本可随时改）和同 id 的 com.example.memo。
+fn team_source(version: Arc<Mutex<String>>) -> MockServer {
+    MockServer::start(move |request| {
+        let authorized = request
+            .headers
+            .iter()
+            .any(|(k, v)| k == "authorization" && v == TOKEN);
+        if !authorized {
+            return (401, r#"{"error":"unauthorized"}"#.into());
+        }
+        let version = version.lock().unwrap().clone();
+        let manifest = team_manifest(&version);
+        let memo = manifest_v("9.9.9");
+        match request.path.as_str() {
+            "/index.json" => (
+                200,
+                json!({"schema": 1, "commit": null, "plugins": [
+                    listing(TEAM_ID, &version, &manifest),
+                    listing(ID, "9.9.9", &memo),
+                ]})
+                .to_string(),
+            ),
+            path if path == format!("/plugins/{TEAM_ID}/plugin.json") => (200, manifest),
+            path if path == format!("/plugins/{ID}/plugin.json") => (200, memo),
+            _ => (404, "{}".into()),
+        }
+    })
+}
+
+fn manifest_v(version: &str) -> String {
+    manifest(version, "memo.example.com")
+}
+
+/// 一次命令的全部输出（stdout + stderr），用来断言令牌没被打印出来。
+fn all_output(out: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+fn run(h: &Helmp, args: &[&str], seen: &mut String) -> std::process::Output {
+    let out = h.output(args);
+    seen.push_str(&all_output(&out));
+    out
+}
+
+fn add_team(h: &mut Helmp, url: &str, token: Option<&str>, seen: &mut String) {
+    let out = match token {
+        Some(token) => h.output_with_stdin(
+            &["plugins", "source", "add", "Team", url, "--token-stdin"],
+            token,
+        ),
+        None => h.output(&["plugins", "source", "add", "Team", url]),
+    };
+    seen.push_str(&all_output(&out));
+    assert!(out.status.success(), "{}", all_output(&out));
+    h.keep_config();
+}
+
+#[test]
+fn custom_source_with_a_token_lists_installs_and_updates_next_to_the_public_center() {
+    // 团队自己托管的注册表：带令牌能列出、安装、更新；公开插件中心同时可用，同 id 以公开插件中心为准。
+    let v1 = files("1.0.0", "memo.example.com");
+    let public = registry(index("1.0.0", &v1), v1);
+    let version = Arc::new(Mutex::new("1.0.0".to_string()));
+    let team = team_source(version.clone());
+    let mut h = helmp_with(&public);
+    let mut seen = String::new();
+    add_team(&mut h, &team.url, Some(TOKEN), &mut seen);
+
+    let config = std::fs::read_to_string(h.data_file("config.json")).unwrap();
+    assert!(!config.contains("s3cr3t"), "令牌不能进 config.json：{config}");
+    assert!(config.contains(&format!("{}/", team.url)), "{config}");
+    let list = run(&h, &["plugins", "source", "list"], &mut seen);
+    let list = String::from_utf8_lossy(&list.stdout).into_owned();
+    assert!(
+        list.contains(&format!("Team\t{}/\tAuthorization\ttoken-saved", team.url)),
+        "{list}"
+    );
+    assert!(list.starts_with("Plugin Center\t"), "公开插件中心总是第一个：{list}");
+
+    let out = run(&h, &["plugins", "available"], &mut seen);
+    assert!(out.status.success(), "{}", all_output(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("{ID}\t1.0.0\tnot-installed\tMemo\tPlugin Center")),
+        "同 id 公开插件中心优先：{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("{TEAM_ID}\t1.0.0\tnot-installed\t{TEAM_ID}\tTeam")),
+        "{stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("“Team” also lists this id"), "{stderr}");
+
+    let out = run(&h, &["plugins", "install", TEAM_ID], &mut seen);
+    assert!(out.status.success(), "{}", all_output(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("starts turned off"));
+    let mut h = h.config(|_| {});
+    h.keep_config();
+    let record = &read_config(&h)["plugins"][TEAM_ID]["installed"];
+    assert_eq!(record["custom"], true, "{record}");
+    assert_eq!(record["registry"], format!("{}/", team.url));
+    assert!(
+        h.cli(&["plugins"]).contains(&format!("disabled\t{TEAM_ID}\t1.0.0\tuser")),
+        "从自定义源装的插件同样默认停用"
+    );
+
+    // 源里发了 1.1.0：按安装记录去那个源查更新。
+    *version.lock().unwrap() = "1.1.0".into();
+    let out = run(&h, &["plugins", "available"], &mut seen);
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains(&format!("{TEAM_ID}\t1.1.0\tupdate-available(1.0.0)")),
+        "{}",
+        all_output(&out)
+    );
+    let out = run(&h, &["plugins", "install", TEAM_ID], &mut seen);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("Updated {TEAM_ID}: 1.0.0 → 1.1.0")),
+        "{}",
+        all_output(&out)
+    );
+
+    // 公开插件中心的插件照常能装。
+    let out = run(&h, &["plugins", "install", ID], &mut seen);
+    assert!(out.status.success(), "{}", all_output(&out));
+    assert!(
+        public.requests().iter().all(|r| r.headers.iter().all(|(_, v)| !v.contains("s3cr3t"))),
+        "令牌只发给它自己的源"
+    );
+    assert!(!team.requests().is_empty());
+    assert!(!seen.contains("s3cr3t"), "令牌不能出现在任何输出里：{seen}");
+    assert!(!std::fs::read_to_string(h.data_file("config.json")).unwrap().contains("s3cr3t"));
+}
+
+#[test]
+fn missing_or_wrong_tokens_get_a_clear_401_and_leave_nothing_on_disk() {
+    let v1 = files("1.0.0", "memo.example.com");
+    let public = registry(index("1.0.0", &v1), v1);
+    let team = team_source(Arc::new(Mutex::new("1.0.0".into())));
+    let mut h = helmp_with(&public);
+    let mut seen = String::new();
+
+    // 没设令牌：说明哪个源、要去设置令牌。
+    add_team(&mut h, &team.url, None, &mut seen);
+    let out = run(&h, &["plugins", "install", TEAM_ID, "--source", "Team"], &mut seen);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("plugin source “Team” needs a token (HTTP 401)"), "{err}");
+    assert!(leftovers(&h).is_empty(), "{:?}", leftovers(&h));
+
+    // 令牌错了：同样 401，磁盘上什么都不留，报错里不回显令牌。
+    let out = run(&h, &["plugins", "source", "remove", "Team"], &mut seen);
+    assert!(out.status.success(), "{}", all_output(&out));
+    h.keep_config();
+    add_team(&mut h, &team.url, Some("Bearer wrong-s3cr3t"), &mut seen);
+    let out = run(&h, &["plugins", "install", TEAM_ID], &mut seen);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("rejected the token (HTTP 401)"), "{err}");
+    assert!(leftovers(&h).is_empty(), "{:?}", leftovers(&h));
+    assert!(read_config(&h)["plugins"].get(TEAM_ID).is_none());
+
+    // 一个源失败不影响其他源：公开插件中心照常列出，失败的源在 stderr 说明。
+    let out = run(&h, &["plugins", "available"], &mut seen);
+    assert!(out.status.success(), "{}", all_output(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("{ID}\t1.0.0\tnot-installed")));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("“Team”"));
+    assert!(!seen.contains("s3cr3t"), "{seen}");
+}
+
+#[test]
+fn sources_must_be_https_and_tokens_never_come_from_arguments() {
+    let mut h = Helmp::new();
+    let err = h.cli_err(&["plugins", "source", "add", "Team", "http://plugins.example.com/"]);
+    assert!(err.contains("https"), "{err}");
+    let err = h.cli_err(&[
+        "plugins", "source", "add", "Team", "https://plugins.example.com/?token=abc",
+    ]);
+    assert!(!err.contains("abc"), "{err}");
+    h.keep_config();
+    assert!(read_config(&h).get("plugin_sources").is_none());
+    let err = h.cli_err(&["plugins", "source", "remove", "Nope"]);
+    assert!(err.contains("Nope"), "{err}");
+}
+
+#[test]
+fn old_configs_with_only_a_registry_url_keep_working() {
+    // 升级前只配了 plugins_registry_url（没有插件源列表）：浏览、安装、安装记录的格式都和以前一样。
+    let v1 = files("1.0.0", "memo.example.com");
+    let server = registry(index("1.0.0", &v1), v1);
+    let url = format!("{}/", server.url);
+    let h = Helmp::new().config(move |c| c["plugins_registry_url"] = json!(url));
+    assert!(
+        h.cli(&["plugins", "available"])
+            .contains(&format!("{ID}\t1.0.0\tnot-installed\tMemo"))
+    );
+    h.cli(&["plugins", "install", ID]);
+    let config = read_config(&h);
+    assert_eq!(
+        config["plugins"][ID]["installed"],
+        json!({"registry": format!("{}/", server.url), "version": "1.0.0"}),
+        "旧格式的安装记录不多出字段"
+    );
+    assert!(config.get("plugin_sources").is_none());
+    let h = h.config(move |c| *c = config);
+    assert!(h.cli(&["plugins", "available"]).contains(&format!("{ID}\t1.0.0\tinstalled")));
 }
 
 // ---------------------------------------------------------------- 提交
