@@ -69,6 +69,19 @@ pub fn self_test_select(index: usize, cx: &mut App) -> bool {
     selected.is_some()
 }
 
+/// 图形自检：选中第 `index` 张可见便签并进入编辑态，返回对应窗口句柄。
+pub fn self_test_begin_edit(index: usize, cx: &mut App) -> Option<AnyWindowHandle> {
+    if !self_test_select(index, cx) {
+        return None;
+    }
+    let id = self_test_note_lock()
+        .read()
+        .expect("self test note lock")
+        .clone()?;
+    begin_edit(&id, cx);
+    self_test_target(cx)
+}
+
 pub fn self_test_clear() {
     *self_test_note_lock().write().expect("self test note lock") = None;
 }
@@ -332,15 +345,7 @@ impl NotesManager {
         true
     }
 
-    fn flush_dirty_with(
-        &mut self,
-        pending_editor: Option<(&str, String)>,
-        update_global_snapshot: bool,
-        save_fn: impl FnOnce(&[Note]),
-    ) {
-        if let Some((id, text)) = pending_editor {
-            self.apply_text_edit(id, text, update_global_snapshot);
-        }
+    fn flush_dirty_with(&mut self, save_fn: impl FnOnce(&[Note])) {
         if self.dirty_save {
             self.dirty_save = false;
             save_fn(&self.notes);
@@ -834,7 +839,7 @@ fn update_note_text(id: &str, text: String, cx: &mut App) {
 
 fn flush_dirty_save(cx: &mut App) {
     cx.global_mut::<NotesManager>()
-        .flush_dirty_with(None, true, store::save);
+        .flush_dirty_with(store::save);
 }
 
 /// 纯函数：算出所有非归档便签的目标展示形态。
@@ -2455,8 +2460,9 @@ mod tests {
     }
 
     #[test]
-    fn quit_flushes_debounced_and_in_editor_text_so_reload_reads_latest() {
+    fn flush_dirty_writes_debounced_text_and_clears_dirty_flag() {
         // 500ms debounce 尚未触发时立即退出，必须同步结束编辑并写盘；重启重新加载能读到最新内容。
+        // 完整经由 main.rs on_app_quit → flush_on_quit → leave_edit_mode_for_quit 的集成回归见 tests/e2e_notes.rs。
         struct TempNotesFile(std::path::PathBuf);
         impl TempNotesFile {
             fn new() -> Self {
@@ -2498,19 +2504,15 @@ mod tests {
         assert!(mgr.dirty_save);
         assert_eq!(store::load_from(&dir.file()).unwrap()[0].text, "草稿 v1");
 
-        // 模拟临退出瞬间编辑器内又有最新正文，同步冲刷写盘（不等待 500ms）。
-        mgr.flush_dirty_with(
-            Some((&note_id, "草稿 v3（立即退出前最后输入）".into())),
-            false,
-            |notes| {
-                store::save_checked_to(&dir.file(), notes, &write_blocked).unwrap();
-            },
-        );
+        // 冲刷未落盘的修改，并清掉 dirty 标记。
+        mgr.flush_dirty_with(|notes| {
+            store::save_checked_to(&dir.file(), notes, &write_blocked).unwrap();
+        });
         assert!(!mgr.dirty_save);
 
-        // 模拟重启应用后从磁盘重新加载，必须读到最后输入的内容。
+        // 模拟重启应用后从磁盘重新加载，必须读到最新内容。
         let reloaded = store::load_from(&dir.file()).unwrap();
         assert_eq!(reloaded.len(), 1);
-        assert_eq!(reloaded[0].text, "草稿 v3（立即退出前最后输入）");
+        assert_eq!(reloaded[0].text, "草稿 v2（debounce 中）");
     }
 }

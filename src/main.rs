@@ -108,14 +108,17 @@ fn run_gui(engine: Engine) {
             });
             cx.set_global(engine::EngineGlobal(launcher.read(cx).engine()));
 
-            if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
-                // 大声失败：热键注册不上整个 App 就没有意义。
-                eprintln!("helmp: failed to register global hotkey: {err:#}");
-                telemetry::report("hotkey.register", &err);
-                cx.quit();
-                return;
+            let quiet_self_test = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT").is_some();
+            if !quiet_self_test {
+                if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
+                    // 大声失败：热键注册不上整个 App 就没有意义。
+                    eprintln!("helmp: failed to register global hotkey: {err:#}");
+                    telemetry::report("hotkey.register", &err);
+                    cx.quit();
+                    return;
+                }
+                menubar::install(cx);
             }
-            menubar::install(cx);
             providers::notes::restore_on_launch(cx);
             telemetry::launched();
             // 退出时进程直接结束、不会走到 Sentry guard 的 drop：同步冲刷 debounce 内的便签编辑，并把排队的错误发完。
@@ -125,17 +128,60 @@ fn run_gui(engine: Engine) {
                 async {}
             })
             .detach();
-            // 自动检查更新的定时、面板命令的检查请求、安装就绪后退出（见 src/updates）。
-            updates::start(cx);
-            onboarding::maybe_show(cx);
-            deeplink::install(links, cx);
-            // coding agent 经 `helmp mcp` 请求执行有副作用的操作时，在面板里问用户（见 src/mcp/ipc.rs）。
-            mcp::ipc::serve(cx);
+            if !quiet_self_test {
+                // 自动检查更新的定时、面板命令的检查请求、安装就绪后退出（见 src/updates）。
+                updates::start(cx);
+                onboarding::maybe_show(cx);
+                deeplink::install(links, cx);
+                // coding agent 经 `helmp mcp` 请求执行有副作用的操作时，在面板里问用户（见 src/mcp/ipc.rs）。
+                mcp::ipc::serve(cx);
+            }
 
-            if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
+            if let Some(append) = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT") {
+                notes_quit_self_test(cx, append.to_string_lossy().into_owned());
+            } else if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
                 self_test(cx, window, launcher, query.to_string_lossy().into_owned());
             }
         });
+}
+
+fn notes_quit_self_test(cx: &mut App, append: String) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+        let target = cx
+            .update(|cx| providers::notes::self_test_begin_edit(0, cx))
+            .expect("self-test note window missing");
+        target
+            .update(cx, |_, window, cx| {
+                // 离屏窗口先绘制一帧挂载 Textarea 输入处理器，再通过真实按键分发向编辑器输入。
+                window.draw(cx).clear(cx);
+                for ch in append.chars() {
+                    let stroke = gpui_kit::Keystroke {
+                        key: ch.to_string(),
+                        key_char: Some(ch.to_string()),
+                        ..Default::default()
+                    };
+                    window.dispatch_keystroke(stroke, cx);
+                }
+                window.draw(cx).clear(cx);
+            })
+            .expect("self-test note window gone");
+        let state = cx.update(providers::notes::self_test_debug_state);
+        let disk_before_quit = providers::notes::store::path()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        println!("self-test notes-quit-state: {state}");
+        println!(
+            "self-test notes-before-quit: {}",
+            disk_before_quit.replace('\n', " ")
+        );
+        // 在 500ms 防抖保存尚未触发前立即退出，验证 main.rs on_app_quit → flush_on_quit 同步落盘。
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
 }
 
 /// 图形界面自检：在真实窗口里走一遍 show → 逐个查询 → 执行 → hide，把状态打到 stdout 后退出。

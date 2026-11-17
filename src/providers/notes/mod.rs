@@ -11,8 +11,8 @@ mod window;
 
 pub use window::{
     NotesRequest, all_hidden, dock_all, flush_on_quit, handle, menu_generation,
-    restore_on_launch, self_test_clear, self_test_debug_state, self_test_select,
-    self_test_target, toggle_visibility,
+    restore_on_launch, self_test_begin_edit, self_test_clear, self_test_debug_state,
+    self_test_select, self_test_target, toggle_visibility,
 };
 
 use std::cmp::Reverse;
