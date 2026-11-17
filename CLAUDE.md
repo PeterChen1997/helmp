@@ -14,7 +14,12 @@
 
 ## 发版
 - 打包、签名、公证都在本地：`bash script/release.sh`（产物在 `target/dist/`）。
-- 发布由维护者本人决定：`script/publish-release.sh --publish` → `script/update-landing.sh <版本>`（部署 `site/` 并回读）。没明说「发布」时只打包，不上传。
+- 发布需明确授权；已授权的发版巡检按其授权范围执行：`script/publish-release.sh --publish` → `script/update-landing.sh <版本>`（部署 `site/` 并回读）。未获发布授权时只打包，不上传。
+
+## 报错与埋点
+- 统一入口 `src/telemetry.rs`；新功能的关键失败分支与核心行为，同 issue 验收 Sentry 上报与 Umami 事件，并列出覆盖点和事件名。
+- 不上报搜索内容、剪贴板、便签正文等个人内容；DSN 与上传凭据走环境变量或本机配置，不进仓库。
+- 正式包经 `script/release.sh` 上传 dSYM；遥测需带版本与环境，遵守设置中的隐私开关。
 
 ## 其他
 - `design/` 是设计探索产物；`design/archive/` 里是已过时的草稿（如旧名「唤」时期的方向简报），不代表当前设计。

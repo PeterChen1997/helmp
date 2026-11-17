@@ -156,6 +156,20 @@ pub fn note(event: NoteEvent) {
     track(event.name(), json!({}));
 }
 
+/// 从剪贴板历史写回一条文本：`mode` 为 `paste` / `copy` / `plain_text`，`formats` 是一起写回的富文本种类
+/// （来自固定表的短名，如 `rtf+html`；没有为 `plain`）。只发这两个枚举，不发内容。
+pub fn clipboard_paste(mode: &'static str, formats: &[&'static str]) {
+    let formats = if formats.is_empty() {
+        "plain".to_string()
+    } else {
+        formats.join("+")
+    };
+    track(
+        "clipboard_paste",
+        json!({ "mode": mode, "formats": formats }),
+    );
+}
+
 fn known_provider(provider: &str) -> &'static str {
     PROVIDERS
         .iter()

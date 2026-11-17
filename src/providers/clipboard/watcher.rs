@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use super::store::{ImageFormat, MAX_BYTES, NewClip, Source};
+use super::store::{Format, ImageFormat, MAX_BYTES, NewClip, RICH_MAX_BYTES, RICH_TYPES, Source};
 use crate::config::ClipboardConfig;
 
 /// 轮询间隔。
@@ -37,6 +37,8 @@ pub trait Pasteboard {
     /// 文件 URL 对应的本地路径（Finder 复制文件）。
     fn file_paths(&self) -> Vec<PathBuf>;
     fn text(&self) -> Option<String>;
+    /// 某个 type 的原始字节；超过 `max` 时返回字节数，不拷贝。
+    fn data(&self, uti: &str, max: u64) -> Option<Result<Vec<u8>, u64>>;
     /// PNG 优先，其次 TIFF；超过上限时返回字节数，不解码。
     fn image(&self) -> Option<Result<Image, u64>>;
 }
@@ -55,7 +57,7 @@ pub enum Read {
     Unchanged,
     /// 带隐私标记，跳过。附带命中的 type。
     Private(String),
-    /// 没有我们支持的内容（例如只有 RTF / 自定义 type）。
+    /// 没有我们支持的内容（例如只有 RTF 没有纯文本、只有自定义 type）。
     Empty,
     /// 按配置不记录（关闭、忽略的 App、不记录图片），附原因。
     Ignored(&'static str),
@@ -114,7 +116,12 @@ fn read(pasteboard: &dyn Pasteboard, skip_concealed: bool, record_images: bool) 
                 bytes,
             };
         }
-        return Read::Clip(NewClip::Text(text));
+        let formats = rich_formats(pasteboard);
+        return Read::Clip(if formats.is_empty() {
+            NewClip::Text(text)
+        } else {
+            NewClip::RichText(text, formats)
+        });
     }
     if !record_images {
         return Read::Ignored("不记录图片和文件");
@@ -132,6 +139,25 @@ fn read(pasteboard: &dyn Pasteboard, skip_concealed: bool, record_images: bool) 
         },
         None => Read::Empty,
     }
+}
+
+/// 文本附带的富文本表示：按 [`RICH_TYPES`] 的顺序收，合计不超过 [`RICH_MAX_BYTES`]，
+/// 放不下的那种整个跳过（不截断：截半的 RTF / HTML 是坏数据）。
+fn rich_formats(pasteboard: &dyn Pasteboard) -> Vec<Format> {
+    let mut left = RICH_MAX_BYTES;
+    let mut formats = Vec::new();
+    for (uti, _) in RICH_TYPES {
+        if let Some(Ok(data)) = pasteboard.data(uti, left)
+            && !data.is_empty()
+        {
+            left -= data.len() as u64;
+            formats.push(Format {
+                uti: uti.to_string(),
+                data,
+            });
+        }
+    }
+    formats
 }
 
 /// 一个轮询周期。`last` 为 `None` 时（启动）无条件读一次，即「启动时采集当前剪贴板」。
@@ -188,6 +214,7 @@ pub(crate) mod tests {
         pub files: RefCell<Vec<PathBuf>>,
         pub text: RefCell<Option<String>>,
         pub image: RefCell<Option<Image>>,
+        pub data: RefCell<Vec<(String, Vec<u8>)>>,
         pub content_reads: Cell<usize>,
         /// 读取内容时把 changeCount 加一，模拟读取期间被别的 App 改写。
         pub bump_on_read: Cell<bool>,
@@ -202,6 +229,16 @@ pub(crate) mod tests {
             *self.files.borrow_mut() = Vec::new();
             *self.text.borrow_mut() = Some(text.to_string());
             *self.image.borrow_mut() = None;
+            self.data.borrow_mut().clear();
+        }
+
+        pub(crate) fn set_rich(&self, text: &str, formats: &[(&str, &[u8])]) {
+            let utis: Vec<&str> = formats.iter().map(|(uti, _)| *uti).collect();
+            self.set_text(text, &utis);
+            *self.data.borrow_mut() = formats
+                .iter()
+                .map(|(uti, data)| (uti.to_string(), data.to_vec()))
+                .collect();
         }
 
         fn content_read(&self) {
@@ -226,6 +263,17 @@ pub(crate) mod tests {
         fn text(&self) -> Option<String> {
             self.content_read();
             self.text.borrow().clone()
+        }
+        fn data(&self, uti: &str, max: u64) -> Option<Result<Vec<u8>, u64>> {
+            self.content_read();
+            let data = self.data.borrow();
+            let (_, bytes) = data.iter().find(|(ty, _)| ty == uti)?;
+            let len = bytes.len() as u64;
+            Some(if len > max {
+                Err(len)
+            } else {
+                Ok(bytes.clone())
+            })
         }
         fn image(&self) -> Option<Result<Image, u64>> {
             self.content_read();
@@ -371,6 +419,65 @@ pub(crate) mod tests {
             }
         );
         assert_eq!(poll(&pb, &mut last, &config, None), Read::Unchanged);
+    }
+
+    #[test]
+    fn rich_text_keeps_rtf_html_rtfd_alongside_plain_text() {
+        // 从网页 / 文档复制的带格式内容，回贴时要还原格式：采集时就得把这些表示一起收下。
+        // 自定义 type（VS Code 的编辑器数据等）不收，只认能跨 App 用的通用格式。
+        let pb = FakePasteboard::default();
+        pb.set_rich(
+            "Hello",
+            &[
+                ("public.html", b"<b>Hello</b>"),
+                ("vscode-editor-data", b"{}"),
+                ("public.rtf", b"{\\rtf1 Hello}"),
+            ],
+        );
+        let Read::Clip(NewClip::RichText(text, formats)) = read(&pb, true, true) else {
+            panic!("应该是带格式的文本");
+        };
+        assert_eq!(text, "Hello");
+        let utis: Vec<&str> = formats.iter().map(|f| f.uti.as_str()).collect();
+        assert_eq!(utis, ["public.rtf", "public.html"]);
+
+        // 只有纯文本时照旧是纯文本条目。
+        pb.set_text("plain", &[]);
+        assert_eq!(
+            read(&pb, true, true),
+            Read::Clip(NewClip::Text("plain".into()))
+        );
+    }
+
+    #[test]
+    fn rich_formats_that_do_not_fit_the_cap_are_dropped_whole() {
+        // 带大图的 RTFD 动辄几十 MB：超过单条上限的表示整个不收（截半就是坏数据），文字照常记录，
+        // 放得下的其他表示照收。
+        let cap = RICH_MAX_BYTES as usize;
+        let pb = FakePasteboard::default();
+        let big = vec![b'x'; cap + 1];
+        let html = vec![b'h'; cap / 2];
+        let rtfd = vec![b'd'; cap / 2 + 1];
+        pb.set_rich(
+            "Report",
+            &[
+                ("public.rtf", &big),
+                ("public.html", &html),
+                ("com.apple.flat-rtfd", &rtfd),
+            ],
+        );
+        let Read::Clip(NewClip::RichText(text, formats)) = read(&pb, true, true) else {
+            panic!("放得下的表示要留着");
+        };
+        assert_eq!(text, "Report");
+        let utis: Vec<&str> = formats.iter().map(|f| f.uti.as_str()).collect();
+        assert_eq!(utis, ["public.html"], "RTF 超上限、RTFD 超剩余额度，都不收");
+
+        pb.set_rich("Huge", &[("public.rtf", &big)]);
+        assert_eq!(
+            read(&pb, true, true),
+            Read::Clip(NewClip::Text("Huge".into()))
+        );
     }
 
     #[test]

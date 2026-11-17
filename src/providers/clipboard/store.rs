@@ -5,6 +5,8 @@
 //!   这样 `clipboard:<行 id>` 在整个生命周期内保持稳定。
 //! - 图片落盘到 `clipboard-images/<hash>.<png|tiff>`，库里只存文件名。
 //! - `pinned = 1` 的条目是用户置顶的：浏览时排在最前，按保留天数清理时跳过。旧库打开时自动补这一列。
+//! - 文本条目的富文本表示（RTF / HTML / RTFD）存在 `clip_formats`，随条目级联删除；列表、搜索、去重只看纯文本。
+//!   旧库打开时补建这张表，旧条目没有富文本表示，照常按纯文本写回。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +20,16 @@ use crate::i18n::{tr, trf};
 pub const DB_FILE: &str = "clipboard.sqlite";
 pub const IMAGES_DIR: &str = "clipboard-images";
 pub const MAX_BYTES: u64 = 50 * 1024 * 1024;
+/// 单条文本的富文本表示合计上限。按 [`RICH_TYPES`] 的顺序收，放不下的那种表示整个丢掉（纯文本照常记录），
+/// 免得一段带大图的 RTFD 把历史库撑大。
+pub const RICH_MAX_BYTES: u64 = 1024 * 1024;
+/// 采集并写回的富文本表示（UTI, 上报用的短名），按优先级排：RTF 绝大多数 Cocoa App 都认，
+/// HTML 是浏览器 / Electron（VS Code、飞书）给的，RTFD 带内嵌图片、体积最大，放最后。
+pub const RICH_TYPES: [(&str, &str); 3] = [
+    ("public.rtf", "rtf"),
+    ("public.html", "html"),
+    ("com.apple.flat-rtfd", "rtfd"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -74,10 +86,19 @@ impl ImageFormat {
     }
 }
 
+/// 一种富文本表示：pasteboard type（UTI）和原样的字节。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Format {
+    pub uti: String,
+    pub data: Vec<u8>,
+}
+
 /// 一次采集到的新内容。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NewClip {
     Text(String),
+    /// 带富文本表示的文本：纯文本照常用来展示、搜索、去重，写回时连同这些表示一起写。
+    RichText(String, Vec<Format>),
     Files(Vec<PathBuf>),
     Image {
         bytes: Vec<u8>,
@@ -149,6 +170,8 @@ impl Store {
             )
         })?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // `clip_formats` 靠外键级联跟着条目删除（清理、删除、清空都只删 clips）。
+        conn.pragma_update(None, "foreign_keys", true)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS clips (
                 id            INTEGER PRIMARY KEY,
@@ -167,6 +190,12 @@ impl Store {
                 copied_at INTEGER NOT NULL,
                 kind      TEXT    NOT NULL,
                 bytes     INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS clip_formats (
+                clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+                uti     TEXT    NOT NULL,
+                data    BLOB    NOT NULL,
+                PRIMARY KEY (clip_id, uti)
             );",
         )
         .context(tr(
@@ -186,14 +215,21 @@ impl Store {
     }
 
     /// 记录一次复制。相同内容不新增，而是移到最前；`source` 为 `None` 时保留原来源。
+    /// 富文本表示以最近这次复制为准（同样的字这次是从纯文本编辑器复制的，就不再带格式）。
     pub fn add(
         &mut self,
         clip: NewClip,
         source: Option<&Source>,
         now_ms: i64,
     ) -> Result<(Entry, Added)> {
+        let mut formats = Vec::new();
         let (kind, content, hash, width, height) = match clip {
             NewClip::Text(text) => {
+                let hash = digest(Kind::Text, text.as_bytes());
+                (Kind::Text, text, hash, 0, 0)
+            }
+            NewClip::RichText(text, rich) => {
+                formats = rich;
                 let hash = digest(Kind::Text, text.as_bytes());
                 (Kind::Text, text, hash, 0, 0)
             }
@@ -224,8 +260,8 @@ impl Store {
             Some(source) => (Some(source.name.as_str()), source.bundle_id.as_deref()),
             None => (None, None),
         };
-        let existing: Option<i64> = self
-            .conn
+        let transaction = self.conn.transaction()?;
+        let existing: Option<i64> = transaction
             .query_row("SELECT id FROM clips WHERE hash = ?1", [&hash], |row| {
                 row.get(0)
             })
@@ -233,20 +269,21 @@ impl Store {
         let (id, added) = match existing {
             Some(id) => {
                 if source.is_some() {
-                    self.conn.execute(
+                    transaction.execute(
                         "UPDATE clips SET seq = ?1, copied_at = ?2, source_name = ?3, source_bundle = ?4 WHERE id = ?5",
                         params![seq, now_ms, source_name, source_bundle, id],
                     )?;
                 } else {
-                    self.conn.execute(
+                    transaction.execute(
                         "UPDATE clips SET seq = ?1, copied_at = ?2 WHERE id = ?3",
                         params![seq, now_ms, id],
                     )?;
                 }
+                transaction.execute("DELETE FROM clip_formats WHERE clip_id = ?1", [id])?;
                 (id, Added::Moved)
             }
             None => {
-                self.conn.execute(
+                transaction.execute(
                     "INSERT INTO clips (kind, content, hash, width, height, source_name, source_bundle, copied_at, seq)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
@@ -261,9 +298,18 @@ impl Store {
                         seq
                     ],
                 )?;
-                (self.conn.last_insert_rowid(), Added::New)
+                (transaction.last_insert_rowid(), Added::New)
             }
         };
+        for format in &formats {
+            transaction.execute(
+                "INSERT INTO clip_formats (clip_id, uti, data) VALUES (?1, ?2, ?3)",
+                params![id, format.uti, format.data],
+            )?;
+        }
+        transaction
+            .commit()
+            .context(tr("保存剪贴板记录", "Couldn’t save the clipboard item"))?;
         self.next_seq += 1;
         let entry = self.get(id)?.with_context(|| {
             trf!(
@@ -326,6 +372,34 @@ impl Store {
             .transpose()
     }
 
+    /// 某条的富文本表示，按 [`RICH_TYPES`] 的顺序；旧条目和纯文本复制的条目为空。
+    pub fn formats(&self, id: i64) -> Result<Vec<Format>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT uti, data FROM clip_formats WHERE clip_id = ?1")?;
+        let mut formats = stmt
+            .query_map([id], |row| {
+                Ok(Format {
+                    uti: row.get(0)?,
+                    data: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .with_context(|| {
+                trf!(
+                    "读取剪贴板第 {id} 条的格式",
+                    "Couldn’t read the formats of clipboard item #{id}"
+                )
+            })?;
+        formats.sort_by_key(|format| {
+            RICH_TYPES
+                .iter()
+                .position(|(uti, _)| *uti == format.uti)
+                .unwrap_or(usize::MAX)
+        });
+        Ok(formats)
+    }
+
     /// 全部历史，新的在前；`content` 截断到 `preview_chars` 个字符（内存索引只需要这么多）。
     pub fn load_all(&self, preview_chars: usize) -> Result<Vec<Entry>> {
         let mut stmt = self.conn.prepare(
@@ -369,7 +443,8 @@ impl Store {
     /// 超出内容预算时，从最旧的未置顶条目开始清理，保留 `cutoff_ms` 及之后的历史。
     pub fn prune_over_budget(&mut self, cutoff_ms: i64, budget: u64) -> Result<Vec<i64>> {
         let text_bytes: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(octet_length(content)), 0) FROM clips WHERE kind != 'image'",
+            "SELECT (SELECT COALESCE(SUM(octet_length(content)), 0) FROM clips WHERE kind != 'image')
+                  + (SELECT COALESCE(SUM(length(data)), 0) FROM clip_formats)",
             [],
             |row| row.get(0),
         )?;
@@ -389,7 +464,9 @@ impl Store {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let retired = {
             let mut stmt = transaction.prepare(
-                "SELECT id, CASE WHEN kind = 'image' THEN content END, octet_length(content)
+                "SELECT id, CASE WHEN kind = 'image' THEN content END,
+                        octet_length(content)
+                          + (SELECT COALESCE(SUM(length(data)), 0) FROM clip_formats WHERE clip_id = clips.id)
                  FROM clips WHERE copied_at < ?1 AND pinned = 0 ORDER BY copied_at, seq, id",
             )?;
             let mut rows = stmt.query([cutoff_ms])?;
@@ -813,6 +890,125 @@ pub(crate) mod tests {
                 .exists([])
                 .unwrap()
         );
+    }
+
+    fn rich(text: &str, rtf: &[u8], html: &[u8]) -> NewClip {
+        NewClip::RichText(
+            text.into(),
+            vec![
+                Format {
+                    uti: "public.html".into(),
+                    data: html.to_vec(),
+                },
+                Format {
+                    uti: "public.rtf".into(),
+                    data: rtf.to_vec(),
+                },
+            ],
+        )
+    }
+
+    fn format_count(store: &Store) -> i64 {
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM clip_formats", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn rich_formats_round_trip_but_list_and_dedupe_stay_plain_text() {
+        // 回贴要拿回复制时的格式；列表、搜索看到的仍是纯文本，同样的字不因格式不同多出一条。
+        let dir = TempDir::new("rich");
+        let mut store = Store::open(&dir.0).unwrap();
+        let (entry, _) = store
+            .add(rich("Bold link", b"{\\rtf1 x}", b"<b>x</b>"), None, 1)
+            .unwrap();
+        assert_eq!(entry.content, "Bold link");
+        let formats = store.formats(entry.id).unwrap();
+        let utis: Vec<&str> = formats.iter().map(|f| f.uti.as_str()).collect();
+        assert_eq!(
+            utis,
+            ["public.rtf", "public.html"],
+            "按 RICH_TYPES 的优先级返回"
+        );
+        assert_eq!(formats[0].data, b"{\\rtf1 x}");
+        assert_eq!(store.load_all(10).unwrap()[0].content, "Bold link");
+
+        // 同样的字又从纯文本编辑器复制了一次：还是那一条，格式以最近这次为准（不再带格式）。
+        let (again, added) = store.add(text("Bold link"), None, 2).unwrap();
+        assert_eq!((again.id, added), (entry.id, Added::Moved));
+        assert!(store.formats(entry.id).unwrap().is_empty());
+        store.add(rich("Bold link", b"r2", b"h2"), None, 3).unwrap();
+        assert_eq!(store.formats(entry.id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn formats_go_away_with_their_entry() {
+        // 删除、过期、清空都必须连富文本一起删：否则「删掉的内容」还以 RTF / HTML 躺在库里。
+        let dir = TempDir::new("rich-delete");
+        let mut store = Store::open(&dir.0).unwrap();
+        let (a, _) = store.add(rich("a", b"r", b"h"), None, 1).unwrap();
+        store.add(rich("b", b"r", b"h"), None, 5_000).unwrap();
+        store.add(rich("c", b"r", b"h"), None, 6_000).unwrap();
+        assert!(store.delete(a.id).unwrap());
+        assert_eq!(format_count(&store), 4);
+        store.prune_before(5_500).unwrap();
+        assert_eq!(format_count(&store), 2);
+        store.clear().unwrap();
+        assert_eq!(format_count(&store), 0);
+    }
+
+    #[test]
+    fn budget_counts_rich_formats() {
+        // 富文本可能比纯文本大几十倍：不算进预算的话，历史库会悄悄涨过 50 MB 的上限。
+        let dir = TempDir::new("rich-budget");
+        let mut store = Store::open(&dir.0).unwrap();
+        let old = store
+            .add(rich("a", &[0; 100], &[0; 100]), None, 1)
+            .unwrap()
+            .0;
+        let recent = store.add(text("b"), None, 4).unwrap().0;
+        assert!(store.prune_over_budget(4, 202).unwrap().is_empty());
+        assert_eq!(store.prune_over_budget(4, 100).unwrap(), [old.id]);
+        assert!(store.get(recent.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn legacy_history_keeps_every_entry_as_plain_text() {
+        // 升级前的历史一条都不能丢：打开旧库时补建格式表，旧条目照常列出、没有富文本、按纯文本写回；
+        // 新复制的富文本照常记录。
+        let dir = TempDir::new("rich-legacy");
+        {
+            let conn = Connection::open(dir.0.join(DB_FILE)).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE clips (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+                 hash TEXT NOT NULL UNIQUE, width INTEGER NOT NULL DEFAULT 0, height INTEGER NOT NULL DEFAULT 0,
+                 source_name TEXT, source_bundle TEXT, copied_at INTEGER NOT NULL, seq INTEGER NOT NULL,
+                 pinned INTEGER NOT NULL DEFAULT 0);
+                 INSERT INTO clips (kind, content, hash, copied_at, seq, pinned) VALUES ('text', 'legacy one', 'h1', 1, 1, 1);
+                 INSERT INTO clips (kind, content, hash, copied_at, seq) VALUES ('text', 'legacy two', 'h2', 2, 2);",
+            )
+            .unwrap();
+        }
+        let mut store = Store::open(&dir.0).unwrap();
+        let legacy: Vec<(String, bool)> = store
+            .load_all(100)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.content, e.pinned))
+            .collect();
+        assert_eq!(
+            legacy,
+            [("legacy two".into(), false), ("legacy one".into(), true)]
+        );
+        assert!(store.formats(1).unwrap().is_empty());
+        let (new, _) = store.add(rich("new", b"r", b"h"), None, 3).unwrap();
+        assert_eq!(store.formats(new.id).unwrap().len(), 2);
+        drop(store);
+        // 再开一次（已迁移过的库）不报错，内容不变。
+        let store = Store::open(&dir.0).unwrap();
+        assert_eq!(store.load_all(100).unwrap().len(), 3);
+        assert_eq!(store.formats(new.id).unwrap().len(), 2);
     }
 
     #[test]

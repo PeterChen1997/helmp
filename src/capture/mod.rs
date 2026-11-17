@@ -255,6 +255,11 @@ pub fn open(request: Request, panel_hidden_at: Option<Instant>, cx: &mut App) {
     };
     let captures = state(cx);
     if captures.session.is_some() || captures.opening {
+        let opening = captures.opening;
+        crate::trace::log(format!(
+            "capture: open {} ignored, already open (opening={opening})",
+            mode.name()
+        ));
         return;
     }
     captures.opening = true;
@@ -298,6 +303,7 @@ pub fn open(request: Request, panel_hidden_at: Option<Instant>, cx: &mut App) {
 /// 截图界面出错：在面板里大声说出来（面板为展示结果重新弹出时不会被焦点抖动收起，见 launcher）。
 fn fail(err: anyhow::Error, cx: &mut App) {
     eprintln!("helmp: 截图失败：{err:#}");
+    crate::telemetry::report("capture.open", &err);
     log(cx, format!("error {err:#}"));
     let item = crate::provider::Item {
         id: "screenshot:clipboard".into(),
@@ -388,8 +394,42 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         let key = ix == key_index;
         let _ = handle.update(cx, |_, window, _| native::present(window, key, offscreen));
     }
+    if let Some(&key) = overlays.get(key_index) {
+        let _ = key.update(cx, |_, window, _| {
+            let presence = native::presence(window);
+            crate::trace::log(format!("capture: overlays ready {}", presence.detail));
+        });
+        if !offscreen {
+            check_shown(&session, key, cx);
+        }
+    }
     state(cx).session = Some(session);
-    crate::trace::log("capture: overlays ready");
+}
+
+/// 遮罩摆上后过一会儿再看一次：激活 App、切 Space 都是异步的，刚 orderFront 完看到的不算数。
+/// 这时键盘所在的那块遮罩还不在当前 Space 上可见，就是用户眼里的「按了截图键没反应」
+/// （全屏 App 的 Space 里出过，CARM-86）：大声报出来，不让它静默。
+fn check_shown(session: &Entity<Session>, key: AnyWindowHandle, cx: &mut App) {
+    let session = session.downgrade();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor().timer(Duration::from_millis(500)).await;
+        cx.update(|cx| {
+            let current = state(cx).session.as_ref().map(Entity::entity_id);
+            if session.upgrade().map(|s| s.entity_id()) != current || current.is_none() {
+                return; // 已经关掉或换了一次截图。
+            }
+            let Ok(presence) = key.update(cx, |_, window, _| native::presence(window)) else {
+                return;
+            };
+            crate::trace::log(format!("capture: overlay after 500ms {}", presence.detail));
+            if !presence.shown {
+                let err = anyhow::anyhow!("截图遮罩没有出现在当前 Space：{}", presence.detail);
+                eprintln!("helmp: {err}");
+                crate::telemetry::report("capture.overlay_hidden", &err);
+            }
+        });
+    })
+    .detach();
 }
 
 fn remove(handle: AnyWindowHandle, cx: &mut App) {
