@@ -173,11 +173,14 @@ pub fn load() -> Vec<Note> {
     }
 }
 
-pub fn save(notes: &[Note]) {
+/// 返回是否写盘成功，调用方据此决定要不要保留未保存标记。
+pub fn save(notes: &[Note]) -> bool {
     if let Err(err) = path().and_then(|path| save_checked_to(&path, notes, &WRITE_BLOCKED)) {
         eprintln!("helmp: 保存便签失败：{err:#}");
         crate::telemetry::report("notes.save", &err);
+        return false;
     }
+    true
 }
 
 pub(super) fn load_recovering_from(path: &Path, write_blocked: &AtomicBool) -> Result<Vec<Note>> {

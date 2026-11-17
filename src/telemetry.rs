@@ -134,7 +134,6 @@ pub fn used(provider: &str) {
 
 /// 便签只上报固定操作枚举，不接收正文或便签标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Stage 2 的窗口 / provider 接入时使用。
 pub enum NoteEvent {
     Created,
     Docked,
@@ -151,7 +150,6 @@ impl NoteEvent {
     }
 }
 
-#[allow(dead_code)] // Stage 2 的窗口 / provider 接入时使用。
 pub fn note(event: NoteEvent) {
     track(event.name(), json!({}));
 }

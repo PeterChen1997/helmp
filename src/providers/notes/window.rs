@@ -345,10 +345,10 @@ impl NotesManager {
         true
     }
 
-    fn flush_dirty_with(&mut self, save_fn: impl FnOnce(&[Note])) {
+    /// `save_fn` 返回是否写盘成功；失败时保留 dirty，下一次防抖或退出冲刷会再试。
+    fn flush_dirty_with(&mut self, save_fn: impl FnOnce(&[Note]) -> bool) {
         if self.dirty_save {
-            self.dirty_save = false;
-            save_fn(&self.notes);
+            self.dirty_save = !save_fn(&self.notes);
         }
     }
 
@@ -1033,7 +1033,7 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
         let _ = entry.handle.update(cx, |_, window, _| window.remove_window());
     }
 
-    let mut native_ops: Vec<(NoteFrameHandle, Frame, f64, bool, bool)> = Vec::new();
+    let mut native_ops: Vec<(String, NoteFrameHandle, Frame, f64, bool, bool)> = Vec::new();
     for plan in plans {
         let Some(note) = snapshots_by_id.get(&plan.id).cloned() else {
             continue;
@@ -1063,6 +1063,7 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
                 && let Some(native_handle) = native_opt
             {
                 native_ops.push((
+                    plan.id.clone(),
                     native_handle,
                     plan.frame,
                     plan.radius,
@@ -1077,8 +1078,10 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
         }
     }
 
+    // 每次同步都作废之前排队的原生布局：删除 / 收起便签后的这次同步可能没有原生操作，
+    // 不递增的话上一轮任务仍会对已 `remove_window` 的 NSWindow 调 `orderFrontRegardless`。
+    let seq = LAYOUT_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     if !native_ops.is_empty() {
-        let seq = LAYOUT_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
         cx.spawn(async move |cx: &mut AsyncApp| {
             // 推迟 1ms 等外层 `cx` 借用彻底退出后再调用 `setFrame`，避免 GPUI 尺寸变更通知重入报错。
             cx.background_executor()
@@ -1087,6 +1090,17 @@ fn sync_all_windows_for_screens(screens: &[DisplayInfo], cx: &mut App) {
             if LAYOUT_SEQ.load(Ordering::Relaxed) != seq {
                 return;
             }
+            // 窗口在这 1ms 里被移除（删除、收起、清理过期）时，它的 NSWindow 已在关闭，不能再碰。
+            let native_ops = cx.update(|cx| {
+                let windows = &cx.global::<NotesManager>().windows;
+                native_ops
+                    .into_iter()
+                    .filter(|(id, ..)| windows.contains_key(id))
+                    .map(|(_, handle, frame, radius, visible, order_front)| {
+                        (handle, frame, radius, visible, order_front)
+                    })
+                    .collect::<Vec<_>>()
+            });
             for (handle, frame, radius, visible, _) in &native_ops {
                 if *visible {
                     handle.set_frame_tl(*frame, *radius);
@@ -2507,6 +2521,7 @@ mod tests {
         // 冲刷未落盘的修改，并清掉 dirty 标记。
         mgr.flush_dirty_with(|notes| {
             store::save_checked_to(&dir.file(), notes, &write_blocked).unwrap();
+            true
         });
         assert!(!mgr.dirty_save);
 
@@ -2514,5 +2529,26 @@ mod tests {
         let reloaded = store::load_from(&dir.file()).unwrap();
         assert_eq!(reloaded.len(), 1);
         assert_eq!(reloaded[0].text, "草稿 v2（debounce 中）");
+    }
+
+    #[test]
+    fn failed_save_keeps_dirty_so_quit_flush_retries() {
+        // 防抖保存失败（磁盘满、文件被占）后用户没再输入就退出：dirty 被清掉的话，
+        // `flush_on_quit` 不会再写，最后一次编辑就丢了。失败必须保留 dirty，成功才清。
+        let note = store::new_note("草稿", 100, Placement::Archived);
+        let id = note.id.clone();
+        let mut mgr = NotesManager::from_notes(vec![note]);
+        assert!(mgr.apply_text_edit(&id, "草稿 v2".into(), false));
+
+        mgr.flush_dirty_with(|_| false);
+        assert!(mgr.dirty_save);
+
+        let mut saved = None;
+        mgr.flush_dirty_with(|notes| {
+            saved = notes.first().map(|n| n.text.clone());
+            true
+        });
+        assert!(!mgr.dirty_save);
+        assert_eq!(saved.as_deref(), Some("草稿 v2"));
     }
 }
