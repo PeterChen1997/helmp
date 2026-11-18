@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-11-18
+
 ### Added
 
 - Sticky notes now render Markdown as you write: headings, bullet lists, checkboxes, bold, italic, inline code and links. The markers (`#`, `**`, `- [ ]`) only show faintly on the line with the cursor, so formatting stays editable. Click a checkbox to tick it without entering edit mode; links open in your browser (http/https only). Notes are still stored as plain Markdown, and Chinese input methods work as in any native text field.
