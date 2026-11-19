@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-11-19
+
 ### Added
 
 - Plugins installed from the Plugin Center or a plugin source now update automatically, once a day on the same schedule as Helmp's own update check. Updates whose permissions are unchanged install quietly and stay on; ones that ask for more are installed but paused for your review. Failures leave the old version in place and retry later, and a plugin that's running is updated on the next try. Settings › Plugins has an "Automatically update plugins" switch with the last check's time and result, and a "Check Now" button; from a terminal, `helmp plugins update [--all | <id>]`.
