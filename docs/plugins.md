@@ -127,8 +127,9 @@ Text fields (`name`, `title`…) take a plain string or `{"en": "…", "zh-Hans"
 | `icon`, `tint` | | Lucide icon name or `.png` in the folder; tint: `blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | Only `["clipboard.read"]` can be declared (needed for `{{clipboard}}`); everything else is derived |
 | `preferences` | | See below |
-| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers`) |
+| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers` or only provides `greetings`) |
 | `mcpServers` | | MCP servers the plugin brings; their tools become commands while the plugin is enabled. See [MCP servers](mcp-client.md#plugins-can-bundle-servers) |
+| `greetings` | | Text for the empty search box. See [Search-box greetings](#search-box-greetings) |
 
 ### Preferences
 
@@ -212,6 +213,7 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Run scripts from the plugin folder | `script` actions and `list` commands. Scripts run as you, not sandboxed: only enable plugins you trust |
 | Run a local program: `npx` | Each `command` in `mcpServers` (also as you, not sandboxed) |
 | Network access: `host` | Also each `url` in `mcpServers` |
+| Show messages in the search box | `greetings` |
 
 Bundled plugins are on by default. Your plugins are off until you turn them on; Helmp stores the permissions you confirmed and asks again if they change.
 
@@ -250,6 +252,49 @@ A list command runs a script while you type inside its scope (select the command
 ```
 
 The script gets `{{query}}` and preferences (no form, no clipboard), must finish within `timeoutMs` (default 1000, max 3000), and its result for the same input is cached for `cacheSeconds` (at least 1). Up to 200 items are shown. If the script fails or prints something that isn't the JSON above, the list shows one error row with the reason. Without `action`, choosing an item opens `item.arg` as a URL or path.
+
+## Search-box greetings
+
+A plugin can put a line of text in the search box: a quote of the day, a tip, a note for a special date. It's shown as the search box's placeholder, so it's only visible in the global search while the box is empty and disappears as soon as you type. Inside a command's scope, the scope's own hint is shown instead, and "Indexing apps…" still comes first right after launch.
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.daily-quote",
+  "name": "Daily Quote",
+  "version": "1.0.0",
+  "author": "Example",
+  "greetings": {
+    "rotation": "daily",
+    "items": [
+      { "en": "Well begun is half done.", "zh-Hans": "良好的开端是成功的一半。" },
+      "Done is better than perfect."
+    ],
+    "dates": [
+      { "date": "01-01", "text": "Happy New Year!" },
+      { "date": "2027-06-01", "text": "Only on June 1, 2027" }
+    ]
+  }
+}
+```
+
+A complete example is in [`examples/plugins/com.example.daily-quote`](../examples/plugins/com.example.daily-quote/plugin.json). A plugin may consist of `greetings` alone, with no commands.
+
+| Field | Description |
+|---|---|
+| `rotation` | `open` (default): the next item every time the panel opens. `daily`: one item per day, in order, continuing across months and years |
+| `items` | Text entries to rotate through |
+| `dates` | `{ "date", "text" }` entries for specific days. `MM-DD` repeats every year; `YYYY-MM-DD` is that day only |
+
+Rules:
+
+- **Dates win.** On a day with a matching `dates` entry, it replaces the rotation. A `YYYY-MM-DD` entry beats an `MM-DD` one for the same day; several entries for the same day take turns by `rotation`. A yearly `02-29` shows on February 28 in common years, unless that day has its own `02-28` entry.
+- **Local time.** "Today" is the date in your Mac's time zone.
+- **One plugin at a time.** When several enabled plugins provide greetings, a plugin with a dated entry for today wins; otherwise the plugin whose id sorts first is used. Turn a plugin's greetings off in Settings › Plugins (open the plugin, "Search Box Messages") to let the next one show.
+- **Limits.** At least one entry in `items` or `dates`, at most 1000 in total; each text is one line of up to 120 characters. Text is plain, localized like any other text field.
+- **Cheap by design.** Greetings are declarative: nothing is fetched, no script runs, and picking one is an in-memory lookup when the panel opens. For text that changes on its own (weather, a feed), use a list command or update the plugin.
+
+Greetings are a permission ("Show messages in the search box"): you confirm it when you turn the plugin on, and a plugin that adds greetings in an update needs your review again.
 
 ## Testing your plugin
 

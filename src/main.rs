@@ -428,6 +428,17 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     if on_other_window && cx.update(capture::self_test_target).is_some() {
                         let state = cx.update(capture::debug_state);
                         println!("self-test key {token}: capture={state}");
+                    } else if !on_other_window {
+                        // 面板上什么都不按、只看当前状态（如空输入时的占位文字）。
+                        let launcher = launcher.clone();
+                        window
+                            .update(cx, move |_, window, cx| {
+                                println!(
+                                    "self-test key {token}: {}",
+                                    launcher.read(cx).debug_state(window, cx)
+                                );
+                            })
+                            .expect("launcher window gone");
                     }
                     continue;
                 }

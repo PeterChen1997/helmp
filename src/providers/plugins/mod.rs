@@ -18,6 +18,7 @@
 pub mod autoupdate;
 pub mod center;
 pub mod exec;
+pub mod greeting;
 pub mod manifest;
 pub mod permissions;
 pub mod registry;

@@ -94,7 +94,51 @@ pub struct Manifest {
     /// 插件带的 MCP 服务器（名字 → 启动方式）：插件启用后，它们的工具出现在搜索里（见 providers::mcp）。
     #[serde(default)]
     pub mcp_servers: BTreeMap<String, McpServerSpec>,
+    /// 搜索框寄语：全局搜索、输入框为空时显示在搜索框里的一句话（见 `greeting`）。纯声明，不联网、不跑脚本。
+    #[serde(default)]
+    pub greetings: Option<Greetings>,
 }
+
+/// 寄语的轮换方式。
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Rotation {
+    /// 每次打开面板换下一条（默认）。
+    #[default]
+    Open,
+    /// 每天一条（按本机时区的日期）。
+    Daily,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Greetings {
+    /// 给人看的注释（JSON 没有注释语法），任意内容，忽略。
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde::de::IgnoredAny>,
+    #[serde(default)]
+    pub rotation: Rotation,
+    /// 平常轮换的文案。
+    #[serde(default)]
+    pub items: Vec<Text>,
+    /// 指定某天显示的文案：`MM-DD`（每年重复）或 `YYYY-MM-DD`（只那一天）。当天有它时代替平常的轮换。
+    #[serde(default)]
+    pub dates: Vec<DatedGreeting>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatedGreeting {
+    /// 给人看的注释（JSON 没有注释语法），任意内容，忽略。
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde::de::IgnoredAny>,
+    pub date: String,
+    pub text: Text,
+}
+
+/// 寄语最多多少条（平常 + 按日期合计），一条最长多少个字：搜索框只有一行，清单也要保持小巧。
+pub const MAX_GREETINGS: usize = 1000;
+pub const MAX_GREETING_CHARS: usize = 120;
 
 /// 插件带的 MCP 服务器：`command`（stdio）或 `url`（Streamable HTTP）二选一。
 /// `env` / `headers` 的值是模板，只能用 `{{pref.<id>}}`（密钥写成 secret 偏好设置，不写进清单）。
@@ -599,6 +643,66 @@ impl Checker<'_> {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    fn greetings(&mut self, greetings: &Greetings) {
+        if greetings.items.is_empty() && greetings.dates.is_empty() {
+            self.error(
+                "greetings",
+                tr(
+                    "items 和 dates 至少要有一条",
+                    "needs at least one entry in items or dates",
+                )
+                .into(),
+            );
+        }
+        if greetings.items.len() + greetings.dates.len() > MAX_GREETINGS {
+            self.error(
+                "greetings",
+                trf!(
+                    "最多 {MAX_GREETINGS} 条（items 与 dates 合计）",
+                    "at most {MAX_GREETINGS} entries (items and dates combined)"
+                ),
+            );
+        }
+        for (index, text) in greetings.items.iter().enumerate() {
+            self.greeting_text(&format!("greetings.items[{index}]"), text);
+        }
+        for (index, dated) in greetings.dates.iter().enumerate() {
+            let at = format!("greetings.dates[{index}]");
+            if super::greeting::DateRule::parse(&dated.date).is_none() {
+                self.error(
+                    &format!("{at}.date"),
+                    trf!(
+                        "{:?} 不是有效日期：写成 MM-DD（每年重复，如 12-25）或 YYYY-MM-DD（只那一天）",
+                        "{:?} isn't a valid date: use MM-DD (every year, e.g. 12-25) or YYYY-MM-DD (that day only)",
+                        dated.date
+                    ),
+                );
+            }
+            self.greeting_text(&format!("{at}.text"), &dated.text);
+        }
+    }
+
+    fn greeting_text(&mut self, at: &str, text: &Text) {
+        self.text(at, text);
+        for value in text.all() {
+            if value.chars().count() > MAX_GREETING_CHARS {
+                self.error(
+                    at,
+                    trf!(
+                        "超过 {MAX_GREETING_CHARS} 个字（搜索框只有一行）",
+                        "longer than {MAX_GREETING_CHARS} characters (the search box is one line)"
+                    ),
+                );
+            }
+            if value.contains(['\n', '\r']) {
+                self.error(
+                    at,
+                    tr("不能换行（搜索框只有一行）", "must not contain line breaks (the search box is one line)").into(),
+                );
             }
         }
     }
@@ -1267,12 +1371,18 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
     for (name, server) in &manifest.mcp_servers {
         check.mcp_server(&format!("mcpServers.{name}"), name, server, dir);
     }
-    if manifest.commands.is_empty() && manifest.mcp_servers.is_empty() {
+    if let Some(greetings) = &manifest.greetings {
+        check.greetings(greetings);
+    }
+    if manifest.commands.is_empty()
+        && manifest.mcp_servers.is_empty()
+        && manifest.greetings.is_none()
+    {
         check.error(
             "commands",
             tr(
-                "至少要有一个命令（或一个 mcpServers）",
-                "needs at least one command (or an mcpServers entry)",
+                "至少要有一个命令（或 mcpServers、greetings）",
+                "needs at least one command (or mcpServers / greetings)",
             )
             .into(),
         );

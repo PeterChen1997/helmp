@@ -176,6 +176,9 @@ pub struct PluginSettings {
     pub consent: Vec<String>,
     /// 非密钥偏好设置的值（text / select / checkbox）。secret 类型永远不进这里。
     pub prefs: BTreeMap<String, String>,
+    /// 插件声明了搜索框寄语时是否显示；None = 显示（启用插件时已确认过这项权限）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub greeting: Option<bool>,
     /// 从插件中心安装时记下来源与版本（用来提示「有更新」）；手动放进插件文件夹的插件为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<RegistryInstall>,

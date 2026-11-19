@@ -41,13 +41,57 @@
       "type": "object",
       "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
       "additionalProperties": { "$ref": "#/$defs/mcpServer" }
+    },
+    "greetings": {
+      "description": "Messages shown in the empty search box (global search only). Declarative: no network, no scripts. See docs/plugins.md#search-box-greetings.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "$comment": { "description": "Free-form note for humans; ignored." },
+        "rotation": { "description": "open: next message on every panel open (default). daily: one message per day.", "enum": ["open", "daily"], "default": "open" },
+        "items": { "description": "Messages to rotate through.", "type": "array", "items": { "$ref": "#/$defs/greetingText" } },
+        "dates": {
+          "description": "Messages for specific days. They replace the rotation on their day.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["date", "text"],
+            "properties": {
+              "$comment": { "description": "Free-form note for humans; ignored." },
+              "date": { "description": "MM-DD (every year) or YYYY-MM-DD (that day only). A yearly 02-29 shows on Feb 28 in common years.", "type": "string", "pattern": "^([0-9]{4}-)?[0-9]{2}-[0-9]{2}$" },
+              "text": { "$ref": "#/$defs/greetingText" }
+            }
+          }
+        }
+      },
+      "anyOf": [
+        { "required": ["items"], "properties": { "items": { "minItems": 1 } } },
+        { "required": ["dates"], "properties": { "dates": { "minItems": 1 } } }
+      ]
     }
   },
   "anyOf": [
     { "required": ["commands"], "properties": { "commands": { "minItems": 1 } } },
-    { "required": ["mcpServers"], "properties": { "mcpServers": { "minProperties": 1 } } }
+    { "required": ["mcpServers"], "properties": { "mcpServers": { "minProperties": 1 } } },
+    { "required": ["greetings"] }
   ],
   "$defs": {
+    "greetingText": {
+      "description": "One line, up to 120 characters. Plain string or localized strings (\"en\" required).",
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\n\\r]*$" },
+        {
+          "type": "object",
+          "required": ["en"],
+          "additionalProperties": false,
+          "properties": {
+            "en": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\n\\r]*$" },
+            "zh-Hans": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\n\\r]*$" }
+          }
+        }
+      ]
+    },
     "mcpServer": {
       "description": "Exactly one of command (stdio) or url (Streamable HTTP). env / headers values may only use {{pref.<id>}}.",
       "type": "object",

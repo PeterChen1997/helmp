@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Plugins can provide search-box greetings: a line of text shown in the empty global search box, such as a quote of the day or a note for a special date. Declare `greetings` in `plugin.json` with a rotation (every open, or once a day) and optional entries for specific dates (`MM-DD` every year, or `YYYY-MM-DD`). Greetings are a permission you confirm when turning the plugin on, and each plugin's greetings can be turned off in Settings › Plugins. See the plugin docs and `examples/plugins/com.example.daily-quote`.
+
+### 简体中文
+
+#### 新增
+
+- 插件可以提供搜索框寄语：全局搜索、输入框为空时在搜索框里显示一句话，比如每日一句、特定日期的一句话。在 `plugin.json` 里声明 `greetings`，可选轮换方式（每次打开 / 每天一条），也可以按日期指定（`MM-DD` 每年重复，或 `YYYY-MM-DD`）。寄语是一项权限，启用插件时确认；「设置 › 插件」里可以按插件关掉。详见插件文档和 `examples/plugins/com.example.daily-quote`。
+
 ## [0.4.16] - 2026-11-19
 
 ### Added
