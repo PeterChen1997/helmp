@@ -1457,8 +1457,8 @@ impl Render for PluginsPane {
             .when(extension_off, |el| {
                 el.child(div().mb(px(12.)).child(widgets::error_text(
                     tr(
-                        "「清单插件」扩展已在下方内置功能里关闭，所有插件都不会出现在搜索里",
-                        "The Manifest Plugins extension is turned off, so no plugin shows up in search",
+                        "「清单插件」已在下方「内置功能」里关闭，所有插件都不会出现在搜索里",
+                        "The Manifest Plugins extension is turned off under Built-in Features below, so no plugin shows up in search",
                     ),
                     &pal,
                 )))

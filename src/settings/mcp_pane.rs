@@ -1178,8 +1178,8 @@ impl Render for McpPane {
             .when(extension_off, |el| {
                 el.child(div().mb(px(12.)).child(widgets::error_text(
                     tr(
-                        "「MCP 工具」扩展已在 设置 › 插件 › 内置功能 里关闭，工具不会出现在搜索里",
-                        "The MCP Tools extension is turned off in Settings › Plugins, so no tool shows up in search",
+                        "「MCP 工具」已在 设置 › 插件 › 内置功能 里关闭，工具不会出现在搜索里",
+                        "The MCP Tools extension is turned off in Settings › Plugins › Built-in Features, so no tool shows up in search",
                     ),
                     &pal,
                 )))

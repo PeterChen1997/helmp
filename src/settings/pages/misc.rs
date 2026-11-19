@@ -68,8 +68,8 @@ impl SettingsView {
             .when(plugin_off, |el| {
                 el.child(widgets::error_text(
                     tr(
-                        "「Agent 会话」插件已在「扩展」页关闭，以上来源都不会显示。",
-                        "The Agent Sessions extension is turned off in Extensions, so none of these sources are shown.",
+                        "「Agent 会话」已在 设置 › 插件 › 内置功能 里关闭，以上来源都不会显示。",
+                        "The Agent Sessions extension is turned off in Settings › Plugins › Built-in Features, so none of these sources are shown.",
                     ),
                     pal,
                 ))
