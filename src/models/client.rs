@@ -1,4 +1,4 @@
-//! 三种模型接口的阻塞式调用（ureq，30 秒超时）。
+//! 三种模型接口的阻塞式调用（ureq）：对话 30 秒，列模型 10 秒。
 //!
 //! 请求格式按官方文档：
 //! - Anthropic Messages：`POST {base}/v1/messages`，头 `x-api-key`、`anthropic-version: 2023-06-01`，
@@ -8,7 +8,7 @@
 //!   等兼容实现不认 `developer`），回复取 `choices[0].message.content`。
 //! - Ollama：`POST {base}/api/chat`，`stream: false`，回复取 `message.content`。
 //!
-//! 错误一律翻译成用户看得懂的话（按界面语言：Key 无效、地址不可达、超时……），并附上服务端原话。
+//! 错误按界面语言显示。对话请求的 HTTP 错误还附上服务端原话。
 //! 发给模型的提示词不经过界面语言。
 
 use std::time::Duration;
@@ -21,6 +21,9 @@ use crate::i18n::{tr, trf};
 
 /// 单次请求的总超时。
 pub const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 设置页列模型请求的总超时。
+pub const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Anthropic 接口版本。只用到 model / max_tokens / system / messages 这几个稳定字段。
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -130,6 +133,37 @@ fn base(model: &ModelConfig) -> String {
     base.trim_end_matches('/').to_string()
 }
 
+fn auth_headers(model: &ModelConfig, key: Option<&str>) -> Result<Vec<(&'static str, String)>> {
+    if !needs_key(model.kind) {
+        return Ok(Vec::new());
+    }
+    let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) else {
+        return Err(ModelError::new(
+            FailureKind::Setup,
+            trf!(
+                "「{}」还没有填写 API Key",
+                "Enter an API key for “{}”",
+                model.name
+            ),
+        )
+        .into());
+    };
+    Ok(match model.kind {
+        ModelKind::Anthropic => vec![
+            ("x-api-key", key.to_string()),
+            ("anthropic-version", ANTHROPIC_VERSION.to_string()),
+        ],
+        ModelKind::OpenAiCompatible => vec![("authorization", format!("Bearer {key}"))],
+        ModelKind::Ollama => Vec::new(),
+    })
+}
+
+/// Anthropic 的 Base URL 可以包含 /v1，拼路径时只加一次。
+fn anthropic_url(base: &str, endpoint: &str) -> String {
+    let root = base.strip_suffix("/v1").unwrap_or(base);
+    format!("{root}/v1/{endpoint}")
+}
+
 pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<HttpRequest> {
     if model.model.trim().is_empty() {
         return Err(ModelError::new(
@@ -142,48 +176,23 @@ pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Ht
         )
         .into());
     }
-    let key = key.map(str::trim).filter(|key| !key.is_empty());
-    if needs_key(model.kind) && key.is_none() {
-        return Err(ModelError::new(
-            FailureKind::Setup,
-            trf!(
-                "「{}」还没有填写 API Key",
-                "Enter an API key for “{}”",
-                model.name
-            ),
-        )
-        .into());
-    }
+    let headers = auth_headers(model, key)?;
     let base = base(model);
     let name = model.model.trim();
     Ok(match model.kind {
-        ModelKind::Anthropic => {
-            // 用户可能填 `https://api.anthropic.com` 也可能带 `/v1`，两种都接受。
-            let url = if base.ends_with("/v1") {
-                format!("{base}/messages")
-            } else {
-                format!("{base}/v1/messages")
-            };
-            HttpRequest {
-                url,
-                headers: vec![
-                    ("x-api-key", key.unwrap_or_default().to_string()),
-                    ("anthropic-version", ANTHROPIC_VERSION.to_string()),
-                ],
-                body: json!({
-                    "model": name,
-                    "max_tokens": req.max_tokens,
-                    "system": req.system,
-                    "messages": [{ "role": "user", "content": req.user }],
-                }),
-            }
-        }
+        ModelKind::Anthropic => HttpRequest {
+            url: anthropic_url(&base, "messages"),
+            headers,
+            body: json!({
+                "model": name,
+                "max_tokens": req.max_tokens,
+                "system": req.system,
+                "messages": [{ "role": "user", "content": req.user }],
+            }),
+        },
         ModelKind::OpenAiCompatible => HttpRequest {
             url: format!("{base}/chat/completions"),
-            headers: vec![(
-                "authorization",
-                format!("Bearer {}", key.unwrap_or_default()),
-            )],
+            headers,
             body: json!({
                 "model": name,
                 "messages": [
@@ -196,7 +205,7 @@ pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Ht
             let base = base.strip_suffix("/api").unwrap_or(&base);
             HttpRequest {
                 url: format!("{base}/api/chat"),
-                headers: Vec::new(),
+                headers,
                 body: json!({
                     "model": name,
                     "stream": false,
@@ -208,6 +217,21 @@ pub fn build(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Ht
                 }),
             }
         }
+    })
+}
+
+/// 构造列模型的 GET 请求，设置页可以在模型名还没填写时调用。
+pub fn build_list(model: &ModelConfig, key: Option<&str>) -> Result<HttpRequest> {
+    let headers = auth_headers(model, key)?;
+    let url = match model.kind {
+        ModelKind::Anthropic => anthropic_url(&base(model), "models?limit=1000"),
+        ModelKind::OpenAiCompatible => format!("{}/models", base(model)),
+        ModelKind::Ollama => ollama_tags_url(&model.base_url),
+    };
+    Ok(HttpRequest {
+        url,
+        headers,
+        body: Value::Null,
     })
 }
 
@@ -231,17 +255,97 @@ pub fn send(model: &ModelConfig, key: Option<&str>, req: &Request) -> Result<Str
     }
     let mut response = request
         .send(http.body.to_string())
-        .map_err(|err| transport_error(model, &http.url, err))?;
+        .map_err(|err| transport_error(model, &http.url, TIMEOUT, err))?;
     let status = response.status().as_u16();
     let text = response
         .body_mut()
         .read_to_string()
-        .map_err(|err| transport_error(model, &http.url, err))?;
+        .map_err(|err| transport_error(model, &http.url, TIMEOUT, err))?;
     if !(200..300).contains(&status) {
-        return Err(ModelError::new(status_kind(status), status_error(model.kind, status, &text)).into());
+        return Err(
+            ModelError::new(status_kind(status), status_error(model.kind, status, &text)).into(),
+        );
     }
     parse_reply(model.kind, &text)
         .map_err(|err| ModelError::new(FailureKind::BadResponse, err.to_string()).into())
+}
+
+/// 拉取模型列表。阻塞，设置页在后台线程调用。
+pub fn list(model: &ModelConfig, key: Option<&str>) -> Result<Vec<String>> {
+    let http = build_list(model, key)?;
+    let mut request = agent(LIST_TIMEOUT)
+        .get(&http.url)
+        .config()
+        // ureq 的重定向鉴权策略只处理 Authorization，Anthropic 用的 x-api-key 会被转发。
+        .max_redirects(0)
+        .build();
+    for (name, value) in &http.headers {
+        request = request.header(*name, value);
+    }
+    let transport = |err| {
+        let mut err = transport_error(model, &http.url, LIST_TIMEOUT, err);
+        if let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) {
+            err.message = err.message.replace(key, "[REDACTED]");
+        }
+        err
+    };
+    let mut response = request.call().map_err(transport)?;
+    let status = response.status().as_u16();
+    if matches!(status, 404 | 405 | 501) {
+        return Err(ModelError::new(
+            FailureKind::BadResponse,
+            tr(
+                "这个服务商不提供模型列表，请手动填写模型名",
+                "This provider doesn't list its models. Enter the model name manually.",
+            ),
+        )
+        .into());
+    }
+    if !response.status().is_success() {
+        // 服务商可能在错误响应里回显凭据，只显示本地化的 HTTP 状态。
+        return Err(
+            ModelError::new(status_kind(status), status_error(model.kind, status, "")).into(),
+        );
+    }
+    let text = response.body_mut().read_to_string().map_err(transport)?;
+    parse_model_list(model.kind, &text)
+}
+
+/// 提取各服务商的模型名，按字典序排序并去重。
+pub fn parse_model_list(kind: ModelKind, body: &str) -> Result<Vec<String>> {
+    let value: Value = serde_json::from_str(body).map_err(|_| {
+        ModelError::new(
+            FailureKind::BadResponse,
+            tr(
+                "返回内容不是 JSON，可能 Base URL 填错了",
+                "The response isn't JSON; the base URL may be wrong",
+            ),
+        )
+    })?;
+    let (list_field, name_field) = match kind {
+        ModelKind::Anthropic | ModelKind::OpenAiCompatible => ("data", "id"),
+        ModelKind::Ollama => ("models", "name"),
+    };
+    let mut names: Vec<_> = value[list_field]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|item| item[name_field].as_str().map(str::to_owned))
+                .collect::<Option<_>>()
+        })
+        .ok_or_else(|| {
+            ModelError::new(
+                FailureKind::BadResponse,
+                tr(
+                    "返回的模型列表格式不正确",
+                    "The model list response has an unexpected format",
+                ),
+            )
+        })?;
+    names.sort_unstable();
+    names.dedup();
+    Ok(names)
 }
 
 /// 取出回复文本。
@@ -326,13 +430,18 @@ pub fn status_error(kind: ModelKind, status: u16, body: &str) -> String {
 }
 
 /// 网络层错误：连不上、域名解析失败、超时、证书……
-fn transport_error(model: &ModelConfig, url: &str, err: ureq::Error) -> anyhow::Error {
+fn transport_error(
+    model: &ModelConfig,
+    url: &str,
+    timeout: Duration,
+    err: ureq::Error,
+) -> ModelError {
     let hint = if model.kind == ModelKind::Ollama {
         tr("，确认 Ollama 已经启动", "; make sure Ollama is running")
     } else {
         ""
     };
-    let secs = TIMEOUT.as_secs();
+    let secs = timeout.as_secs();
     let timeout = || {
         trf!(
             "等了 {secs} 秒没有响应：{url}",
@@ -377,7 +486,7 @@ fn transport_error(model: &ModelConfig, url: &str, err: ureq::Error) -> anyhow::
             trf!("请求 {url} 失败", "Request to {url} failed"),
         ),
     };
-    ModelError::new(kind, trf!("{message}（{err}）", "{message} ({err})")).into()
+    ModelError::new(kind, trf!("{message}（{err}）", "{message} ({err})"))
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -387,16 +496,20 @@ fn clip(text: &str, max: usize) -> String {
     }
 }
 
-/// Ollama 是否在线：`GET {base}/api/tags`，2 秒超时。
-pub fn ollama_online(base_url: &str) -> bool {
+fn ollama_tags_url(base_url: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
     let base = if base.is_empty() {
         default_base_url(ModelKind::Ollama)
     } else {
         base.strip_suffix("/api").unwrap_or(base)
     };
+    format!("{base}/api/tags")
+}
+
+/// Ollama 是否在线：`GET {base}/api/tags`，2 秒超时。
+pub fn ollama_online(base_url: &str) -> bool {
     agent(Duration::from_secs(2))
-        .get(format!("{base}/api/tags"))
+        .get(ollama_tags_url(base_url))
         .call()
         .is_ok_and(|response| response.status().is_success())
 }
@@ -690,6 +803,130 @@ pub(crate) mod tests {
         let m = model(ModelKind::OpenAiCompatible, &url, "x");
         let err = send(&m, Some("k"), &REQ).unwrap_err().to_string();
         assert!(err.starts_with("返回内容不是 JSON"), "{err}");
+    }
+
+    #[test]
+    fn openai_lists_models_without_a_configured_model_name() {
+        // 新配置通常先拉列表再选模型；用相同的 /v1 Base URL 和 Bearer Key 就应当能查。
+        let (url, rx) = mock(200, r#"{"data":[{"id":"z"},{"id":"a"},{"id":"z"}]}"#);
+        let m = model(ModelKind::OpenAiCompatible, &format!("{url}/v1/"), "");
+        assert_eq!(list(&m, Some(" sk-test ")).unwrap(), ["a", "z"]);
+        let got = rx.recv().unwrap();
+        assert_eq!(got.line, "GET /v1/models HTTP/1.1");
+        assert_eq!(got.header("authorization"), Some("Bearer sk-test"));
+        assert_eq!(got.header("x-api-key"), None);
+        assert_eq!(got.body, Value::Null);
+    }
+
+    #[test]
+    fn anthropic_lists_models_with_either_base_url() {
+        // 旧配置和从文档复制来的地址都要拼成同一个路径；取 ID 而非显示名才能用于对话。
+        for suffix in ["", "/v1/"] {
+            let (url, rx) = mock(
+                200,
+                r#"{"data":[{"id":"z","display_name":"Claude"},{"id":"a"},{"id":"z"}]}"#,
+            );
+            let m = model(ModelKind::Anthropic, &format!("{url}{suffix}"), "");
+            assert_eq!(list(&m, Some("sk-ant-test")).unwrap(), ["a", "z"]);
+            let got = rx.recv().unwrap();
+            assert_eq!(got.line, "GET /v1/models?limit=1000 HTTP/1.1");
+            assert_eq!(got.header("x-api-key"), Some("sk-ant-test"));
+            assert_eq!(got.header("anthropic-version"), Some("2023-06-01"));
+            assert_eq!(got.header("authorization"), None);
+        }
+    }
+
+    #[test]
+    fn ollama_lists_local_tags_with_either_base_url() {
+        // 和在线检查用同一个地址规则；本机 Ollama 无需鉴权，选中时需要保留完整标签。
+        for suffix in ["", "/api/"] {
+            let (url, rx) = mock(
+                200,
+                r#"{"models":[{"name":"qwen:8b","model":"ignored"},{"name":"llama:latest"},{"name":"qwen:8b"}]}"#,
+            );
+            let m = model(ModelKind::Ollama, &format!("{url}{suffix}"), "");
+            assert_eq!(list(&m, None).unwrap(), ["llama:latest", "qwen:8b"]);
+            let got = rx.recv().unwrap();
+            assert_eq!(got.line, "GET /api/tags HTTP/1.1");
+            assert_eq!(got.header("authorization"), None);
+            assert_eq!(got.header("x-api-key"), None);
+        }
+    }
+
+    #[test]
+    fn model_list_distinguishes_empty_and_invalid_responses() {
+        // 空数组是合法结果；HTML 或缺少模型名的 JSON 应提示响应格式错误。
+        let kind = ModelKind::Ollama;
+        let (url, _rx) = mock(200, r#"{"models":[]}"#);
+        assert!(list(&model(kind, &url, ""), None).unwrap().is_empty());
+        let (url, _rx) = mock(200, "<html>nginx</html>");
+        let err = list(&model(kind, &url, ""), None).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::BadResponse));
+        assert!(err.to_string().starts_with("返回内容不是 JSON"));
+        assert!(parse_model_list(kind, r#"{"models":[{"name":null}]}"#).is_err());
+        assert!(parse_model_list(kind, "{}").is_err());
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let err = parse_model_list(kind, "<html>").unwrap_err();
+            assert!(err.to_string().starts_with("The response isn't JSON"));
+        });
+    }
+
+    #[test]
+    fn missing_key_for_model_list_is_a_setup_error() {
+        // 用户还没填 Key 时在本地提示配置问题，别误报模型名缺失或发出匿名请求。
+        for kind in [ModelKind::OpenAiCompatible, ModelKind::Anthropic] {
+            let m = model(kind, "http://127.0.0.1:9", "");
+            for key in [None, Some("  ")] {
+                let err = build_list(&m, key).unwrap_err();
+                assert_eq!(failure_kind(&err), Some(FailureKind::Setup));
+                assert_eq!(err.to_string(), "「测试模型」还没有填写 API Key");
+            }
+        }
+    }
+
+    #[test]
+    fn unavailable_model_list_suggests_manual_entry() {
+        // 兼容服务商可能只实现聊天接口，遇到三种不支持状态都应该引导用户手填。
+        for status in [404, 405, 501] {
+            let (url, _rx) = mock(status, "");
+            let m = model(ModelKind::OpenAiCompatible, &url, "");
+            let err = list(&m, Some("sk-test")).unwrap_err();
+            assert_eq!(failure_kind(&err), Some(FailureKind::BadResponse));
+            assert_eq!(
+                err.to_string(),
+                "这个服务商不提供模型列表，请手动填写模型名"
+            );
+        }
+        crate::i18n::with_lang(crate::i18n::Lang::En, || {
+            let (url, _rx) = mock(404, "");
+            let m = model(ModelKind::OpenAiCompatible, &url, "");
+            let err = list(&m, Some("sk-test")).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "This provider doesn't list its models. Enter the model name manually."
+            );
+        });
+    }
+
+    #[test]
+    fn model_list_errors_do_not_expose_the_api_key() {
+        // 某些服务商会回显收到的 Key，界面和后续报错上报都不能带上它。
+        const KEY: &str = "sk-do-not-echo-903f";
+        let (url, _rx) = mock(
+            401,
+            r#"{"error":{"message":"Rejected API key sk-do-not-echo-903f"}}"#,
+        );
+        let m = model(ModelKind::OpenAiCompatible, &url, "");
+        let err = list(&m, Some(KEY)).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Auth));
+        assert_eq!(err.to_string(), "API Key 无效（HTTP 401）");
+        assert!(!format!("{err:?}").contains(KEY));
+
+        // 网络错误可能带上无效 URL；即使用户把 Key 粘进地址，也不能在错误里回显。
+        let m = model(ModelKind::OpenAiCompatible, &format!("bad url {KEY}"), "");
+        let err = list(&m, Some(KEY)).unwrap_err();
+        assert_eq!(failure_kind(&err), Some(FailureKind::Setup));
+        assert!(!format!("{err:?}").contains(KEY));
     }
 
     #[test]
