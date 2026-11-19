@@ -6,6 +6,20 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-11-19
+
+### Fixed
+
+- The app icon is now centered on the visual weight of the white mark, so the "H" no longer looks off-center to the left in the Dock.
+- The screenshot toolbar now stays clear of the notch and menu bar (the macOS display safe area) when a selection reaches the top of the screen.
+
+### 简体中文
+
+#### 修复
+
+- App 图标改为按白色标志的重心居中，Dock 里的「H」不再看起来偏左。
+- 截图工具栏在选区贴近屏幕顶部时会避开刘海和菜单栏（macOS 显示器安全区）。
+
 ## [0.4.14] - 2026-11-19
 
 ### Fixed
