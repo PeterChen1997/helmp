@@ -216,6 +216,24 @@ pub fn plugin_uninstalled(custom: bool, delete_data: bool) {
     );
 }
 
+/// 搜索框显示了插件提供的寄语（每天最多一次）：轮换方式、是不是按日期指定的那条。不发插件 id 和文案。
+pub fn plugin_greeting_shown(rotation: crate::providers::plugins::manifest::Rotation, dated: bool) {
+    use crate::providers::plugins::manifest::Rotation;
+    let rotation = match rotation {
+        Rotation::Open => "open",
+        Rotation::Daily => "daily",
+    };
+    track(
+        "plugin_greeting_shown",
+        json!({ "rotation": rotation, "dated": dated }),
+    );
+}
+
+/// 用户在设置 › 插件里打开 / 关掉某个插件的搜索框寄语。不发插件 id。
+pub fn plugin_greeting_toggled(enabled: bool) {
+    track("plugin_greeting_toggle", json!({ "enabled": enabled }));
+}
+
 /// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceEvent {

@@ -546,3 +546,55 @@ fn gui_tab_enters_the_flomo_scope_and_esc_or_backspace_leave() {
     assert!(link.contains(r#"form=[("content", "from link")]"#), "{link}");
     assert!(link.contains(r#"result="""#), "深链接不能替用户提交：{link}");
 }
+
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_plugins -- --ignored"]
+fn gui_greeting_shows_only_in_the_empty_global_search() {
+    // 插件寄语只代替首页的占位：输入后看不到（占位只在空输入时显示），进入命令范围用范围自己的提示。
+    // 设了 HELMP_SNAPSHOT_DIR 且用 `--features readme-shots` 编译时，每步各存一张离屏截图。
+    let manifest = json!({
+        "schemaVersion": 1,
+        "id": "com.example.daily-quote",
+        "name": "Daily Quote",
+        "version": "1.0.0",
+        "author": "Example",
+        "greetings": {"items": ["Well begun is half done."]}
+    });
+    let h = Helmp::new();
+    user_plugin(&h, "com.example.daily-quote", &manifest, &[]);
+    let snap = std::env::var("HELMP_SNAPSHOT_DIR").is_ok();
+    let step = |name: &str| if snap { format!(" snap:{name}") } else { String::new() };
+    let keys = format!(
+        "wait:1{} ~hello{} query:flomo tab{}",
+        step("greeting-empty"),
+        step("greeting-typed"),
+        step("greeting-scope"),
+    );
+    let h = h
+        .config(enable("com.example.daily-quote", &["greeting"]))
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_KEYS", keys);
+    let out = h.cli(&[]);
+    let greeting = r#"placeholder="Well begun is half done.""#;
+    let empty = self_test_line(&out, "self-test key wait:1:");
+    assert!(empty.contains(r#"query="""#) && empty.contains(greeting), "{empty}");
+    let typed = self_test_line(&out, "self-test key ~hello:");
+    assert!(typed.contains(r#"query="hello""#), "{typed}");
+    let scope = self_test_line(&out, "self-test key tab:");
+    assert!(scope.contains(r#"scope=Some("plugins:dev.helmp.flomo/memo")"#), "{scope}");
+    assert!(!scope.contains(greeting), "命令范围里要显示范围自己的占位：{scope}");
+
+    // 在设置里关掉这个插件的寄语：回到默认占位。
+    let h = Helmp::new();
+    user_plugin(&h, "com.example.daily-quote", &manifest, &[]);
+    let h = h
+        .config(enable("com.example.daily-quote", &["greeting"]))
+        .config(|c| c["plugins"]["com.example.daily-quote"]["greeting"] = json!(false))
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_KEYS", "wait:1");
+    let out = h.cli(&[]);
+    let off = self_test_line(&out, "self-test key wait:1:");
+    assert!(!off.contains(greeting) && off.contains("placeholder="), "{off}");
+}

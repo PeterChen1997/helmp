@@ -28,7 +28,7 @@ use crate::providers::plugins::manifest::{PrefKind, Preference};
 use crate::providers::plugins::registry::{self, Entry, Source, State};
 use crate::providers::plugins::center::{self, Availability, Catalog, Listing, Registry};
 use crate::providers::plugins::autoupdate::{self, Trigger};
-use crate::providers::plugins::{self, scaffold, secrets, sources};
+use crate::providers::plugins::{self, greeting, scaffold, secrets, sources};
 use crate::style::{self, Palette};
 
 use super::mcp_pane::{card, code, field, labeled};
@@ -132,6 +132,7 @@ impl PluginsPane {
     fn save(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Config)) {
         if let Err(err) = config::update(f) {
             eprintln!("helmp: 保存插件设置失败：{err:#}");
+            crate::telemetry::report("plugins.settings_save", &err);
             self.status = Some(Err(trf!(
                 "保存设置失败：{err:#}",
                 "Couldn't save settings: {err:#}"
@@ -1386,8 +1387,10 @@ impl PluginsPane {
                 }),
             )));
         }
-        // 命令：标题 + 触发词。
-        body = body.child(widgets::label(tr("命令", "Commands"), pal).mt(px(4.)));
+        // 命令：标题 + 触发词。只有寄语或 MCP 服务器的插件没有命令，不留一个空标题。
+        if !manifest.commands.is_empty() {
+            body = body.child(widgets::label(tr("命令", "Commands"), pal).mt(px(4.)));
+        }
         for command in &manifest.commands {
             let trigger = command.keywords.first().cloned().unwrap_or_default();
             let text = if trigger.is_empty() {
@@ -1404,6 +1407,40 @@ impl PluginsPane {
         }
         for line in lines {
             body = body.child(widgets::help_text(format!("• {line}"), pal));
+        }
+        if manifest.greetings.is_some() {
+            // 与偏好设置的开关同样的排法：标题、说明、开关。
+            let plugin_id = plugin.id().to_string();
+            let title = tr("搜索框提示语", "Search Box Messages");
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .py(px(4.))
+                    .mt(px(4.))
+                    .child(widgets::label(title, pal))
+                    .child(widgets::help_text(
+                        tr(
+                            "搜索框为空时显示这个插件提供的一句话",
+                            "Show this plugin's message when the search box is empty",
+                        ),
+                        pal,
+                    ))
+                    .child(widgets::switch(
+                        SharedString::from(format!("plugin-greeting-{plugin_id}")),
+                        greeting::enabled(&config::get(), &plugin_id),
+                        title,
+                        pal,
+                        cx.listener(move |this, on: &bool, _, cx| {
+                            let (plugin_id, on) = (plugin_id.clone(), *on);
+                            this.save(cx, move |config| {
+                                config.plugins.entry(plugin_id).or_default().greeting = Some(on);
+                            });
+                            crate::telemetry::plugin_greeting_toggled(on);
+                        }),
+                    )),
+            );
         }
         if !manifest.preferences.is_empty() {
             body = body.child(widgets::label(tr("偏好设置", "Preferences"), pal).mt(px(4.)));

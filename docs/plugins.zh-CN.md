@@ -127,8 +127,9 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `icon`、`tint` | | Lucide 图标名或插件目录里的 `.png`；底色：`blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | 只能声明 `["clipboard.read"]`（用 `{{clipboard}}` 时必须有）；其他权限都从清单推导 |
 | `preferences` | | 见下 |
-| `commands` | 是* | 至少一个（*只带 `mcpServers` 的插件可以没有） |
+| `commands` | 是* | 至少一个（*只带 `mcpServers` 或只提供 `greetings` 的插件可以没有） |
 | `mcpServers` | | 插件带的 MCP 服务器；插件启用时它们的工具变成命令。见 [MCP 服务器](mcp-client.zh-CN.md#插件可以带服务器) |
+| `greetings` | | 空搜索框里显示的文字，见[搜索框寄语](#搜索框寄语) |
 
 ### 偏好设置
 
@@ -212,6 +213,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | 运行插件目录里的脚本 | `script` 动作和 `list` 命令。脚本以你的用户身份运行、不受沙盒限制：只启用你信任的插件 |
 | 运行本地程序：`npx` | `mcpServers` 里的每个 `command`（同样以你的身份运行、不受沙盒限制） |
 | 访问网络：`主机` | 也包括 `mcpServers` 里的每个 `url` |
+| 在搜索框显示提示语 | `greetings` |
 
 自带插件默认启用。你的插件默认停用，启用时 Helmp 记下你确认过的权限；权限变了会再问一次。
 
@@ -250,6 +252,49 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 ```
 
 列表脚本能用 `{{query}}` 和偏好设置（不能用表单和剪贴板），必须在 `timeoutMs`（默认 1000，最多 3000）内结束；同一输入的结果缓存 `cacheSeconds` 秒（至少 1 秒）。最多显示 200 项。脚本失败、或者输出的不是上面这种 JSON 时，列表里只显示一行错误和原因。没写 `action` 时，选中一项会把 `item.arg` 当作网址或路径打开。
+
+## 搜索框寄语
+
+插件可以往搜索框里放一句话：每日一句、小提示、特定日期的一句话。它作为搜索框的占位文字显示，所以只在全局搜索、输入框为空时看得到，一打字就消失。进入命令范围后显示范围自己的提示；刚启动时「正在建立应用索引…」仍然优先。
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.daily-quote",
+  "name": "Daily Quote",
+  "version": "1.0.0",
+  "author": "Example",
+  "greetings": {
+    "rotation": "daily",
+    "items": [
+      { "en": "Well begun is half done.", "zh-Hans": "良好的开端是成功的一半。" },
+      "Done is better than perfect."
+    ],
+    "dates": [
+      { "date": "01-01", "text": "Happy New Year!" },
+      { "date": "2027-06-01", "text": "Only on June 1, 2027" }
+    ]
+  }
+}
+```
+
+完整示例见 [`examples/plugins/com.example.daily-quote`](../examples/plugins/com.example.daily-quote/plugin.json)。插件可以只有 `greetings`、没有命令。
+
+| 字段 | 说明 |
+|---|---|
+| `rotation` | `open`（默认）：每次打开面板换下一条。`daily`：每天一条，按顺序轮换，跨月、跨年接着往下 |
+| `items` | 平常轮换的文案 |
+| `dates` | 指定某天显示的 `{ "date", "text" }`。`MM-DD` 每年重复；`YYYY-MM-DD` 只那一天 |
+
+规则：
+
+- **日期优先。** 当天有匹配的 `dates` 时代替平常的轮换。同一天 `YYYY-MM-DD` 优先于 `MM-DD`；同一天有多条时按 `rotation` 轮换。每年重复的 `02-29` 在平年落到 2 月 28 日（那天没有自己的 `02-28` 时）。
+- **本机时间。** 「今天」按 Mac 的时区算。
+- **同时只显示一个插件的。** 多个已启用的插件都提供寄语时，今天有按日期指定文案的插件优先；否则用插件 id 排序最前的那个。想让后面的显示，在「设置 › 插件」里打开前一个插件，关掉「搜索框提示语」。
+- **限制。** `items` 和 `dates` 至少一条、合计最多 1000 条；每条一行、最多 120 个字。文案是纯文本，和其他文案字段一样可以写中英文。
+- **不拖慢面板。** 寄语是纯声明：不联网、不跑脚本，打开面板时只在内存里挑一条。会自己变的内容（天气、订阅）请用列表命令，或者更新插件。
+
+寄语是一项权限（「在搜索框显示提示语」）：启用插件时要确认；插件更新后新加了寄语，也要重新确认。
 
 ## 测试插件
 

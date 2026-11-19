@@ -2,6 +2,7 @@
 //! - 网络：所有 http 动作的主机名；整段地址来自偏好设置时取它的 allowedHosts，并标明「来自偏好设置」。
 //! - 打开：open 动作的 scheme（https、obsidian…）；地址整段是模板时为「任意链接或文件」。
 //! - 剪贴板读取（声明了 clipboard.read）、写入（copy / paste）、模拟按键（paste）、运行脚本（script / list）。
+//! - 在搜索框显示寄语（声明了 greetings）。
 //!
 //! 用户插件启用前把这些列给用户确认；确认过的权限键（`keys`）存进配置，清单权限变了要重新确认。
 
@@ -22,12 +23,15 @@ pub struct Permissions {
     pub exec: bool,
     /// 插件带的 MCP 服务器要运行的本地程序（`npx`、`./server.py`）。
     pub processes: BTreeSet<String>,
+    /// 在搜索框显示插件提供的寄语（清单声明了 `greetings`）。
+    pub greeting: bool,
 }
 
 impl Permissions {
     pub fn derive(manifest: &Manifest) -> Self {
         let mut permissions = Self {
             clipboard_read: manifest.reads_clipboard(),
+            greeting: manifest.greetings.is_some(),
             ..Self::default()
         };
         for server in manifest.mcp_servers.values() {
@@ -128,6 +132,9 @@ impl Permissions {
         if self.exec {
             keys.push("exec".into());
         }
+        if self.greeting {
+            keys.push("greeting".into());
+        }
         keys.extend(
             self.processes
                 .iter()
@@ -201,6 +208,9 @@ impl Permissions {
                 "运行本地程序：{command}（MCP 服务器，以你的用户身份，不受沙盒限制）",
                 "Run a local program: {command} (MCP server, as you, not sandboxed)"
             ));
+        }
+        if self.greeting {
+            lines.push(tr("在搜索框显示提示语", "Show messages in the search box").into());
         }
         lines
     }
@@ -305,4 +315,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn greetings_are_a_permission_that_needs_consent() {
+        // 往搜索框里放文字也是插件对 Helmp 的改动：启用前要列出来；后来新加了寄语，权限键变了就要重新确认。
+        let without = derive(
+            r#"[{"id":"a","title":"A","action":{"type":"open","url":"https://example.com"}}]"#,
+            "",
+        );
+        let with = derive(
+            r#"[{"id":"a","title":"A","action":{"type":"open","url":"https://example.com"}}]"#,
+            r#""greetings":{"items":["Hello"]},"#,
+        );
+        assert!(!without.keys().contains(&"greeting".to_string()));
+        assert_eq!(with.keys(), ["greeting", "open:https"]);
+        assert_ne!(with.keys(), without.keys());
+        let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || with.describe());
+        assert!(lines.contains(&"在搜索框显示提示语".to_string()), "{lines:?}");
+    }
 }

@@ -284,6 +284,8 @@ pub struct Launcher {
     window_handle: AnyWindowHandle,
     /// 搜索框当前的占位文字（随范围、索引状态变化，见 `placeholder_for`）。
     placeholder: String,
+    /// 这次打开面板时插件提供的搜索框寄语（每次打开重挑一次，见 `plugins::greeting`）。
+    greeting: Option<String>,
     /// 等待防抖结束的自动执行（输入即译）。被替换或丢弃即取消。
     auto_task: Option<Task<()>>,
     /// 自动执行已排队、还没开始：详情区显示加载占位。
@@ -300,7 +302,7 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(engine: Engine, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let placeholder = placeholder_for(None, engine.is_started(APPS_PROVIDER));
+        let placeholder = placeholder_for(None, engine.is_started(APPS_PROVIDER), None);
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.clone()));
 
         let subscriptions = vec![
@@ -400,6 +402,7 @@ impl Launcher {
             lang_generation: crate::i18n::generation(),
             window_handle,
             placeholder,
+            greeting: None,
             auto_task: None,
             auto_pending: false,
             form_run: 0,
@@ -490,11 +493,12 @@ impl Launcher {
             })
             .unwrap_or_default();
         format!(
-            "scope={:?} query={:?} focus={focus} form={form} result={result:?} visible={} selected={:?}",
+            "scope={:?} query={:?} focus={focus} form={form} result={result:?} visible={} selected={:?} placeholder={:?}",
             self.scope_id(),
             self.query,
             self.visible,
-            self.selected_item().map(|item| item.id.as_str()).unwrap_or_default()
+            self.selected_item().map(|item| item.id.as_str()).unwrap_or_default(),
+            self.placeholder
         )
     }
 
@@ -566,6 +570,10 @@ impl Launcher {
             self.fresh_list = true;
         }
         let executed = std::mem::take(&mut self.executed);
+        // 为展示结果重新弹出不算「打开」：不换寄语。
+        if allow_reset {
+            self.greeting = crate::providers::plugins::greeting::for_this_open();
+        }
         if allow_reset && should_reset(hidden_for, reset_after(), executed) {
             crate::trace::log("reset query");
             self.reset(window, cx);
@@ -574,6 +582,7 @@ impl Launcher {
                 .update(cx, |input, cx| input.select_all(window, cx));
         }
         self.sync_language(window, cx);
+        self.sync_placeholder(window, cx);
         crate::panel::show(window, cx);
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
@@ -642,6 +651,7 @@ impl Launcher {
                 .as_ref()
                 .map(|active| active.scope.placeholder.as_str()),
             self.engine.is_started(APPS_PROVIDER),
+            self.greeting.as_deref(),
         );
         if want != self.placeholder {
             self.placeholder = want.clone();
@@ -1575,12 +1585,18 @@ fn root_placeholder() -> &'static str {
 }
 
 /// 搜索框占位文字：范围里用范围自己的提示；首页在应用索引建好之前说明正在建索引
-/// （此时搜不到应用是正常的，不说明的话用户会以为坏了）。
-fn placeholder_for(scope_placeholder: Option<&str>, apps_indexed: bool) -> String {
-    match scope_placeholder {
-        Some(placeholder) => placeholder.to_string(),
-        None if !apps_indexed => tr("正在建立应用索引…", "Indexing apps…").to_string(),
-        None => root_placeholder().to_string(),
+/// （此时搜不到应用是正常的，不说明的话用户会以为坏了）；之后有插件提供的寄语就显示寄语。
+/// 占位文字本来就只在输入框为空时可见，打字后自然消失。
+fn placeholder_for(
+    scope_placeholder: Option<&str>,
+    apps_indexed: bool,
+    greeting: Option<&str>,
+) -> String {
+    match (scope_placeholder, greeting) {
+        (Some(placeholder), _) => placeholder.to_string(),
+        (None, _) if !apps_indexed => tr("正在建立应用索引…", "Indexing apps…").to_string(),
+        (None, Some(greeting)) => greeting.to_string(),
+        (None, None) => root_placeholder().to_string(),
     }
 }
 
@@ -2849,20 +2865,35 @@ mod tests {
     #[test]
     fn placeholder_explains_the_current_state() {
         // 刚启动时搜不到应用是因为索引还没建完：不说明，用户会以为坏了。
-        assert_eq!(placeholder_for(None, false), "正在建立应用索引…");
+        assert_eq!(placeholder_for(None, false, None), "正在建立应用索引…");
         // 首页提示能搜什么，以及 Tab 能进入扩展（否则这个功能没人知道）。
-        let home = placeholder_for(None, true);
+        let home = placeholder_for(None, true, None);
         assert!(home.starts_with("搜索应用、Agent 会话、剪贴板、命令…"), "{home}");
         assert!(home.contains("Tab 进入扩展"), "{home}");
         // 进入范围后提示这个范围能做什么，与索引状态无关。
         assert_eq!(
-            placeholder_for(Some("输入要翻译的文字"), false),
+            placeholder_for(Some("输入要翻译的文字"), false, None),
             "输入要翻译的文字"
         );
         crate::i18n::with_lang(crate::i18n::Lang::En, || {
-            assert_eq!(placeholder_for(None, false), "Indexing apps…");
-            assert!(placeholder_for(None, true).contains("Tab to open an extension"));
+            assert_eq!(placeholder_for(None, false, None), "Indexing apps…");
+            assert!(placeholder_for(None, true, None).contains("Tab to open an extension"));
         });
+    }
+
+    #[test]
+    fn plugin_greetings_only_replace_the_home_placeholder() {
+        // 寄语只在全局搜索里代替首页提示；范围自己的提示、索引中的说明都比寄语重要。
+        let greeting = Some("Well begun is half done.");
+        assert_eq!(
+            placeholder_for(None, true, greeting),
+            "Well begun is half done."
+        );
+        assert_eq!(
+            placeholder_for(Some("输入要翻译的文字"), true, greeting),
+            "输入要翻译的文字"
+        );
+        assert_eq!(placeholder_for(None, false, greeting), "正在建立应用索引…");
     }
 
     #[test]

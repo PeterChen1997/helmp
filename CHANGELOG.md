@@ -12,6 +12,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - Plugins get their own data folder, `HELMP_PLUGIN_DATA_DIR` (`plugin-data/<id>/` in Helmp's data folder), for scripts, list scripts and bundled MCP servers. Updates and reinstalls never touch it.
 - Plugins installed from the Plugin Center or a source can be uninstalled in Settings, which asks whether to delete the plugin's data too (`helmp plugins uninstall <id> [--delete-data]`).
 - Custom plugin sources may include JPEG, WebP and GIF images and larger plugins (4 MiB per file, 16 MiB per plugin). The Plugin Center's limits are unchanged.
+- Plugins can provide search-box greetings: a line of text shown in the empty global search box, such as a quote of the day or a note for a special date. Declare `greetings` in `plugin.json` with a rotation (every open, or once a day) and optional entries for specific dates (`MM-DD` every year, or `YYYY-MM-DD`). Greetings are a permission you confirm when turning the plugin on, and each plugin's greetings can be turned off in Settings › Plugins. See the plugin docs and `examples/plugins/com.example.daily-quote`.
 
 ### Security
 
@@ -25,6 +26,7 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - 插件有了自己的数据目录 `HELMP_PLUGIN_DATA_DIR`（Helmp 数据目录下的 `plugin-data/<id>/`），脚本、列表脚本和插件带的 MCP 服务器都能用，更新和重装都不会动它。
 - 从插件中心或插件源安装的插件可以在设置里卸载，卸载时会问要不要一并删除插件数据（`helmp plugins uninstall <id> [--delete-data]`）。
 - 自定义插件源里的插件可以带 JPEG、WebP、GIF 图片，体积上限也放宽了（单个文件 4 MiB、每个插件 16 MiB）。插件中心的限制不变。
+- 插件可以提供搜索框寄语：全局搜索、输入框为空时在搜索框里显示一句话，比如每日一句、特定日期的一句话。在 `plugin.json` 里声明 `greetings`，可选轮换方式（每次打开 / 每天一条），也可以按日期指定（`MM-DD` 每年重复，或 `YYYY-MM-DD`）。寄语是一项权限，启用插件时确认；「设置 › 插件」里可以按插件关掉。详见插件文档和 `examples/plugins/com.example.daily-quote`。
 
 #### 安全
 

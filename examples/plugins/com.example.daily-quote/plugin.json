@@ -1,0 +1,30 @@
+{
+  "$comment": "Example: a greetings-only plugin. One quote per day in the search box; special lines on fixed dates.",
+  "schemaVersion": 1,
+  "id": "com.example.daily-quote",
+  "name": { "en": "Daily Quote", "zh-Hans": "每日一句" },
+  "description": {
+    "en": "Shows one quote a day in the empty search box.",
+    "zh-Hans": "在空搜索框里每天显示一句话。"
+  },
+  "version": "1.0.0",
+  "author": "Example",
+  "homepage": "https://example.com/daily-quote",
+  "license": "MIT",
+  "icon": "quote",
+  "tint": "orange",
+  "greetings": {
+    "rotation": "daily",
+    "items": [
+      { "en": "Well begun is half done.", "zh-Hans": "良好的开端是成功的一半。" },
+      { "en": "Simplicity is the ultimate sophistication.", "zh-Hans": "简单是终极的复杂。" },
+      { "en": "The secret of getting ahead is getting started.", "zh-Hans": "领先的秘诀是开始行动。" },
+      { "en": "Small steps every day.", "zh-Hans": "每天进步一点点。" },
+      { "en": "Done is better than perfect.", "zh-Hans": "完成胜过完美。" }
+    ],
+    "dates": [
+      { "date": "01-01", "text": { "en": "Happy New Year!", "zh-Hans": "新年快乐！" } },
+      { "date": "02-29", "text": { "en": "A bonus day — enjoy it.", "zh-Hans": "多出来的一天，好好享受。" } }
+    ]
+  }
+}
