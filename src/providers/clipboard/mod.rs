@@ -395,7 +395,7 @@ fn entry(badge: &str, score: u32) -> Item {
     Item {
         id: format!("{PROVIDER_ID}:open"),
         title: tr("剪贴板历史", "Clipboard History").into(),
-        subtitle: tr("Clipboard History", "Browse and paste what you’ve copied").into(),
+        subtitle: tr("浏览并粘贴你复制过的内容", "Browse and paste what you’ve copied").into(),
         badge: badge.into(),
         score,
         icon: Icon::Symbol {
