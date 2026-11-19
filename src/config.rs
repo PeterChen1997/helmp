@@ -179,6 +179,9 @@ pub struct PluginSettings {
     /// 插件声明了搜索框寄语时是否显示；None = 显示（启用插件时已确认过这项权限）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub greeting: Option<bool>,
+    /// 用户在设置里单独停用的定时任务（`schedules[].id`）。
+    #[serde(skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub schedules_off: std::collections::BTreeSet<String>,
     /// 从插件中心安装时记下来源与版本（用来提示「有更新」）；手动放进插件文件夹的插件为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub installed: Option<RegistryInstall>,

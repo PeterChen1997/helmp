@@ -9,6 +9,8 @@
 //!   权限确认卡片，从不自动启用。一个源取不到只在那个源的位置说明原因。
 //! - 「插件更新」：「自动更新插件」开关（每天检查从插件中心 / 插件源装的插件并静默更新，见 `autoupdate`）、
 //!   上次检查的时间与结果、「现在检查」。权限变了的插件更新后在列表里显示「权限有变化，待确认」。
+//! - 插件声明了定时任务时，详情里列出每个任务：触发时间、上次运行的时间与结果、单独停用的开关
+//!   （样式同「插件更新」分组）；系统关掉了 Helmp 的通知时在这里说明。
 //! - 从插件中心 / 插件源装的插件可以在详情里卸载，卸载时问要不要一并删掉它的数据目录。
 //! - 「插件源」：公开插件中心之外的自定义源（列表、添加、换令牌、删除），界面沿用 MCP 页服务器列表的样式。
 //!   令牌用掩码输入框，保存进钥匙串，从不回显。`helmp://add-plugin-source` 只预填添加表单，要用户点「添加」。
@@ -28,7 +30,7 @@ use crate::providers::plugins::manifest::{PrefKind, Preference};
 use crate::providers::plugins::registry::{self, Entry, Source, State};
 use crate::providers::plugins::center::{self, Availability, Catalog, Listing, Registry};
 use crate::providers::plugins::autoupdate::{self, Trigger};
-use crate::providers::plugins::{self, greeting, scaffold, secrets, sources};
+use crate::providers::plugins::{self, greeting, notify, schedule, scaffold, secrets, sources};
 use crate::style::{self, Palette};
 
 use super::mcp_pane::{card, code, field, labeled};
@@ -607,6 +609,79 @@ impl PluginsPane {
             )
             .into_any_element(),
         ];
+        widgets::group(rows, pal)
+    }
+
+    /// 插件详情里的「定时任务」分组：每个任务一行（名字；触发时间、上次运行与结果），右边是单独停用的开关。
+    fn schedules_group(&self, plugin: &plugins::registry::Plugin, pal: &Palette, cx: &mut Context<Self>) -> Div {
+        let config = config::get();
+        let mut rows = Vec::new();
+        for spec in &plugin.manifest.schedules {
+            let trigger = schedule::Trigger::from_spec(spec)
+                .map(|trigger| trigger.describe())
+                .unwrap_or_default();
+            let record = schedule::record(plugin.id(), &spec.id);
+            let last = if schedule::is_running(plugin.id(), &spec.id) {
+                tr("正在运行…", "Running…").to_string()
+            } else {
+                match &record {
+                    Some(record) => trf!(
+                        "上次：{}，{}",
+                        "Last run {}: {}",
+                        checked_at(u64::try_from(record.last_run_ms / 1000).unwrap_or_default()),
+                        record.summary()
+                    ),
+                    None => tr("还没运行过", "Not run yet").to_string(),
+                }
+            };
+            let failed = record.as_ref().is_some_and(|record| !record.ok);
+            let detail = format!("{trigger} · {last}");
+            let label = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(widgets::label(spec.label(), pal))
+                .child(if failed {
+                    widgets::error_text(detail, pal)
+                } else {
+                    widgets::help_text(detail, pal)
+                });
+            let (plugin_id, task) = (plugin.id().to_string(), spec.id.clone());
+            let on = schedule::task_enabled(&config, &plugin_id, &task);
+            rows.push(
+                widgets::row(
+                    label,
+                    widgets::switch(
+                        SharedString::from(format!("plugin-schedule-{plugin_id}-{task}")),
+                        on,
+                        &spec.label(),
+                        pal,
+                        cx.listener(move |this, on: &bool, _, cx| {
+                            let (plugin_id, task, on) = (plugin_id.clone(), task.clone(), *on);
+                            this.save(cx, move |config| {
+                                let off = &mut config.plugins.entry(plugin_id).or_default().schedules_off;
+                                if on {
+                                    off.remove(&task);
+                                } else {
+                                    off.insert(task);
+                                }
+                            });
+                            crate::telemetry::plugin_schedule_toggled(on);
+                        }),
+                    ),
+                )
+                .into_any_element(),
+            );
+        }
+        let mut help = tr(
+            "只在 Helmp 运行时按时运行；错过当天的时刻（比如电脑在睡眠）会在醒来后补跑一次。",
+            "Tasks run on time while Helmp is running; one missed earlier the same day (say, while the Mac was asleep) runs once when it wakes.",
+        )
+        .to_string();
+        if plugin.manifest.sends_notifications() && notify::last_status() == Some(notify::Status::Denied) {
+            help = format!("{help} {}", notify::denied_message());
+        }
+        rows.push(widgets::row(widgets::help_text(help, pal), div()).into_any_element());
         widgets::group(rows, pal)
     }
 
@@ -1441,6 +1516,11 @@ impl PluginsPane {
                         }),
                     )),
             );
+        }
+        if !manifest.schedules.is_empty() {
+            body = body
+                .child(widgets::label(tr("定时任务", "Scheduled Tasks"), pal).mt(px(4.)))
+                .child(self.schedules_group(&plugin, pal, cx));
         }
         if !manifest.preferences.is_empty() {
             body = body.child(widgets::label(tr("偏好设置", "Preferences"), pal).mt(px(4.)));

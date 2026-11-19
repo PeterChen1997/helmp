@@ -25,9 +25,9 @@
     "icon": { "$ref": "#/$defs/icon" },
     "tint": { "$ref": "#/$defs/tint" },
     "permissions": {
-      "description": "Only clipboard.read can be declared. Network, open, clipboard-write, keystroke and script permissions are derived from the manifest.",
+      "description": "Only clipboard.read and notifications (scheduled tasks may send notifications) can be declared. Network, open, clipboard-write, keystroke, script and background permissions are derived from the manifest.",
       "type": "array",
-      "items": { "enum": ["clipboard.read"] },
+      "items": { "enum": ["clipboard.read", "notifications"] },
       "uniqueItems": true
     },
     "preferences": { "type": "array", "items": { "$ref": "#/$defs/preference" } },
@@ -69,14 +69,50 @@
         { "required": ["items"], "properties": { "items": { "minItems": 1 } } },
         { "required": ["dates"], "properties": { "dates": { "minItems": 1 } } }
       ]
+    },
+    "schedules": {
+      "description": "Scripts that run on a schedule while Helmp is running; stdout may be {\"notify\": {\"title\", \"body\", \"url\"}} to post a notification (needs the notifications permission). See docs/plugins.md#scheduled-tasks-and-notifications.",
+      "type": "array",
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/schedule" }
     }
   },
   "anyOf": [
     { "required": ["commands"], "properties": { "commands": { "minItems": 1 } } },
     { "required": ["mcpServers"], "properties": { "mcpServers": { "minProperties": 1 } } },
-    { "required": ["greetings"] }
+    { "required": ["greetings"] },
+    { "required": ["schedules"], "properties": { "schedules": { "minItems": 1 } } }
   ],
   "$defs": {
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "script"],
+      "properties": {
+        "$comment": { "description": "Free-form note for humans; ignored." },
+        "id": { "$ref": "#/$defs/key" },
+        "title": { "$ref": "#/$defs/text", "description": "Shown in Settings (default: id)." },
+        "everyMinutes": { "description": "Run every N minutes.", "type": "integer", "minimum": 5, "maximum": 10080 },
+        "at": { "description": "Local time of day, 24-hour HH:MM. Alone: every day. With date: that day at this time.", "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "date": { "description": "MM-DD (every year) or YYYY-MM-DD (that day only). A yearly 02-29 runs on Feb 28 in common years.", "type": "string", "pattern": "^([0-9]{4}-)?[0-9]{2}-[0-9]{2}$" },
+        "script": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "description": "Script in the plugin folder.", "type": "string" },
+            "args": { "description": "Templates; only {{pref.<id>}}, {{date}} and {{time}}.", "type": "array", "items": { "$ref": "#/$defs/template" } },
+            "env": { "type": "object", "additionalProperties": { "$ref": "#/$defs/template" } },
+            "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 120000, "default": 30000 }
+          }
+        }
+      },
+      "oneOf": [
+        { "required": ["everyMinutes"], "not": { "anyOf": [{ "required": ["at"] }, { "required": ["date"] }] } },
+        { "required": ["at"], "not": { "anyOf": [{ "required": ["everyMinutes"] }, { "required": ["date"] }] } },
+        { "required": ["date"], "not": { "required": ["everyMinutes"] } }
+      ]
+    },
     "greetingText": {
       "description": "One line, up to 120 characters. Plain string or localized strings (\"en\" required).",
       "oneOf": [

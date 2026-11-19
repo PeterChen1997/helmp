@@ -125,11 +125,12 @@ Text fields (`name`, `title`…) take a plain string or `{"en": "…", "zh-Hans"
 | `homepage` | | Shown as a button in Settings |
 | `license` | | SPDX license identifier such as `MIT`. Required to publish in the [Plugin Center](plugin-center.md) |
 | `icon`, `tint` | | Lucide icon name or `.png` in the folder; tint: `blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
-| `permissions` | | Only `["clipboard.read"]` can be declared (needed for `{{clipboard}}`); everything else is derived |
+| `permissions` | | Only `"clipboard.read"` (needed for `{{clipboard}}`) and `"notifications"` (lets scheduled tasks send notifications) can be declared; everything else is derived |
 | `preferences` | | See below |
-| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers` or only provides `greetings`) |
+| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers`, or only provides `greetings` or `schedules`) |
 | `mcpServers` | | MCP servers the plugin brings; their tools become commands while the plugin is enabled. See [MCP servers](mcp-client.md#plugins-can-bundle-servers) |
 | `greetings` | | Text for the empty search box. See [Search-box greetings](#search-box-greetings) |
+| `schedules` | | Scripts that run on a schedule and may send notifications. See [Scheduled tasks and notifications](#scheduled-tasks-and-notifications) |
 
 ### Preferences
 
@@ -214,6 +215,8 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Run a local program: `npx` | Each `command` in `mcpServers` (also as you, not sandboxed) |
 | Network access: `host` | Also each `url` in `mcpServers` |
 | Show messages in the search box | `greetings` |
+| Run scripts from the plugin folder in the background on a schedule | `schedules` |
+| Send notifications | `"permissions": ["notifications"]` |
 
 Bundled plugins are on by default. Your plugins are off until you turn them on; Helmp stores the permissions you confirmed and asks again if they change.
 
@@ -296,6 +299,76 @@ Rules:
 
 Greetings are a permission ("Show messages in the search box"): you confirm it when you turn the plugin on, and a plugin that adds greetings in an update needs your review again.
 
+## Scheduled tasks and notifications
+
+A plugin can run a script from its folder on a schedule — every so many minutes, every day at a set time, or on a date — and the script can ask Helmp to post a macOS notification. Use it for a morning weather note, a reminder on a date, or syncing data now and then.
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.weather-reminder",
+  "name": "Weather Reminder",
+  "version": "1.0.0",
+  "author": "Example",
+  "permissions": ["notifications"],
+  "preferences": [
+    { "id": "city", "type": "text", "title": "City", "default": "Berlin" }
+  ],
+  "schedules": [
+    { "id": "morning", "title": "Morning forecast", "at": "08:00",
+      "script": { "path": "forecast.sh", "env": { "CITY": "{{pref.city}}" } } },
+    { "id": "refresh", "everyMinutes": 60, "script": { "path": "refresh.sh" } },
+    { "id": "new-year", "date": "01-01", "at": "09:00", "script": { "path": "new-year.sh" } }
+  ]
+}
+```
+
+A complete example is in [`examples/plugins/com.example.weather-reminder`](../examples/plugins/com.example.weather-reminder/plugin.json). A plugin may consist of `schedules` alone, with no commands.
+
+| Field | Description |
+|---|---|
+| `id` | Letters, digits, `_`, `-`; unique within the plugin |
+| `title` | Text shown in Settings (default: `id`) |
+| `everyMinutes` | Run every N minutes, 5 to 10080 (a week) |
+| `at` | Run every day at this local time, 24-hour `HH:MM` |
+| `date` | Run on this date: `MM-DD` every year, or `YYYY-MM-DD` that day only (same as greetings). With `at`, at that time; without, as soon as Helmp runs that day |
+| `script.path` | Script in the plugin folder (run like `script` actions: executable or with a shebang, no shell) |
+| `script.args`, `script.env` | Templates; only `{{pref.<id>}}`, `{{date}}` and `{{time}}` are available (no input, form or clipboard in the background) |
+| `script.timeoutMs` | Default 30000, max 120000 |
+
+Use exactly one of `everyMinutes`, `at`, or `date` (optionally with `at`).
+
+**When tasks run.**
+
+- Only while Helmp is running. There is no background service when Helmp is quit.
+- A daily or dated task runs once per day. If its time passed while Helmp wasn't running or the Mac was asleep, it runs once when Helmp starts or the Mac wakes — on the same day only; missed earlier days are skipped.
+- An interval task runs when its interval has passed since the last run. After a long absence it runs once, not once per missed interval.
+- Times and dates follow your Mac's time zone. On a daylight-saving change a task still runs once: a time skipped by the clock runs right after the jump, and a repeated hour doesn't run it twice. A yearly `02-29` runs on February 28 in common years.
+- At most 2 scheduled scripts run at a time across all plugins, and a task never overlaps with itself. While a plugin's script is running, automatic updates skip that plugin until next time.
+- The last run of each task is kept in Helmp's own data (`plugin-schedules.json`), not in the plugin's data folder, so updates and reinstalls don't reset it.
+
+**Output and notifications.** Print nothing, or one JSON object on stdout:
+
+```json
+{"notify": {"title": "Rain this afternoon", "body": "Take an umbrella", "url": "https://example.com/forecast"}}
+```
+
+`title` is required (up to 100 characters), `body` is optional (up to 500), and `url` (http or https) is opened when the notification is clicked. Anything else on stdout counts as a failure, so write logs to stderr. Sending a notification needs `"permissions": ["notifications"]`. The first notification asks macOS for permission; if it's denied, Helmp doesn't ask again — the task's result says notifications are off and how to turn them on in System Settings › Notifications.
+
+**Stopping.** Turning the plugin off, uninstalling it, a pending permission review, or turning a single task off in Settings stops its running script immediately, child processes included. Quitting Helmp does the same. A script that runs past its timeout is killed the same way.
+
+**Settings.** Settings › Plugins lists each task under the plugin with its schedule, the last run's time and result, and a switch to turn that task off.
+
+**Trying it from a terminal.**
+
+```bash
+helmp plugins schedules                                  # tasks of enabled plugins: id, schedule, last run, result
+helmp plugins schedules run com.example.weather-reminder/morning   # run once now and print the result
+helmp plugins schedules watch --for 120                  # run the scheduler in the foreground for two minutes
+```
+
+Running scripts in the background and sending notifications are permissions ("Run scripts from the plugin folder in the background on a schedule", "Send notifications"): you confirm them when you turn the plugin on, and a plugin that adds them in an update needs your review again.
+
 ## Testing your plugin
 
 ```bash
@@ -325,6 +398,7 @@ For automated tests, run `helmp` with an isolated data folder: `HELMP_DATA_DIR=<
 
 - Secrets come from `HELMP_TEST_SECRETS='{"<plugin id>/<preference id>": "value"}'` and the Keychain is never touched. Outside this mode the variable is ignored.
 - Requests to `127.0.0.1` / `localhost` are allowed and actually sent, so a plugin locked to `flomoapp.com` can be pointed at a local mock server.
+- `HELMP_SCHEDULE_MINUTE_MS` shortens a "minute" for scheduled tasks and `HELMP_SCHEDULE_TICK_MS` sets how often the scheduler checks, so `helmp plugins schedules watch --for 3` can run a five-minute task several times. Notifications are printed as `[dry-run] notify <title> | <body> | <url>` instead of being posted.
 
 Helmp's own end-to-end tests ([`tests/e2e_plugins.rs`](../tests/e2e_plugins.rs)) use exactly this setup.
 

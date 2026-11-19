@@ -49,6 +49,7 @@ png = "0.18"
 toml = "1"
 dispatch2 = "0.3"
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "bitflags", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger"] }
 
 [dev-dependencies]
 # 单测里截下 Sentry 事件，断言上报内容不带地址和令牌。

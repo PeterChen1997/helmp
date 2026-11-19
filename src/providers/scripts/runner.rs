@@ -112,6 +112,20 @@ pub fn execute_with(
     env: &[(String, String)],
     stdin: Option<&str>,
 ) -> Result<RunOutput> {
+    execute_tracked(path, args, cwd, timeout, env, stdin, &|_| {})
+}
+
+/// 同 [`execute_with`]，脚本启动后把进程组号交给 `on_spawn`：调用方可以在超时之前用 [`kill_group`]
+/// 提前结束它（定时任务在插件被停用、Helmp 退出时这么做）。被提前结束的脚本按「被信号终止」返回。
+pub fn execute_tracked(
+    path: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    env: &[(String, String)],
+    stdin: Option<&str>,
+    on_spawn: &dyn Fn(i32),
+) -> Result<RunOutput> {
     let mut command = command_for(path)?;
     command
         .args(args)
@@ -131,6 +145,7 @@ pub fn execute_with(
         .with_context(|| trf!("启动脚本 {}", "Couldn't start script {}", path.display()))?;
     let pgid = i32::try_from(child.id())
         .with_context(|| tr("pid 超出 i32", "The process ID doesn’t fit in i32"))?;
+    on_spawn(pgid);
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
         // 单独线程写：输入很大而脚本不读时，主线程不能卡在写管道上（超时照样生效）。
         let text = text.to_string();
@@ -198,7 +213,8 @@ pub fn execute_with(
     }
 }
 
-fn kill_group(pgid: i32) {
+/// 向整个进程组发 SIGKILL（组已经退出时什么也不做）。
+pub fn kill_group(pgid: i32) {
     // SAFETY: kill(2) 只读参数，负 pid 表示向整个进程组发信号。
     let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
     if result != 0 {
@@ -426,7 +442,9 @@ mod tests {
             true,
         );
         let started = Instant::now();
-        let err = execute(&path, &[], dir.path(), Duration::from_millis(500)).unwrap_err();
+        // 超时要留够脚本启动、写下子进程 pid 的时间：全量测试并行时 sh 启动可能慢过 0.5 秒，
+        // 那样脚本还没写 pid 就被杀，读 pid 文件报 NotFound（以前的偶发失败就是这个）。
+        let err = execute(&path, &[], dir.path(), Duration::from_secs(2)).unwrap_err();
         assert!(format!("{err}").contains("超过"), "{err}");
         // 报错直接显示在面板上：只写文件名，不把一长串绝对路径甩给用户。
         assert!(format!("{err}").contains("hang.sh"), "{err}");
@@ -434,7 +452,7 @@ mod tests {
             !format!("{err}").contains(&dir.path().display().to_string()),
             "{err}"
         );
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(10));
 
         let child_pid: i32 = fs::read_to_string(&pid_file)
             .unwrap()

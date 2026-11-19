@@ -414,6 +414,8 @@ struct ScriptCall<'a> {
     env: &'a BTreeMap<String, String>,
     stdin: Option<&'a str>,
     timeout: Duration,
+    /// 脚本启动后拿到进程组号（定时任务用来提前结束它）。
+    on_spawn: &'a dyn Fn(i32),
 }
 
 fn run_script(plugin: &Plugin, title: &str, call: ScriptCall, context: &Context) -> Result<String> {
@@ -423,6 +425,7 @@ fn run_script(plugin: &Plugin, title: &str, call: ScriptCall, context: &Context)
         env,
         stdin,
         timeout,
+        on_spawn,
     } = call;
     let (path, dir) = script_path(plugin, path)?;
     let args: Vec<String> = args
@@ -442,7 +445,8 @@ fn run_script(plugin: &Plugin, title: &str, call: ScriptCall, context: &Context)
     let stdin = stdin.map(|text| render(text, context)).transpose()?;
     // 运行期间登记为忙：自动更新不在这时替换插件目录。
     let _running = running::enter(plugin.id());
-    let output = runner::execute_with(&path, &args, &dir, timeout, &vars, stdin.as_deref())?;
+    let output =
+        runner::execute_tracked(&path, &args, &dir, timeout, &vars, stdin.as_deref(), on_spawn)?;
     if !output.status.success() {
         let detail = if output.stderr.trim().is_empty() {
             &output.stdout
@@ -475,6 +479,7 @@ fn script(input: &Input, spec: &ScriptSpec, context: &Context) -> Result<Outcome
         env: &spec.env,
         stdin: spec.stdin.as_deref(),
         timeout,
+        on_spawn: &|_| {},
     };
     let stdout = run_script(input.plugin, title, call, context)?;
     let text = stdout.trim_end().to_string();
@@ -493,6 +498,57 @@ fn script(input: &Input, spec: &ScriptSpec, context: &Context) -> Result<Outcome
             ..Detail::default()
         })),
     }
+}
+
+/// 定时任务的脚本默认超时（与脚本动作一致）。
+pub const SCHEDULE_TIMEOUT: Duration = SCRIPT_TIMEOUT;
+
+/// 运行定时任务的脚本，返回 stdout。后台运行：没有输入、表单和剪贴板；用到的密钥在报错里打码。
+/// `on_spawn` 拿到进程组号，调度器靠它在插件停用、Helmp 退出时提前结束脚本。
+pub fn run_scheduled(
+    plugin: &Plugin,
+    spec: &super::manifest::ScheduleSpec,
+    on_spawn: &dyn Fn(i32),
+) -> Result<String> {
+    let used = RefCell::new(Vec::new());
+    let pref = |key: &str| -> Result<String> {
+        let value = pref_value(plugin, key)?;
+        if plugin
+            .manifest
+            .preference(key)
+            .is_some_and(|p| p.kind == PrefKind::Secret)
+            && !value.is_empty()
+        {
+            used.borrow_mut().push(value.clone());
+        }
+        Ok(value)
+    };
+    let no_clipboard = || -> Result<String> { Ok(String::new()) };
+    let form = BTreeMap::new();
+    let context = Context {
+        query: "",
+        form: &form,
+        pref: &pref,
+        clipboard: &no_clipboard,
+        item: None,
+        response: None,
+        now: template::now(),
+    };
+    let title = spec.label();
+    let call = ScriptCall {
+        path: &spec.script.path,
+        args: &spec.script.args,
+        env: &spec.script.env,
+        stdin: None,
+        timeout: spec
+            .script
+            .timeout_ms
+            .map_or(SCHEDULE_TIMEOUT, Duration::from_millis),
+        on_spawn,
+    };
+    run_script(plugin, &title, call, &context)
+        .map(|stdout| redact(&stdout, &used.borrow()))
+        .map_err(|err| anyhow!(redact(&format!("{err:#}"), &used.borrow())))
 }
 
 /// 列表脚本输出的一项（Alfred Script Filter JSON）。
@@ -547,6 +603,7 @@ pub fn run_list(
         env: &spec.script.env,
         stdin: None,
         timeout,
+        on_spawn: &|_| {},
     };
     let stdout = run_script(plugin, title, call, &context)
         .map_err(|err| anyhow!(redact(&format!("{err:#}"), &used.borrow())))?;

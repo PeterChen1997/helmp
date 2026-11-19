@@ -1,0 +1,44 @@
+{
+  "$comment": "Example: scheduled tasks with notifications. A morning forecast every day, and a yearly reminder on a fixed date.",
+  "schemaVersion": 1,
+  "id": "com.example.weather-reminder",
+  "name": { "en": "Weather Reminder", "zh-Hans": "天气提醒" },
+  "description": {
+    "en": "Posts the day's forecast every morning and a reminder on a date you choose.",
+    "zh-Hans": "每天早上发一条当天的天气，在指定的日子发一条提醒。"
+  },
+  "version": "1.0.0",
+  "author": "Example",
+  "homepage": "https://example.com/weather-reminder",
+  "license": "MIT",
+  "icon": "cloud-sun",
+  "tint": "blue",
+  "permissions": ["notifications"],
+  "preferences": [
+    {
+      "id": "forecastUrl",
+      "type": "text",
+      "title": { "en": "Forecast URL", "zh-Hans": "天气预报地址" },
+      "description": {
+        "en": "An https address that returns today's forecast as one line of plain text.",
+        "zh-Hans": "返回当天天气（一行纯文本）的 https 地址。"
+      },
+      "default": "https://weather.example.com/today?format=text"
+    }
+  ],
+  "schedules": [
+    {
+      "id": "morning",
+      "title": { "en": "Morning forecast", "zh-Hans": "早间天气" },
+      "at": "08:00",
+      "script": { "path": "forecast.sh", "env": { "FORECAST_URL": "{{pref.forecastUrl}}" }, "timeoutMs": 20000 }
+    },
+    {
+      "id": "yearly",
+      "title": { "en": "Yearly reminder", "zh-Hans": "每年提醒" },
+      "date": "12-25",
+      "at": "09:00",
+      "script": { "path": "reminder.sh" }
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 //! - 打开：open 动作的 scheme（https、obsidian…）；地址整段是模板时为「任意链接或文件」。
 //! - 剪贴板读取（声明了 clipboard.read）、写入（copy / paste）、模拟按键（paste）、运行脚本（script / list）。
 //! - 在搜索框显示寄语（声明了 greetings）。
+//! - 在后台定时运行脚本（声明了 schedules）、发送系统通知（声明了 notifications）。
 //!
 //! 用户插件启用前把这些列给用户确认；确认过的权限键（`keys`）存进配置，清单权限变了要重新确认。
 
@@ -25,6 +26,10 @@ pub struct Permissions {
     pub processes: BTreeSet<String>,
     /// 在搜索框显示插件提供的寄语（清单声明了 `greetings`）。
     pub greeting: bool,
+    /// 在后台定时运行脚本（清单声明了 `schedules`）。
+    pub background: bool,
+    /// 发送系统通知（清单的 permissions 声明了 `notifications`）。
+    pub notify: bool,
 }
 
 impl Permissions {
@@ -32,6 +37,8 @@ impl Permissions {
         let mut permissions = Self {
             clipboard_read: manifest.reads_clipboard(),
             greeting: manifest.greetings.is_some(),
+            background: !manifest.schedules.is_empty(),
+            notify: manifest.sends_notifications(),
             ..Self::default()
         };
         for server in manifest.mcp_servers.values() {
@@ -135,6 +142,12 @@ impl Permissions {
         if self.greeting {
             keys.push("greeting".into());
         }
+        if self.background {
+            keys.push("background".into());
+        }
+        if self.notify {
+            keys.push("notify".into());
+        }
         keys.extend(
             self.processes
                 .iter()
@@ -211,6 +224,18 @@ impl Permissions {
         }
         if self.greeting {
             lines.push(tr("在搜索框显示提示语", "Show messages in the search box").into());
+        }
+        if self.background {
+            lines.push(
+                tr(
+                    "在后台定时运行插件目录里的脚本（Helmp 运行时，以你的用户身份，不受沙盒限制）",
+                    "Run scripts from the plugin folder in the background on a schedule (while Helmp is running, as you, not sandboxed)",
+                )
+                .into(),
+            );
+        }
+        if self.notify {
+            lines.push(tr("发送通知", "Send notifications").into());
         }
         lines
     }

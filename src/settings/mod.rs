@@ -557,6 +557,7 @@ impl SettingsView {
                 crate::hotkey::generation(),
                 crate::updates::generation(),
                 crate::providers::plugins::autoupdate::generation(),
+                crate::providers::plugins::schedule::generation(),
             );
             loop {
                 cx.background_executor()
@@ -565,11 +566,12 @@ impl SettingsView {
                 let Some(this) = this.upgrade() else {
                     break;
                 };
-                // 更新状态（检查结果、下载进度）和插件自动更新的结果也在后台线程变化，一并轮询。
+                // 更新状态（检查结果、下载进度）、插件自动更新和定时任务的结果也在后台线程变化，一并轮询。
                 let now = (
                     crate::hotkey::generation(),
                     crate::updates::generation(),
                     crate::providers::plugins::autoupdate::generation(),
+                    crate::providers::plugins::schedule::generation(),
                 );
                 if now != seen {
                     seen = now;

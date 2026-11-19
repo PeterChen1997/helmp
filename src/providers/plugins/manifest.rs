@@ -15,12 +15,20 @@ use crate::provider::Tint;
 pub const SCHEMA_VERSION: u32 = 1;
 /// 清单里唯一可以声明的权限；其他权限都由清单内容推导出来。
 pub const CLIPBOARD_READ: &str = "clipboard.read";
+/// 定时任务的脚本可以请求发系统通知（见 `schedule`）：要在 permissions 里声明。
+pub const NOTIFICATIONS: &str = "notifications";
 /// http 超时上限（毫秒）。
 pub const MAX_HTTP_TIMEOUT_MS: u64 = 30_000;
 /// 脚本动作的超时上限（毫秒）。
 pub const MAX_SCRIPT_TIMEOUT_MS: u64 = 120_000;
 /// 列表脚本每次输入都可能运行，超时上限要短（见 08 号文档「动态插件硬熔断」）。
 pub const MAX_LIST_TIMEOUT_MS: u64 = 3_000;
+/// 一个插件最多声明多少个定时任务。
+pub const MAX_SCHEDULES: usize = 20;
+/// 按间隔运行的定时任务最短间隔（分钟）：后台脚本不能把电池和网络跑满。
+pub const MIN_SCHEDULE_MINUTES: u64 = 5;
+/// 最长间隔（分钟）：一周。更久的用 `date`。
+pub const MAX_SCHEDULE_MINUTES: u64 = 7 * 24 * 60;
 
 /// 中英文案：纯字符串，或 `{"en": "...", "zh-Hans": "..."}`（必须有 en）。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -97,6 +105,55 @@ pub struct Manifest {
     /// 搜索框寄语：全局搜索、输入框为空时显示在搜索框里的一句话（见 `greeting`）。纯声明，不联网、不跑脚本。
     #[serde(default)]
     pub greetings: Option<Greetings>,
+    /// 定时任务：按间隔、每天固定时刻或指定日期，在后台运行插件目录里的脚本（见 `schedule`）。
+    #[serde(default)]
+    pub schedules: Vec<ScheduleSpec>,
+}
+
+/// 一个定时任务。触发方式三选一：`everyMinutes`；`at`（每天这个时刻）；`date`（可再加 `at`，缺省 00:00）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ScheduleSpec {
+    /// 给人看的注释（JSON 没有注释语法），任意内容，忽略。
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde::de::IgnoredAny>,
+    pub id: String,
+    /// 设置里显示的名字；缺省用 id。
+    #[serde(default)]
+    pub title: Option<Text>,
+    /// 每隔多少分钟运行一次。
+    #[serde(default)]
+    pub every_minutes: Option<u64>,
+    /// 每天几点运行（本机时区，24 小时制 `HH:MM`）。和 `date` 一起用时是那天的几点。
+    #[serde(default)]
+    pub at: Option<String>,
+    /// 哪天运行：`MM-DD`（每年重复）或 `YYYY-MM-DD`（只那一天），写法与寄语的 `dates` 相同。
+    #[serde(default)]
+    pub date: Option<String>,
+    pub script: ScheduleScript,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ScheduleScript {
+    /// 相对插件目录的路径，不能跳出插件目录。
+    pub path: String,
+    /// 每个元素一个 argv 参数（模板，只能用 `{{pref.*}}`、`{{date}}`、`{{time}}`），从不经过 shell。
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+impl ScheduleSpec {
+    /// 设置里显示的名字。
+    pub fn label(&self) -> String {
+        self.title
+            .as_ref()
+            .map_or_else(|| self.id.clone(), |title| title.get().to_string())
+    }
 }
 
 /// 寄语的轮换方式。
@@ -430,6 +487,11 @@ impl Manifest {
     pub fn reads_clipboard(&self) -> bool {
         self.permissions.iter().any(|p| p == CLIPBOARD_READ)
     }
+
+    /// 声明了 `notifications`：定时任务可以发系统通知。
+    pub fn sends_notifications(&self) -> bool {
+        self.permissions.iter().any(|p| p == NOTIFICATIONS)
+    }
 }
 
 impl ActionSpec {
@@ -600,6 +662,8 @@ enum Place {
     Default,
     /// 列表脚本的参数 / 环境变量：每次输入都运行，不能读剪贴板和表单。
     ListScript,
+    /// 定时任务的参数 / 环境变量：后台运行，没有输入、表单和剪贴板。
+    Schedule,
 }
 
 const ITEM_KEYS: [&str; 5] = ["title", "subtitle", "arg", "uid", "url"];
@@ -683,6 +747,46 @@ impl Checker<'_> {
                 );
             }
             self.greeting_text(&format!("{at}.text"), &dated.text);
+        }
+    }
+
+    fn schedules(&mut self, schedules: &[ScheduleSpec], dir: Option<&Path>) {
+        if schedules.len() > MAX_SCHEDULES {
+            self.error(
+                "schedules",
+                trf!("最多 {MAX_SCHEDULES} 个", "at most {MAX_SCHEDULES} entries"),
+            );
+        }
+        let mut ids = BTreeSet::new();
+        for (index, schedule) in schedules.iter().enumerate() {
+            let at = format!("schedules[{index}]");
+            self.key(&format!("{at}.id"), &schedule.id);
+            if !ids.insert(schedule.id.as_str()) {
+                self.error(
+                    &format!("{at}.id"),
+                    trf!("id {:?} 重复", "duplicate id {:?}", schedule.id),
+                );
+            }
+            if let Some(title) = &schedule.title {
+                self.text(&format!("{at}.title"), title);
+            }
+            if let Err(problem) = super::schedule::Trigger::from_spec(schedule) {
+                self.error(&at, problem);
+            }
+            let script = &schedule.script;
+            self.script_path(&format!("{at}.script.path"), &script.path, dir);
+            self.env(&format!("{at}.script.env"), &script.env);
+            self.timeout(
+                &format!("{at}.script.timeoutMs"),
+                script.timeout_ms,
+                MAX_SCRIPT_TIMEOUT_MS,
+            );
+            for (a, arg) in script.args.iter().enumerate() {
+                self.template(&format!("{at}.script.args[{a}]"), arg, Place::Schedule, None);
+            }
+            for (name, value) in &script.env {
+                self.template(&format!("{at}.script.env.{name}"), value, Place::Schedule, None);
+            }
         }
     }
 
@@ -805,7 +909,21 @@ impl Checker<'_> {
         };
         for var in template.vars() {
             let problem = match var {
+                Var::Query if place == Place::Schedule => Some(
+                    tr(
+                        "定时任务没有输入，不能用 {{query}}",
+                        "scheduled tasks have no input, so {{query}} isn't available",
+                    )
+                    .to_string(),
+                ),
                 Var::Query | Var::Date(_) | Var::Time => None,
+                Var::Clipboard if place == Place::Schedule => Some(
+                    tr(
+                        "定时任务在后台运行，不能读剪贴板",
+                        "scheduled tasks run in the background and can't read the clipboard",
+                    )
+                    .to_string(),
+                ),
                 Var::Clipboard if matches!(place, Place::Default | Place::ListScript) => Some(
                     tr(
                         "这里不能读剪贴板（查询时就会渲染）",
@@ -821,6 +939,9 @@ impl Checker<'_> {
                     .to_string(),
                 ),
                 Var::Clipboard => None,
+                Var::Form(_) if place == Place::Schedule => Some(
+                    tr("定时任务没有表单", "scheduled tasks have no form").to_string(),
+                ),
                 Var::Form(_) if place == Place::ListScript => Some(
                     tr(
                         "列表脚本不能用表单字段",
@@ -1274,12 +1395,12 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
         check.tint("tint", tint);
     }
     for (index, permission) in manifest.permissions.iter().enumerate() {
-        if permission != CLIPBOARD_READ {
+        if permission != CLIPBOARD_READ && permission != NOTIFICATIONS {
             check.error(
                 &format!("permissions[{index}]"),
                 trf!(
-                    "不认识的权限 {permission:?}。只能声明 \"clipboard.read\"；网络、打开链接、运行脚本等权限由清单内容自动推导",
-                    "unknown permission {permission:?}. Only \"clipboard.read\" can be declared; network, open and script permissions are derived from the manifest"
+                    "不认识的权限 {permission:?}。只能声明 \"clipboard.read\" 和 \"notifications\"；网络、打开链接、运行脚本等权限由清单内容自动推导",
+                    "unknown permission {permission:?}. Only \"clipboard.read\" and \"notifications\" can be declared; network, open and script permissions are derived from the manifest"
                 ),
             );
         }
@@ -1374,15 +1495,27 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
     if let Some(greetings) = &manifest.greetings {
         check.greetings(greetings);
     }
+    check.schedules(&manifest.schedules, dir);
+    if manifest.sends_notifications() && manifest.schedules.is_empty() {
+        check.error(
+            "permissions",
+            tr(
+                "声明了 \"notifications\" 但没有 schedules：只有定时任务能发通知",
+                "declares \"notifications\" but has no schedules: only scheduled tasks can send notifications",
+            )
+            .into(),
+        );
+    }
     if manifest.commands.is_empty()
         && manifest.mcp_servers.is_empty()
         && manifest.greetings.is_none()
+        && manifest.schedules.is_empty()
     {
         check.error(
             "commands",
             tr(
-                "至少要有一个命令（或 mcpServers、greetings）",
-                "needs at least one command (or mcpServers / greetings)",
+                "至少要有一个命令（或 mcpServers、greetings、schedules）",
+                "needs at least one command (or mcpServers / greetings / schedules)",
             )
             .into(),
         );

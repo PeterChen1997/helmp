@@ -125,6 +125,8 @@ fn run_gui(engine: Engine) {
             telemetry::launched();
             // 退出时进程直接结束、不会走到 Sentry guard 的 drop：同步冲刷 debounce 内的便签编辑，并把排队的错误发完。
             cx.on_app_quit(|cx| {
+                // 插件定时脚本在自己的进程组里：不结束它们就会在 Helmp 退出后留在后台。
+                providers::plugins::schedule::stop_all();
                 providers::notes::flush_on_quit(cx);
                 telemetry::flush();
                 async {}
@@ -133,6 +135,9 @@ fn run_gui(engine: Engine) {
             if !quiet_self_test {
                 // 自动检查更新的定时、面板命令的检查请求、安装就绪后退出（见 src/updates）。
                 updates::start(cx);
+                // 插件定时任务（只在 Helmp 运行时触发）与它们发的系统通知（见 providers::plugins::schedule）。
+                providers::plugins::notify::install();
+                providers::plugins::schedule::start();
                 onboarding::maybe_show(cx);
                 deeplink::install(links, cx);
                 // coding agent 经 `helmp mcp` 请求执行有副作用的操作时，在面板里问用户（见 src/mcp/ipc.rs）。

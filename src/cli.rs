@@ -31,6 +31,11 @@
 //!                               添加自定义插件源；--token-stdin 从标准输入读令牌存进钥匙串
 //! helmp plugins source remove <名字>
 //!                               删除插件源和它的令牌（已装的插件留着）
+//! helmp plugins schedules [list] 列出已启用插件的定时任务：插件 id/任务 id \t 触发 \t 上次运行 \t 结果
+//! helmp plugins schedules run <插件 id>/<任务 id>
+//!                               立即运行一次（插件要已启用），打印结果；调试定时任务用
+//! helmp plugins schedules watch [--for <秒>]
+//!                               在前台按时运行定时任务（同图形界面的调度），每次运行结束打印一行；--for 到时退出
 //! helmp plugins submit <目录> [--yes]
 //!                               以 PR 形式提交到插件中心；不带 --yes 只说明将要做什么并失败退出
 //! helmp mcp [install <claude|codex|cursor> | status]
@@ -171,6 +176,7 @@ fn plugins(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("source") => plugins_source(&args[1..]),
+        Some("schedules") => plugins_schedules(&args[1..]),
         Some("submit") => {
             let yes = args.iter().any(|arg| arg == "--yes");
             let dir = args[1..].iter().find(|arg| *arg != "--yes").context(tr(
@@ -180,8 +186,8 @@ fn plugins(args: &[String]) -> Result<()> {
             plugins_submit(std::path::Path::new(dir), yes)
         }
         Some(other) => bail!(trf!(
-            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、update、uninstall <id>、source、submit <目录>）",
-            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, update, uninstall <id>, source, submit <folder>)"
+            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、update、uninstall <id>、source、schedules、submit <目录>）",
+            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, update, uninstall <id>, source, schedules, submit <folder>)"
         )),
     }
 }
@@ -395,6 +401,64 @@ fn plugins_update(args: &[String]) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// `helmp plugins schedules [list | run <插件 id>/<任务 id> | watch [--for <秒>]]`。
+fn plugins_schedules(args: &[String]) -> Result<()> {
+    use crate::providers::plugins::schedule;
+    let usage = tr(
+        "用法：helmp plugins schedules [list | run <插件 id>/<任务 id> | watch [--for <秒>]]",
+        "Usage: helmp plugins schedules [list | run <plugin id>/<task id> | watch [--for <seconds>]]",
+    );
+    let when = |ms: i64| {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "-".into())
+    };
+    let line = move |key: &str, record: &schedule::Record| {
+        format!("{key}\t{}\t{}", when(record.last_run_ms), record.summary())
+    };
+    match args.first().map(String::as_str) {
+        None | Some("list") => {
+            for job in schedule::jobs(&crate::config::get()) {
+                let (last, result) = match schedule::record(job.plugin.id(), &job.spec.id) {
+                    Some(record) => (when(record.last_run_ms), record.summary()),
+                    None => ("-".into(), tr("还没运行过", "Not run yet").into()),
+                };
+                println!("{}\t{}\t{last}\t{result}", job.key(), job.trigger.describe());
+            }
+            Ok(())
+        }
+        Some("run") => {
+            let target = args.get(1).context(usage)?;
+            let (plugin, task) = target.rsplit_once('/').context(usage)?;
+            let record = schedule::run_now(plugin, task)?;
+            println!("{}", line(target, &record));
+            if record.ok {
+                Ok(())
+            } else {
+                bail!(record.error)
+            }
+        }
+        Some("watch") => {
+            let (seconds, rest) = take_option(&args[1..], "--for").context(usage)?;
+            if !rest.is_empty() {
+                bail!(usage);
+            }
+            let seconds: Option<u64> = seconds
+                .map(|value| value.parse().context(usage))
+                .transpose()?;
+            let deadline = seconds.map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+            schedule::serve(deadline, move |finished| {
+                println!("{}", line(&finished.key, &finished.record));
+            });
+            // 到时退出：正在跑的脚本一起结束（连同子进程），等它们记下结果再走。
+            schedule::stop_all();
+            schedule::wait_idle(std::time::Duration::from_secs(5));
+            Ok(())
+        }
+        Some(_) => bail!(usage),
+    }
 }
 
 /// `helmp plugins source list | add | remove`。令牌只从标准输入读，从不打印。

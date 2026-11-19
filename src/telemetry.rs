@@ -234,6 +234,25 @@ pub fn plugin_greeting_toggled(enabled: bool) {
     track("plugin_greeting_toggle", json!({ "enabled": enabled }));
 }
 
+/// 插件定时任务跑了一次（每种触发方式、成败组合每天最多一次）：触发方式（interval / daily / date）、
+/// 是否成功、是否发了通知、是否超时被杀。不发插件 id、任务名和脚本输出。
+pub fn plugin_schedule_run(trigger: &'static str, ok: bool, notified: bool, timed_out: bool) {
+    track(
+        "plugin_schedule_run",
+        json!({ "trigger": trigger, "ok": ok, "notified": notified, "timed_out": timed_out }),
+    );
+}
+
+/// 用户在设置 › 插件里单独打开 / 停用某个定时任务。不发插件 id 和任务名。
+pub fn plugin_schedule_toggled(enabled: bool) {
+    track("plugin_schedule_toggle", json!({ "enabled": enabled }));
+}
+
+/// 第一次要发通知时向系统请求授权，用户的选择。
+pub fn plugin_notification_permission(granted: bool) {
+    track("plugin_notification_permission", json!({ "granted": granted }));
+}
+
 /// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceEvent {

@@ -598,3 +598,204 @@ fn gui_greeting_shows_only_in_the_empty_global_search() {
     let off = self_test_line(&out, "self-test key wait:1:");
     assert!(!off.contains(greeting) && off.contains("placeholder="), "{off}");
 }
+
+// ---------------------------------------------------------------- 定时任务
+
+/// 一个带定时任务的插件：`tick.sh` 每跑一次往数据目录的 runs 里记一行，并请求发一条通知。
+fn schedule_manifest(schedule: Value, notifications: bool) -> Value {
+    let mut manifest = json!({
+        "schemaVersion": 1,
+        "id": "com.example.reminder",
+        "name": "Reminder",
+        "version": "1.0.0",
+        "author": "Example",
+        "schedules": [schedule]
+    });
+    if notifications {
+        manifest["permissions"] = json!(["notifications"]);
+    }
+    manifest
+}
+
+const TICK_SCRIPT: &str = r#"#!/bin/sh
+echo run >> "$HELMP_PLUGIN_DATA_DIR/runs"
+echo "ran at $(date)" >&2
+printf '{"notify": {"title": "Reminder", "body": "Time to stretch", "url": "https://example.com/today"}}'
+"#;
+
+/// 短间隔：一「分钟」100 ms（5 分钟 = 0.5 秒），每 50 ms 检查一次。只在测试模式下生效。
+fn fast_clock(h: Helmp) -> Helmp {
+    h.env("HELMP_SCHEDULE_MINUTE_MS", "100")
+        .env("HELMP_SCHEDULE_TICK_MS", "50")
+}
+
+fn runs(h: &Helmp) -> usize {
+    std::fs::read_to_string(h.data.join("plugin-data/com.example.reminder/runs"))
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn scheduled_tasks_run_on_time_and_send_notifications() {
+    // 按间隔的任务在 Helmp 运行时按时跑；脚本的通知请求变成系统通知（演练模式只回报），结果记下来给设置页看。
+    let h = fast_clock(Helmp::new())
+        .config(enable("com.example.reminder", &["background", "notify"]));
+    user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "stretch", "title": "Stretch", "everyMinutes": 5, "script": {"path": "tick.sh"}}), true),
+        &[("tick.sh", TICK_SCRIPT)],
+    );
+    let out = h.cli(&["plugins", "schedules", "watch", "--for", "3"]);
+    let count = runs(&h);
+    // 3 秒、间隔 0.5 秒：应跑 5～7 次。少了是没按时跑，多了是间隔没生效（比如每一拍都跑）。
+    assert!((4..=7).contains(&count), "跑了 {count} 次\n{out}");
+    assert!(
+        out.contains("[dry-run] notify Reminder | Time to stretch | https://example.com/today"),
+        "{out}"
+    );
+    assert!(out.contains("com.example.reminder/stretch\t"), "{out}");
+    assert!(out.contains("OK, notification sent"), "{out}");
+    // 脚本写到 stderr 的日志不算输出，也不会被当成失败。
+    assert!(!out.contains("Failed"), "{out}");
+
+    let list = h.cli(&["plugins", "schedules"]);
+    assert!(list.contains("com.example.reminder/stretch\tEvery 5 min\t"), "{list}");
+    assert!(list.contains("OK, notification sent"), "{list}");
+    // 上次运行记在 Helmp 自己的状态里，不在插件数据目录。
+    let state = std::fs::read_to_string(h.data.join("plugin-schedules.json")).unwrap();
+    assert!(state.contains("com.example.reminder/stretch"), "{state}");
+}
+
+#[test]
+fn disabled_plugins_and_tasks_do_not_run() {
+    let manifest = schedule_manifest(
+        json!({"id": "stretch", "everyMinutes": 5, "script": {"path": "tick.sh"}}),
+        true,
+    );
+    // 插件停用：一次也不跑。
+    let h = fast_clock(Helmp::new())
+        .config(|c| c["plugins"]["com.example.reminder"] = json!({"enabled": false, "consent": ["background", "notify"]}));
+    user_plugin(&h, "com.example.reminder", &manifest, &[("tick.sh", TICK_SCRIPT)]);
+    h.cli(&["plugins", "schedules", "watch", "--for", "1"]);
+    assert_eq!(runs(&h), 0, "停用的插件不能在后台跑脚本");
+    // 权限待确认（启用过，但确认的权限里没有「在后台运行脚本」）：也不跑。
+    let h = fast_clock(Helmp::new()).config(enable("com.example.reminder", &["notify"]));
+    user_plugin(&h, "com.example.reminder", &manifest, &[("tick.sh", TICK_SCRIPT)]);
+    h.cli(&["plugins", "schedules", "watch", "--for", "1"]);
+    assert_eq!(runs(&h), 0, "没确认过后台运行权限的插件不能跑");
+    // 插件启用、但这个任务在设置里单独停用：不跑。
+    let h = fast_clock(Helmp::new())
+        .config(enable("com.example.reminder", &["background", "notify"]))
+        .config(|c| c["plugins"]["com.example.reminder"]["schedules_off"] = json!(["stretch"]));
+    user_plugin(&h, "com.example.reminder", &manifest, &[("tick.sh", TICK_SCRIPT)]);
+    h.cli(&["plugins", "schedules", "watch", "--for", "1"]);
+    assert_eq!(runs(&h), 0, "单独停用的任务不能跑");
+    assert!(h.cli_err(&["plugins", "schedules", "run", "com.example.reminder/stretch"]).contains("No runnable"));
+}
+
+/// 卡住的脚本：派生一个长睡的子进程，把它的 pid 写进数据目录后一直等。
+const HANG_SCRIPT: &str = r#"#!/bin/sh
+sleep 300 &
+echo $! > "$HELMP_PLUGIN_DATA_DIR/child.pid"
+wait
+"#;
+
+fn child_gone(h: &Helmp) -> (i32, bool) {
+    let pid: i32 = std::fs::read_to_string(h.data.join("plugin-data/com.example.reminder/child.pid"))
+        .expect("脚本没启动")
+        .trim()
+        .parse()
+        .unwrap();
+    let gone = (0..100).any(|_| {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if alive {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        !alive
+    });
+    (pid, gone)
+}
+
+#[test]
+fn a_hung_scheduled_script_is_killed_with_its_children() {
+    // 定时脚本超时：连同它派生的子进程一起杀掉，不在用户的电脑上留后台进程；结果写明超时。
+    let h = Helmp::new().config(enable("com.example.reminder", &["background"]));
+    user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "hang", "at": "08:00", "script": {"path": "hang.sh", "timeoutMs": 1500}}), false),
+        &[("hang.sh", HANG_SCRIPT)],
+    );
+    let started = std::time::Instant::now();
+    let err = h.cli_err(&["plugins", "schedules", "run", "com.example.reminder/hang"]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(err.contains("ran for more than 1.5 seconds"), "{err}");
+    let (pid, gone) = child_gone(&h);
+    assert!(gone, "子进程 {pid} 还活着");
+    assert!(h.cli(&["plugins", "schedules"]).contains("Failed: "));
+}
+
+#[test]
+fn quitting_stops_running_scheduled_scripts() {
+    // 调度结束（等同于退出 Helmp）时正在跑的脚本不能留在后台。
+    let h = fast_clock(Helmp::new()).config(enable("com.example.reminder", &["background"]));
+    user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "hang", "everyMinutes": 5, "script": {"path": "hang.sh"}}), false),
+        &[("hang.sh", HANG_SCRIPT)],
+    );
+    let out = h.cli(&["plugins", "schedules", "watch", "--for", "1"]);
+    let (pid, gone) = child_gone(&h);
+    assert!(gone, "子进程 {pid} 还活着");
+    assert!(out.contains("Stopped"), "{out}");
+}
+
+#[test]
+fn bad_output_and_undeclared_notifications_are_reported() {
+    // 脚本的输出不合约定、或没声明权限就要发通知：结果写明原因，不静默吞掉，也不发通知。
+    let h = Helmp::new().config(enable("com.example.reminder", &["background"]));
+    user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "tick", "at": "08:00", "script": {"path": "tick.sh"}}), false),
+        &[("tick.sh", TICK_SCRIPT)],
+    );
+    let out = h.output(&["plugins", "schedules", "run", "com.example.reminder/tick"]);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!out.status.success());
+    assert!(text.contains("doesn't declare \"notifications\""), "{text}");
+    assert!(!text.contains("[dry-run] notify"), "{text}");
+
+    let h = Helmp::new().config(enable("com.example.reminder", &["background"]));
+    user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "tick", "at": "08:00", "script": {"path": "chatty.sh"}}), false),
+        &[("chatty.sh", "#!/bin/sh\necho checking the weather\n")],
+    );
+    let err = h.cli_err(&["plugins", "schedules", "run", "com.example.reminder/tick"]);
+    assert!(err.contains("write logs to stderr"), "{err}");
+}
+
+#[test]
+fn the_schedule_permissions_are_listed_for_consent() {
+    // 启用前要让用户看到：这个插件会在后台定时跑脚本、会发通知。
+    let h = Helmp::new();
+    let dir = user_plugin(
+        &h,
+        "com.example.reminder",
+        &schedule_manifest(json!({"id": "tick", "at": "08:00", "script": {"path": "tick.sh"}}), true),
+        &[("tick.sh", TICK_SCRIPT)],
+    );
+    let out = h.cli(&["plugins", "validate", dir.to_str().unwrap(), "--json"]);
+    let value: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(value["permissions"], json!(["background", "notify"]), "{out}");
+    let text = value["permissions_text"].to_string();
+    assert!(text.contains("in the background on a schedule") && text.contains("Send notifications"), "{text}");
+}

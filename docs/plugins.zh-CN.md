@@ -125,11 +125,12 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `homepage` | | 设置页里显示成「打开主页」按钮 |
 | `license` | | 开源协议的 SPDX 标识，如 `MIT`。发布到[插件中心](plugin-center.zh-CN.md)时必填 |
 | `icon`、`tint` | | Lucide 图标名或插件目录里的 `.png`；底色：`blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
-| `permissions` | | 只能声明 `["clipboard.read"]`（用 `{{clipboard}}` 时必须有）；其他权限都从清单推导 |
+| `permissions` | | 只能声明 `"clipboard.read"`（用 `{{clipboard}}` 时必须有）和 `"notifications"`（定时任务可以发通知）；其他权限都从清单推导 |
 | `preferences` | | 见下 |
-| `commands` | 是* | 至少一个（*只带 `mcpServers` 或只提供 `greetings` 的插件可以没有） |
+| `commands` | 是* | 至少一个（*只带 `mcpServers`、或只提供 `greetings` / `schedules` 的插件可以没有） |
 | `mcpServers` | | 插件带的 MCP 服务器；插件启用时它们的工具变成命令。见 [MCP 服务器](mcp-client.zh-CN.md#插件可以带服务器) |
 | `greetings` | | 空搜索框里显示的文字，见[搜索框寄语](#搜索框寄语) |
+| `schedules` | | 定时运行的脚本，可以发通知，见[定时任务与通知](#定时任务与通知) |
 
 ### 偏好设置
 
@@ -214,6 +215,8 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | 运行本地程序：`npx` | `mcpServers` 里的每个 `command`（同样以你的身份运行、不受沙盒限制） |
 | 访问网络：`主机` | 也包括 `mcpServers` 里的每个 `url` |
 | 在搜索框显示提示语 | `greetings` |
+| 在后台定时运行插件目录里的脚本 | `schedules` |
+| 发送通知 | `"permissions": ["notifications"]` |
 
 自带插件默认启用。你的插件默认停用，启用时 Helmp 记下你确认过的权限；权限变了会再问一次。
 
@@ -296,6 +299,76 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 
 寄语是一项权限（「在搜索框显示提示语」）：启用插件时要确认；插件更新后新加了寄语，也要重新确认。
 
+## 定时任务与通知
+
+插件可以按时运行自己目录里的脚本——每隔几分钟、每天固定时刻、或在某个日期——脚本还可以请 Helmp 发一条 macOS 通知。适合早上的天气提醒、某个日子的提醒、定期同步数据。
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.weather-reminder",
+  "name": "Weather Reminder",
+  "version": "1.0.0",
+  "author": "Example",
+  "permissions": ["notifications"],
+  "preferences": [
+    { "id": "city", "type": "text", "title": "City", "default": "Berlin" }
+  ],
+  "schedules": [
+    { "id": "morning", "title": "Morning forecast", "at": "08:00",
+      "script": { "path": "forecast.sh", "env": { "CITY": "{{pref.city}}" } } },
+    { "id": "refresh", "everyMinutes": 60, "script": { "path": "refresh.sh" } },
+    { "id": "new-year", "date": "01-01", "at": "09:00", "script": { "path": "new-year.sh" } }
+  ]
+}
+```
+
+完整示例见 [`examples/plugins/com.example.weather-reminder`](../examples/plugins/com.example.weather-reminder/plugin.json)。只有 `schedules`、没有命令的插件也是合法的。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 字母、数字、`_`、`-`；同一插件里不能重复 |
+| `title` | 设置里显示的名字（缺省用 `id`） |
+| `everyMinutes` | 每隔 N 分钟运行，5 到 10080（一周） |
+| `at` | 每天这个本地时刻运行，24 小时制 `HH:MM` |
+| `date` | 在这天运行：`MM-DD` 每年重复，`YYYY-MM-DD` 只那一天（写法同寄语）。带 `at` 就是那天那个时刻，不带就是那天 Helmp 一运行就跑 |
+| `script.path` | 插件目录里的脚本（和 `script` 动作一样运行：可执行或带 shebang，不经过 shell） |
+| `script.args`、`script.env` | 模板，只能用 `{{pref.<id>}}`、`{{date}}`、`{{time}}`（后台运行，没有输入、表单和剪贴板） |
+| `script.timeoutMs` | 默认 30000，最大 120000 |
+
+`everyMinutes`、`at`、`date`（可带 `at`）三选一。
+
+**什么时候运行。**
+
+- 只在 Helmp 运行时。退出 Helmp 后没有后台服务。
+- 每天 / 指定日期的任务一天只跑一次。时刻过了的时候 Helmp 没开、或电脑在睡眠，就在 Helmp 启动或电脑唤醒后补跑一次——只补当天的，前几天错过的不补。
+- 按间隔的任务：距上次运行满间隔就跑。离开很久回来也只跑一次，不会把错过的每一次都补上。
+- 时间和日期按本机时区。夏令时切换那天照样只跑一次：钟面跳过的时刻在跳过后马上跑，重复的那一小时不会跑两遍。每年的 `02-29` 在平年落到 2 月 28 日。
+- 所有插件合计同时最多跑 2 个定时脚本，同一个任务不会叠着跑。插件的脚本在跑时，自动更新先跳过它，下次再更新。
+- 每个任务的上次运行记在 Helmp 自己的数据里（`plugin-schedules.json`），不在插件数据目录，插件更新、重装都不会重置它。
+
+**输出与通知。** stdout 什么都不打印，或打印一个 JSON 对象：
+
+```json
+{"notify": {"title": "下午有雨", "body": "记得带伞", "url": "https://example.com/forecast"}}
+```
+
+`title` 必填（最多 100 个字），`body` 可选（最多 500 个字），`url`（http 或 https）在点击通知时打开。stdout 里的其他内容都算失败，日志请写到 stderr。发通知要在清单里声明 `"permissions": ["notifications"]`。第一次发通知时会向 macOS 请求授权；被拒绝后 Helmp 不会再请求，任务结果里会写明通知被关了，以及去「系统设置 › 通知」里打开。
+
+**停止。** 停用插件、卸载、权限待确认，或在设置里单独停用某个任务，正在跑的脚本会立即结束（连同它派生的子进程）。退出 Helmp 也一样。脚本超过 `timeoutMs` 同样被这样结束。
+
+**设置。** 「设置 › 插件」里点开插件，可以看到每个任务的运行时间、上次运行的时间和结果，以及单独停用它的开关。
+
+**在终端里试。**
+
+```bash
+helmp plugins schedules                                  # 已启用插件的任务：id、触发、上次运行、结果
+helmp plugins schedules run com.example.weather-reminder/morning   # 立即运行一次并打印结果
+helmp plugins schedules watch --for 120                  # 在前台按时运行两分钟
+```
+
+「在后台定时运行脚本」和「发送通知」都是权限：启用插件时要确认；插件更新后新加了它们，也要重新确认。
+
 ## 测试插件
 
 ```bash
@@ -325,6 +398,7 @@ HELMP_DRY_RUN=1 helmp run plugins:com.example.flomo/memo 你好 --scope plugins:
 
 - 密钥从 `HELMP_TEST_SECRETS='{"<插件 id>/<偏好设置 id>": "值"}'` 读取，绝不碰钥匙串。不在这种模式下时这个变量被忽略。
 - 允许并真正发出发往 `127.0.0.1` / `localhost` 的请求，所以锁定在 `flomoapp.com` 的插件也能指向本机的假服务。
+- `HELMP_SCHEDULE_MINUTE_MS` 把定时任务的「一分钟」调短，`HELMP_SCHEDULE_TICK_MS` 设调度器多久检查一次，这样 `helmp plugins schedules watch --for 3` 就能让一个五分钟的任务跑好几次。通知只打印成 `[dry-run] notify <标题> | <正文> | <链接>`，不真的发出。
 
 Helmp 自己的端到端测试（[`tests/e2e_plugins.rs`](../tests/e2e_plugins.rs)）就是这样跑的。
 

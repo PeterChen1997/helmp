@@ -54,7 +54,11 @@ const COMMANDS: [Command; 2] = [
             tint: Tint::Graphite,
         },
         action_title: ("退出", "Quit"),
-        run: || std::process::exit(0),
+        run: || {
+            // 直接退出不走 on_app_quit：先结束插件的定时脚本，免得留在后台。
+            crate::providers::plugins::schedule::stop_all();
+            std::process::exit(0)
+        },
     },
 ];
 
