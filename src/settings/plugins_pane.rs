@@ -7,6 +7,9 @@
 //! - 「从插件中心安装」：用户点「浏览」（或通过 `helmp://install-plugin` 安装）时才联网取索引，
 //!   合并列出插件中心和自定义插件源的插件（标出来源）和安装 / 更新按钮；装好后定位到这个插件并显示
 //!   权限确认卡片，从不自动启用。一个源取不到只在那个源的位置说明原因。
+//! - 「插件更新」：「自动更新插件」开关（每天检查从插件中心 / 插件源装的插件并静默更新，见 `autoupdate`）、
+//!   上次检查的时间与结果、「现在检查」。权限变了的插件更新后在列表里显示「权限有变化，待确认」。
+//! - 从插件中心 / 插件源装的插件可以在详情里卸载，卸载时问要不要一并删掉它的数据目录。
 //! - 「插件源」：公开插件中心之外的自定义源（列表、添加、换令牌、删除），界面沿用 MCP 页服务器列表的样式。
 //!   令牌用掩码输入框，保存进钥匙串，从不回显。`helmp://add-plugin-source` 只预填添加表单，要用户点「添加」。
 //!
@@ -24,6 +27,7 @@ use crate::provider::Action;
 use crate::providers::plugins::manifest::{PrefKind, Preference};
 use crate::providers::plugins::registry::{self, Entry, Source, State};
 use crate::providers::plugins::center::{self, Availability, Catalog, Listing, Registry};
+use crate::providers::plugins::autoupdate::{self, Trigger};
 use crate::providers::plugins::{self, scaffold, secrets, sources};
 use crate::style::{self, Palette};
 
@@ -63,6 +67,8 @@ pub struct PluginsPane {
     source_open: Option<(String, Entity<InputState>, bool)>,
     /// 等待再点一次确认删除的插件源。
     confirm_remove: Option<String>,
+    /// 正在询问卸载方式（是否一并删除数据）的插件 id。
+    confirm_uninstall: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -101,6 +107,7 @@ pub fn new(window: &mut Window, cx: &mut App) -> AnyView {
         source_form: None,
         source_open: None,
         confirm_remove: None,
+        confirm_uninstall: None,
         _subscriptions: Vec::new(),
     })
     .into()
@@ -536,6 +543,167 @@ impl PluginsPane {
             .into_any_element()
     }
 
+
+    // ------------------------------------------------------------ 插件更新
+
+    /// 「插件更新」分组：自动更新开关、上次检查的时间与结果、现在检查。
+    fn updates_group(&self, config: &Config, pal: &Palette, cx: &mut Context<Self>) -> Div {
+        let checking = autoupdate::in_flight();
+        let status = if checking {
+            tr("正在检查插件更新…", "Checking for plugin updates…").to_string()
+        } else {
+            match autoupdate::last() {
+                Some(report) => trf!(
+                    "上次检查：{}。{}",
+                    "Last checked {}. {}",
+                    checked_at(report.checked_at),
+                    report.summary()
+                ),
+                None => tr("还没有检查过插件更新", "Plugin updates haven't been checked yet").to_string(),
+            }
+        };
+        let failed = !checking && autoupdate::last().is_some_and(|report| !report.failed.is_empty());
+        let rows = vec![
+            widgets::row(
+                widgets::label_with_help(
+                    tr("自动更新插件", "Automatically update plugins"),
+                    tr(
+                        "每天检查一次从插件中心和插件源安装的插件，有新版本就装上。权限没变的保持启用；\
+                         权限变了的会停用，等你重新确认。更新失败不打扰你，旧版本保持不变。",
+                        "Once a day, plugins installed from the plugin center or a plugin source are updated when a new version is out. \
+                         Ones whose permissions are unchanged stay on; ones that ask for more are turned off until you review them. \
+                         Failed updates leave the old version in place and are retried later.",
+                    ),
+                    pal,
+                ),
+                widgets::switch(
+                    "plugins-auto-update",
+                    config.general.auto_update_plugins,
+                    tr("自动更新插件", "Automatically update plugins"),
+                    pal,
+                    cx.listener(|this, on: &bool, _, cx| {
+                        let on = *on;
+                        this.save(cx, |c| c.general.auto_update_plugins = on);
+                    }),
+                ),
+            )
+            .into_any_element(),
+            widgets::row(
+                div().flex_1().min_w_0().child(if failed {
+                    widgets::error_text(status, pal)
+                } else {
+                    widgets::help_text(status, pal)
+                }),
+                widgets::push_button(
+                    "plugins-check-updates",
+                    tr("现在检查", "Check Now"),
+                    checking,
+                    cx.listener(|_, _: &ClickEvent, _, cx| {
+                        autoupdate::start_in_background(Trigger::Manual);
+                        cx.notify();
+                    }),
+                ),
+            )
+            .into_any_element(),
+        ];
+        widgets::group(rows, pal)
+    }
+
+    /// 卸载：第一次点出现选项（连数据一起删 / 保留数据 / 取消），选了才执行。
+    fn uninstall(&mut self, id: &str, delete_data: bool, cx: &mut Context<Self>) {
+        self.confirm_uninstall = None;
+        match center::uninstall(id, delete_data) {
+            Ok(()) => {
+                self.selected = None;
+                self.consent = None;
+                self.status = Some(Ok(if delete_data {
+                    trf!("已卸载 {id}，数据目录也已删除", "Uninstalled {id} and deleted its data")
+                } else {
+                    trf!("已卸载 {id}，数据目录保留（重装后接着用）", "Uninstalled {id}; its data is kept for a reinstall")
+                }));
+            }
+            Err(err) => self.status = Some(Err(format!("{err:#}"))),
+        }
+        cx.notify();
+    }
+
+    /// 详情底部的卸载按钮（只有从插件中心 / 插件源装的插件有）。
+    fn uninstall_controls(&self, entry: &Entry, pal: &Palette, cx: &mut Context<Self>) -> Option<Div> {
+        center::install_record(&entry.id, &config::get(), entry.dir.as_deref())?;
+        let id = entry.id.clone();
+        if self.confirm_uninstall.as_deref() != Some(entry.id.as_str()) {
+            return Some(div().flex().mt(px(6.)).child(widgets::danger_button(
+                SharedString::from(format!("plugin-uninstall-{id}")),
+                tr("卸载…", "Uninstall…"),
+                false,
+                pal,
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.confirm_uninstall = Some(id.clone());
+                    cx.notify();
+                }),
+            )));
+        }
+        let data = registry::data_path(&entry.id).ok();
+        let has_data = data.as_ref().is_some_and(|dir| {
+            std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+        });
+        let question = match (&data, has_data) {
+            (Some(dir), true) => trf!(
+                "要一并删除这个插件的数据吗？数据在 {}，更新和重装都不会动它。",
+                "Also delete this plugin's data? It's kept in {} and survives updates and reinstalls.",
+                super::pages::display_path(dir)
+            ),
+            _ => tr(
+                "这个插件还没有存数据。卸载后可以随时从插件中心重新安装。",
+                "This plugin hasn't stored any data. You can reinstall it from the plugin center at any time.",
+            )
+            .to_string(),
+        };
+        let name = entry
+            .plugin()
+            .map_or_else(|| entry.id.clone(), |plugin| plugin.manifest.name.get().to_string());
+        let (keep, delete) = (id.clone(), id.clone());
+        let mut buttons = div().flex().flex_wrap().gap(px(6.));
+        if has_data {
+            buttons = buttons.child(widgets::danger_button(
+                "plugin-uninstall-delete-data",
+                tr("卸载并删除数据", "Uninstall and Delete Data"),
+                false,
+                pal,
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.uninstall(&delete, true, cx)),
+            ));
+        }
+        buttons = buttons
+            .child(widgets::push_button(
+                "plugin-uninstall-keep-data",
+                if has_data {
+                    tr("卸载，保留数据", "Uninstall, Keep Data")
+                } else {
+                    tr("卸载", "Uninstall")
+                },
+                false,
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.uninstall(&keep, false, cx)),
+            ))
+            .child(widgets::push_button(
+                "plugin-uninstall-cancel",
+                tr("取消", "Cancel"),
+                false,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.confirm_uninstall = None;
+                    cx.notify();
+                }),
+            ));
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .mt(px(6.))
+                .child(widgets::label(trf!("卸载「{name}」", "Uninstall “{name}”"), pal))
+                .child(widgets::help_text(question, pal))
+                .child(buttons),
+        )
+    }
 
     // ------------------------------------------------------------ 插件源
 
@@ -1243,6 +1411,9 @@ impl PluginsPane {
                 body = body.child(self.pref_row(&plugin, pref, pal, cx));
             }
         }
+        if let Some(controls) = self.uninstall_controls(entry, pal, cx) {
+            body = body.child(controls);
+        }
         body
     }
 
@@ -1402,6 +1573,19 @@ fn placeholder(pref: &Preference, stored: bool) -> String {
         .unwrap_or_default()
 }
 
+/// 上次检查时间（本地时间）。
+fn checked_at(secs: u64) -> String {
+    i64::try_from(secs)
+        .ok()
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "-".into())
+}
+
 impl Render for PluginsPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let revealed = REVEAL
@@ -1474,6 +1658,8 @@ impl Render for PluginsPane {
                 ),
                 &pal,
             )))
+            .child(widgets::group_header(tr("插件更新", "Plugin Updates"), &pal))
+            .child(self.updates_group(&config, &pal, cx).mb(px(18.)))
             .child(widgets::group_header(tr("从插件中心安装", "Install from Plugin Center"), &pal))
             .child(self.center_group(&config, &pal, cx).mb(px(18.)))
             .child(

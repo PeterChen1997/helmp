@@ -28,6 +28,10 @@ Helmp 每 3 秒检查一次插件文件夹，文件有变化就重新加载。�
 
 启用你自己的插件前，Helmp 先列出它能做什么（[权限](#权限)）。之后如果你改了清单、让它需要更多权限（多了一个主机名、开始运行脚本……），插件会自动变成「权限有变化，待确认」，等你重新确认才生效。
 
+### 插件数据
+
+不要把数据存在插件目录里：从插件中心或插件源更新时，整个插件目录会被替换。脚本、列表脚本和插件带的本地 MCP 服务器都能拿到环境变量 `HELMP_PLUGIN_DATA_DIR`，指向 `~/Library/Application Support/Helmp/plugin-data/<id>/`。第一次用到时自动创建，更新和重装都不会动它。在设置里卸载插件时，Helmp 会问要不要一并删掉它的数据（命令行：`helmp plugins uninstall <id> [--delete-data]`）。
+
 ## 教程：从零写一个 flomo 插件
 
 [flomo](https://flomoapp.com) 给会员提供一个专属的记录 API：向 `https://flomoapp.com/iwh/<token>/<secret>/` 发 `POST`、正文为 JSON `{"content": "…"}`，就会新建一条 MEMO，正文里的 `#标签` 就是标签。整条地址本身就是密钥。Helmp 已经自带了这个插件；自己写一遍只要五分钟，清单的大部分写法都会用到。
@@ -173,7 +177,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 
 **http。** 地址必须以 `https://` 或 `http://` 加固定的主机名开头，或者以声明了 `allowedHosts` 的 `{{pref.<id>}}` 开头。主机名部分不能是模板：启用插件之前就要能确定它会访问哪里。运行时 Helmp 还会按渲染后的地址再查一次主机名、不跟随重定向，请求头的值里有换行就拒绝。`success.status` 列出算作成功的状态码（默认任意 2xx）；`success.jsonPath` + `success.equals` 再检查响应里的某个字段（`optional: true` 表示字段存在时才检查）。`message` 是成功提示，可以用 `{{response.<路径>}}`；`errorPath` 指定失败时从 JSON 响应里取哪一段作为原因。失败一律作为错误显示，带上状态码和服务端给的原因。
 
-**script。** `path` 相对插件目录，不能跳出插件目录（会先解析符号链接再检查）。`args` 每一项就是一个 argv 参数，由模板渲染；全程不经过 shell，所以输入里的 `; rm -rf` 只是普通文字。`env` 增加环境变量（另外总会有 `HELMP_PLUGIN_DIR` 和 `HELMP_PLUGIN_ID`）；`stdin` 写进脚本的标准输入。工作目录是插件目录。脚本可执行就直接执行，否则按 `#!` 行找解释器。非零退出码作为错误显示，附 stderr 末尾几行。
+**script。** `path` 相对插件目录，不能跳出插件目录（会先解析符号链接再检查）。`args` 每一项就是一个 argv 参数，由模板渲染；全程不经过 shell，所以输入里的 `; rm -rf` 只是普通文字。`env` 增加环境变量（另外总会有 `HELMP_PLUGIN_DIR`、`HELMP_PLUGIN_ID` 和 `HELMP_PLUGIN_DATA_DIR`，见[插件数据](#插件数据)）；`stdin` 写进脚本的标准输入。工作目录是插件目录。脚本可执行就直接执行，否则按 `#!` 行找解释器。非零退出码作为错误显示，附 stderr 末尾几行。
 
 ## 模板语法
 

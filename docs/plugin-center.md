@@ -20,9 +20,20 @@ Some ids are already bundled with Helmp, such as `dev.helmp.flomo`, `dev.helmp.q
 
 ## Updates
 
-Helmp doesn't check for updates in the background. When you open **Browse Plugin Center** in Settings (or run `helmp plugins available`), plugins installed from the Plugin Center that have a newer version show **Update available**, and the button changes to **Update to x.y.z**. `helmp plugins install <id>` also updates.
+Plugins installed from the Plugin Center or a plugin source update themselves. With **Settings › Plugins › Automatically update plugins** on (the default), Helmp checks once a day, 20 seconds after launch and then every 24 hours, on the same schedule as Helmp's own update check. Each source's index is fetched once, and each plugin is compared only with the source it was installed from. The same section shows when the last check ran and what happened, and has a **Check Now** button.
 
-An update downloads and verifies the new version, then replaces the folder. If the new version needs the same permissions you already allowed, it stays on. If its permissions changed (a new host, or it now runs scripts), it's paused and marked **needs permission review** until you approve it again.
+- If the new version needs the same permissions you already allowed, it's installed quietly and stays on.
+- If its permissions changed (a new host, or it now runs scripts), it's installed but paused and marked **needs permission review** until you approve it again.
+- If anything fails (offline, HTTP 401, a file that doesn't match its SHA-256), nothing changes: the old version stays as it was, you aren't interrupted, and Helmp tries again in an hour.
+- A plugin whose script or MCP server is running at that moment is skipped and updated on the next try.
+
+You can also update by hand: `helmp plugins update` (or `--all`) checks every plugin, `helmp plugins update <id>` checks one, and `helmp plugins install <id>` still works. When you open **Browse Plugin Center**, plugins with a newer version show **Update to x.y.z**. Turn the switch off and Helmp stops checking on its own; `helmp plugins update --scheduled` behaves like the daily check, so it does nothing while the switch is off.
+
+An update downloads and verifies the new version, then replaces the plugin folder. Data a plugin keeps in its data folder (`HELMP_PLUGIN_DATA_DIR`, see [Plugin data](plugins.md#plugin-data)) is kept.
+
+## Uninstall
+
+Expand a plugin in **Settings › Plugins** and click **Uninstall…**. If the plugin has stored data, Helmp asks whether to delete it too or keep it for a reinstall. Uninstalling also forgets that you turned the plugin on, so a reinstall starts turned off. From a terminal: `helmp plugins uninstall <id>` keeps the data, `--delete-data` deletes it. Plugins you put in the plugins folder by hand aren't removed this way; delete their folder yourself.
 
 ## Security model
 
@@ -30,7 +41,7 @@ An update downloads and verifies the new version, then replaces the folder. If t
 - **Verified downloads.** Helmp downloads only the files listed in the index and checks each file's size and SHA-256 before writing anything. If any file doesn't match (a tampered file or a CDN glitch), the whole install is refused and nothing is written. Paths that would leave the plugin folder (`../`, absolute paths, hidden files) make Helmp reject the whole index. On jsDelivr, files are fetched from the exact registry commit the index was built from, so a stale CDN cache can't mix versions.
 - **Atomic install.** Files are written to a hidden temporary folder and validated with the same rules as `helmp plugins validate`. The manifest's id and version must match the index. Only then is the folder renamed into place. A failed update leaves the previous version untouched.
 - **Consent.** Installed plugins are off by default. You approve the derived permissions before a plugin runs, and approve again whenever they change. Secrets stay in the Keychain.
-- **Limits.** Up to 64 files per plugin, 512 KiB per file and 2 MiB in total. Only UTF-8 text files and PNG icons are allowed: no symlinks and no other binaries.
+- **Limits.** Up to 64 files per plugin, 512 KiB per file and 2 MiB in total. Only UTF-8 text files and PNG icons are allowed: no symlinks and no other binaries. Helmp checks each downloaded file again: an image must really be the format its extension says (by its header), and everything else must be UTF-8 text.
 
 What's left to trust: the maintainer's review, GitHub, jsDelivr's TLS, and the scripts a plugin runs with your user's permissions once you turn it on. Only turn on plugins whose permissions make sense to you.
 
@@ -82,7 +93,7 @@ json.dump({"schema": 1, "commit": None, "plugins": plugins}, open("index.json", 
 PY
 ```
 
-The same limits apply as in the Plugin Center (64 files, 512 KiB per file, 2 MiB per plugin, no hidden files or symlinks), and `helmp plugins validate` must pass.
+Custom sources get roomier limits than the Plugin Center, since you chose to trust them: up to 64 files, 4 MiB per file and 16 MiB per plugin. Besides UTF-8 text and PNG they may include JPEG (`.jpg` / `.jpeg`), WebP and GIF images, for illustrations or animations. Every image is checked by its file header, not just its extension, so a renamed binary is refused. Hidden files and symlinks aren't allowed, and `helmp plugins validate` must pass. (16 MiB keeps a daily update to about the size of a photo; `helmp plugins submit` and the Plugin Center keep their own, stricter rules.)
 
 ### Authentication
 
@@ -108,6 +119,7 @@ Everything else is the same as for the Plugin Center: SHA-256 checks, atomic ins
 |---|---|
 | `plugins_registry_url` in `config.json` | Registry base URL (the folder that holds `index.json`). Default: `https://cdn.jsdelivr.net/gh/PeterChen1997/helmp-plugins@main/` |
 | `HELMP_REGISTRY_URL` environment variable | Overrides the above, for example to point at a local test server |
+| `general.auto_update_plugins` in `config.json` | Check plugins installed from the Plugin Center or a source once a day and update them. Default: `true`. The **Automatically update plugins** switch in Settings |
 | `plugin_sources` in `config.json` | Custom plugin sources (`name`, `url`, optional `auth_header`). Tokens live in the Keychain, not here. Manage them in Settings or with `helmp plugins source` |
 | `HELMP_REGISTRY_REPO` environment variable | The GitHub repository `helmp plugins submit` opens pull requests against. Default: `PeterChen1997/helmp-plugins` |
 

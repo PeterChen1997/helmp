@@ -28,6 +28,10 @@ Helmp checks the plugins folder every 3 seconds and reloads when a file changes.
 
 Turning on one of your plugins first shows what it can do (its [permissions](#permissions)). If you later change the manifest so that it needs more (another host, running scripts…), the plugin turns itself off ("needs permission review") until you confirm again.
 
+### Plugin data
+
+Don't store anything in the plugin folder: an update from the Plugin Center or a plugin source replaces the whole folder. Scripts, list scripts and the plugin's local MCP servers get `HELMP_PLUGIN_DATA_DIR`, which points at `~/Library/Application Support/Helmp/plugin-data/<id>/`. Helmp creates it on first use, and updates and reinstalls never touch it. When you uninstall a plugin in Settings, Helmp asks whether to delete its data too (`helmp plugins uninstall <id> [--delete-data]` from a terminal).
+
 ## Tutorial: build the flomo plugin
 
 [flomo](https://flomoapp.com) gives PRO members a personal webhook: `POST https://flomoapp.com/iwh/<token>/<secret>/` with the JSON body `{"content": "…"}` creates a memo, and `#tags` in the text become tags. The whole URL is the secret. Helmp ships this plugin already; building it yourself takes five minutes and covers most of the manifest.
@@ -173,7 +177,7 @@ A command with `argument`, `form` or `list` accepts input. So that everyday sear
 
 **http.** The URL must start with `https://` or `http://` and a literal host, or with `{{pref.<id>}}` for a preference that declares `allowedHosts`. A template in the host part is rejected: network access must be known before you enable a plugin. At run time Helmp checks the rendered URL's host against the permissions again, doesn't follow redirects, and rejects header values containing line breaks. `success.status` lists accepted status codes (default: any 2xx); `success.jsonPath` + `success.equals` additionally check a response field (`optional: true` = only when the field exists). `message` is the success text and may use `{{response.<path>}}`; `errorPath` picks the error text from a JSON error response. Failures are shown as errors with the status code and the server's reason.
 
-**script.** `path` is relative to the plugin folder and may not leave it (symlinks are resolved first). Each `args` entry is one argv argument, rendered from a template; nothing goes through a shell, so `; rm -rf` in what you type is just text. `env` adds environment variables (also `HELMP_PLUGIN_DIR` and `HELMP_PLUGIN_ID`); `stdin` is written to the script's standard input. The working directory is the plugin folder. Scripts are run directly if executable, otherwise via their `#!` line. A non-zero exit is shown as an error with the end of stderr.
+**script.** `path` is relative to the plugin folder and may not leave it (symlinks are resolved first). Each `args` entry is one argv argument, rendered from a template; nothing goes through a shell, so `; rm -rf` in what you type is just text. `env` adds environment variables (also `HELMP_PLUGIN_DIR`, `HELMP_PLUGIN_ID` and `HELMP_PLUGIN_DATA_DIR`, see [Plugin data](#plugin-data)); `stdin` is written to the script's standard input. The working directory is the plugin folder. Scripts are run directly if executable, otherwise via their `#!` line. A non-zero exit is shown as an error with the end of stderr.
 
 ## Templates
 

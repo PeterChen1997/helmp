@@ -448,8 +448,9 @@ pub fn install_in_background() {
     });
 }
 
-/// 图形界面：自动检查的定时、面板命令的检查请求、安装就绪后的退出。启动时调用一次。
+/// 图形界面：自动检查的定时（App 与插件）、面板命令的检查请求、安装就绪后的退出。启动时调用一次。
 pub fn start(cx: &mut gpui_kit::App) {
+    use crate::providers::plugins::autoupdate;
     use gpui_kit::AsyncApp;
     let started = Instant::now();
     cx.spawn(async move |cx: &mut AsyncApp| {
@@ -457,7 +458,18 @@ pub fn start(cx: &mut gpui_kit::App) {
         let mut next_auto = started + FIRST_CHECK_DELAY;
         // 一次自动检查正在进行：结束后按成败安排下一次（成功 24 小时，失败 1 小时）。
         let mut auto_in_flight = false;
+        // 插件自动更新同一个节奏，开关单独（见 `providers::plugins::autoupdate`）。
+        let mut plugins = autoupdate::Schedule::new(started, FIRST_CHECK_DELAY, CHECK_INTERVAL, RETRY_INTERVAL);
         loop {
+            let plugins_due = plugins.tick(
+                Instant::now(),
+                crate::config::get().general.auto_update_plugins,
+                autoupdate::in_flight(),
+                autoupdate::last().is_some_and(|report| report.retry_soon()),
+            );
+            if plugins_due {
+                autoupdate::start_in_background(autoupdate::Trigger::Scheduled);
+            }
             if CHECK_REQUESTED.swap(false, Ordering::SeqCst) {
                 check_in_background(true);
             }

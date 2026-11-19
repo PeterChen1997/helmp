@@ -93,6 +93,7 @@ JSON-RPC 2.0，走 **stdio**（换行分隔）和 **Streamable HTTP**（POST，`
 
 - `command`（在 `PATH` 里找的程序名，或插件目录里的 `./路径`；可带 `args`、`env`、相对插件目录的 `cwd`）与 `url`（写死的 `https://` / `http://` 地址；可带 `headers`）二选一。
 - `env`、`headers` 的值只能用 `{{pref.<id>}}`；密钥写成 `secret` 偏好设置，不要写进清单。
+- 本地（`command`）服务器还会拿到 `HELMP_PLUGIN_DATA_DIR`：插件自己的数据目录，更新和重装都不动它（见[插件数据](plugins.zh-CN.md#插件数据)）。
 - 带 `mcpServers` 的插件可以没有 `commands`。
 - 启用前列出的权限：每个命令一条「运行本地程序：`npx`」，每个地址一条「访问网络：`主机`」。
 

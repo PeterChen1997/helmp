@@ -21,6 +21,11 @@
 //! helmp plugins install <id> [--source <名字>]
 //!                               从插件中心（或指定的插件源）安装或更新（校验每个文件的 sha256，装好后默认停用，
 //!                               要在设置里确认权限）；装过的只从原来的源更新
+//! helmp plugins update [--all | <id>…] [--scheduled]
+//!                               检查从插件中心 / 插件源装的插件并更新（权限变了的更新后待确认；失败的旧版本不动）；
+//!                               --scheduled 同图形界面的每日检查，「自动更新插件」关着时什么都不做
+//! helmp plugins uninstall <id> [--delete-data]
+//!                               卸载从插件中心 / 插件源装的插件；--delete-data 一并删掉它的数据目录
 //! helmp plugins source list     列出插件源：名字 \t 地址 \t 鉴权请求头 \t 令牌是否已存（从不打印令牌）
 //! helmp plugins source add <名字> <地址> [--header <请求头名>] [--token-stdin]
 //!                               添加自定义插件源；--token-stdin 从标准输入读令牌存进钥匙串
@@ -147,6 +152,24 @@ fn plugins(args: &[String]) -> Result<()> {
             let id = rest.first().context(usage)?;
             plugins_install(id, source.as_deref())
         }
+        Some("update") => plugins_update(&args[1..]),
+        Some("uninstall") => {
+            let delete_data = args.iter().any(|arg| arg == "--delete-data");
+            let id = args[1..].iter().find(|arg| *arg != "--delete-data").context(tr(
+                "用法：helmp plugins uninstall <插件 id> [--delete-data]",
+                "Usage: helmp plugins uninstall <plugin id> [--delete-data]",
+            ))?;
+            crate::providers::plugins::center::uninstall(id, delete_data)?;
+            println!(
+                "{}",
+                if delete_data {
+                    trf!("已卸载 {id}，数据目录也已删除", "Uninstalled {id} and deleted its data")
+                } else {
+                    trf!("已卸载 {id}（数据目录保留，重装后接着用）", "Uninstalled {id} (its data is kept for a reinstall)")
+                }
+            );
+            Ok(())
+        }
         Some("source") => plugins_source(&args[1..]),
         Some("submit") => {
             let yes = args.iter().any(|arg| arg == "--yes");
@@ -157,8 +180,8 @@ fn plugins(args: &[String]) -> Result<()> {
             plugins_submit(std::path::Path::new(dir), yes)
         }
         Some(other) => bail!(trf!(
-            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、source、submit <目录>）",
-            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, source, submit <folder>)"
+            "不认识的子命令 {other:?}（可用：helmp plugins、validate <目录>、available、install <id>、update、uninstall <id>、source、submit <目录>）",
+            "Unknown subcommand {other:?} (use: helmp plugins, validate <folder>, available, install <id>, update, uninstall <id>, source, submit <folder>)"
         )),
     }
 }
@@ -295,6 +318,81 @@ fn plugins_install(id: &str, source: Option<&str>) -> Result<()> {
                 "It starts turned off: review its permissions and turn it on in Settings › Plugins."
             )
         ),
+    }
+    Ok(())
+}
+
+/// `helmp plugins update [--all | <id>…] [--scheduled]`：检查从插件中心 / 插件源装的插件并更新。
+/// `--scheduled` 与图形界面的每日检查一样（「自动更新插件」关着时什么都不做），给脚本和测试用。
+fn plugins_update(args: &[String]) -> Result<()> {
+    use crate::providers::plugins::autoupdate::{self, Trigger};
+    let scheduled = args.iter().any(|arg| arg == "--scheduled");
+    let ids: Vec<String> = args
+        .iter()
+        .filter(|arg| !arg.starts_with("--"))
+        .cloned()
+        .collect();
+    if let Some(flag) = args
+        .iter()
+        .find(|arg| arg.starts_with("--") && !["--all", "--scheduled"].contains(&arg.as_str()))
+    {
+        bail!(trf!(
+            "不认识的选项 {flag}（用法：helmp plugins update [--all | <插件 id>…] [--scheduled]）",
+            "Unknown option {flag} (usage: helmp plugins update [--all | <plugin id>…] [--scheduled])"
+        ));
+    }
+    if scheduled && !crate::config::get().general.auto_update_plugins {
+        println!(
+            "{}",
+            tr(
+                "「自动更新插件」已关闭，没有检查",
+                "Automatic plugin updates are turned off; nothing was checked"
+            )
+        );
+        return Ok(());
+    }
+    let trigger = if scheduled { Trigger::Scheduled } else { Trigger::Manual };
+    let only = (!ids.is_empty()).then_some(ids.as_slice());
+    let report = autoupdate::run(trigger, only).context(tr(
+        "已经有一次插件更新检查在进行",
+        "A plugin update check is already running",
+    ))?;
+    for updated in &report.updated {
+        println!(
+            "{}",
+            trf!(
+                "已更新 {}：{} → {}",
+                "Updated {}: {} → {}",
+                updated.id,
+                updated.from,
+                updated.to
+            )
+        );
+        if updated.needs_consent {
+            println!(
+                "  {}",
+                tr(
+                    "权限有变化，已停用：在「设置 › 插件」里重新确认后才会生效。",
+                    "Its permissions changed, so it's off until you review them in Settings › Plugins."
+                )
+            );
+        }
+    }
+    for id in &report.busy {
+        println!("{}", trf!("{id} 正在运行，这次没有更新", "{id} is running; not updated this time"));
+    }
+    for failure in &report.failed {
+        eprintln!("helmp: {}: {}", failure.id, failure.error);
+    }
+    if report.updated.is_empty() && report.failed.is_empty() && report.busy.is_empty() {
+        println!("{}", report.summary());
+    }
+    if !report.failed.is_empty() {
+        bail!(trf!(
+            "{} 个插件更新失败，旧版本保持不变",
+            "{} plugin(s) failed to update; the old versions are kept",
+            report.failed.len()
+        ));
     }
     Ok(())
 }

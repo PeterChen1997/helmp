@@ -196,6 +196,26 @@ pub fn plugin_installed(custom: bool, update: bool) {
     );
 }
 
+/// 一次插件更新检查有了结果（有插件更新了或失败了；什么都没变时不发）。`trigger` 是 `scheduled` / `manual`。
+/// 不发插件 id、版本和地址。
+pub fn plugin_autoupdate(trigger: &'static str, updated: bool, needs_consent: bool, failed: bool) {
+    if !updated && !failed {
+        return;
+    }
+    track(
+        "plugin_autoupdate",
+        json!({ "trigger": trigger, "updated": updated, "needs_consent": needs_consent, "failed": failed }),
+    );
+}
+
+/// 卸载了一个从插件中心或插件源装的插件：源的类型、是否一并删了数据目录。
+pub fn plugin_uninstalled(custom: bool, delete_data: bool) {
+    track(
+        "plugin_uninstall",
+        json!({ "source": if custom { "custom" } else { "public" }, "delete_data": delete_data }),
+    );
+}
+
 /// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceEvent {

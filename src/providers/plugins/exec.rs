@@ -7,6 +7,8 @@
 //!   测试模式（见 `secrets::test_mode`）额外允许本机地址，flomo 这类锁定主机名的插件才能指向假服务。
 //! - 脚本按 argv 传参，从不经过 shell；路径必须在插件目录里（解析符号链接后再查一次）。
 //! - secret 偏好设置的值在输出、错误信息、演练回报里一律替换成 `••••`。
+//! - 脚本拿到 `HELMP_PLUGIN_DIR`、`HELMP_PLUGIN_ID` 和 `HELMP_PLUGIN_DATA_DIR`（更新不动的数据目录）；
+//!   运行期间插件登记为忙（见 [`running`]），自动更新跳过它。
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -20,7 +22,7 @@ use serde_json::Value;
 use super::manifest::{
     ActionSpec, HttpSpec, ListSpec, Method, PrefKind, ScriptOutput, ScriptSpec, host_of,
 };
-use super::registry::Plugin;
+use super::registry::{self, Plugin};
 use super::secrets;
 use super::template::{self, Context, Template};
 use crate::i18n::{tr, trf};
@@ -433,7 +435,13 @@ fn run_script(plugin: &Plugin, title: &str, call: ScriptCall, context: &Context)
         .collect::<Result<_>>()?;
     vars.push(("HELMP_PLUGIN_DIR".into(), dir.display().to_string()));
     vars.push(("HELMP_PLUGIN_ID".into(), plugin.id().to_string()));
+    vars.push((
+        "HELMP_PLUGIN_DATA_DIR".into(),
+        registry::data_dir(plugin.id())?.display().to_string(),
+    ));
     let stdin = stdin.map(|text| render(text, context)).transpose()?;
+    // 运行期间登记为忙：自动更新不在这时替换插件目录。
+    let _running = running::enter(plugin.id());
     let output = runner::execute_with(&path, &args, &dir, timeout, &vars, stdin.as_deref())?;
     if !output.status.success() {
         let detail = if output.stderr.trim().is_empty() {
@@ -616,9 +624,58 @@ pub fn parse_alfred(text: &str, dir: Option<&Path>) -> Result<Vec<ListItem>> {
     Ok(out)
 }
 
+/// 正在运行脚本的插件（本进程内）：自动更新不在脚本运行时替换插件目录。
+pub mod running {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    static RUNNING: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
+
+    fn lock() -> std::sync::MutexGuard<'static, BTreeMap<String, usize>> {
+        RUNNING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// 登记一次运行，返回的守卫释放时注销。
+    pub fn enter(id: &str) -> Guard {
+        *lock().entry(id.to_string()).or_default() += 1;
+        Guard(id.to_string())
+    }
+
+    pub fn is_running(id: &str) -> bool {
+        lock().get(id).is_some_and(|count| *count > 0)
+    }
+
+    pub struct Guard(String);
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let mut map = lock();
+            if let Some(count) = map.get_mut(&self.0) {
+                *count -= 1;
+                if *count == 0 {
+                    map.remove(&self.0);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plugin_counts_as_running_until_every_run_ends() {
+        // 自动更新靠它判断能不能替换插件目录：两个脚本同时在跑时，结束一个也还不能换。
+        let id = "com.example.running-guard";
+        assert!(!running::is_running(id));
+        let first = running::enter(id);
+        let second = running::enter(id);
+        drop(first);
+        assert!(running::is_running(id), "还有一个在跑");
+        drop(second);
+        assert!(!running::is_running(id));
+    }
 
     #[test]
     fn secrets_are_masked_in_messages() {

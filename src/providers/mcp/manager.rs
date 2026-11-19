@@ -144,8 +144,21 @@ pub struct Manager {
     cache: Mutex<Option<HashMap<String, CachedTools>>>,
 }
 
+static MANAGER: OnceLock<Manager> = OnceLock::new();
+
+/// 这个插件带的 MCP 服务器有没有在运行（自动更新不在这时替换插件目录）。没启动过管理器就是没有。
+pub fn plugin_running(id: &str) -> bool {
+    let prefix = format!("{id}/");
+    MANAGER.get().is_some_and(|manager| {
+        lock(&manager.info)
+            .iter()
+            .any(|(key, info)| {
+                key.starts_with(&prefix) && matches!(info.status, Status::Running | Status::Starting)
+            })
+    })
+}
+
 pub fn global() -> &'static Manager {
-    static MANAGER: OnceLock<Manager> = OnceLock::new();
     MANAGER.get_or_init(|| {
         let manager = Manager {
             slots: Mutex::default(),

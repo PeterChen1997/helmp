@@ -546,9 +546,16 @@ impl Spec {
                 }
             }
         }
-        if let (Some(plugin), Transport::Stdio { command, cwd, .. }) = (&self.plugin, &mut transport)
+        if let (Some(plugin), Transport::Stdio { command, cwd, env, .. }) = (&self.plugin, &mut transport)
             && let Some(dir) = &plugin.dir
         {
+            // 和插件脚本一样：更新不动的数据目录。
+            env.insert(
+                "HELMP_PLUGIN_DATA_DIR".into(),
+                crate::providers::plugins::registry::data_dir(plugin.id())?
+                    .display()
+                    .to_string(),
+            );
             if command.starts_with("./") {
                 *command = dir.join(&command[2..]).display().to_string();
             }

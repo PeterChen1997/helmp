@@ -93,6 +93,7 @@ A [plugin](plugins.md) can declare `mcpServers`; its servers run only while the 
 
 - Exactly one of `command` (a program name looked up on `PATH`, or `./path` inside the plugin folder; `args`, `env`, `cwd` relative to the plugin folder) or `url` (static `https://` / `http://` URL; `headers`).
 - `env` and `headers` values may only use `{{pref.<id>}}`; put secrets in `secret` preferences, never in the manifest.
+- Local (`command`) servers also get `HELMP_PLUGIN_DATA_DIR`, the plugin's own data folder that survives updates and reinstalls (see [Plugin data](plugins.md#plugin-data)).
 - A plugin with `mcpServers` doesn't need `commands`.
 - Permissions shown before enabling: "Run a local program: `npx`" for each command, "Network access: `host`" for each URL.
 

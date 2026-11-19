@@ -148,6 +148,23 @@ pub fn user_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// 插件的数据目录 `<data_dir>/plugin-data/<id>/`（不创建）。和插件目录分开放，更新、重装整体替换插件目录时不受影响。
+pub fn data_path(id: &str) -> Result<PathBuf> {
+    anyhow::ensure!(
+        manifest::valid_id(id),
+        trf!("插件 id {id:?} 不合法", "Invalid plugin id {id:?}")
+    );
+    Ok(crate::paths::data_dir()?.join("plugin-data").join(id))
+}
+
+/// 同 [`data_path`]，按需创建：脚本和插件自带的 MCP 服务器经 `HELMP_PLUGIN_DATA_DIR` 拿到它。
+pub fn data_dir(id: &str) -> Result<PathBuf> {
+    let dir = data_path(id)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| trf!("创建 {}", "Couldn't create {}", dir.display()))?;
+    Ok(dir)
+}
+
 pub fn load_bundled() -> Vec<Entry> {
     BUNDLED
         .iter()

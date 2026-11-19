@@ -671,7 +671,7 @@ pub fn test(server: &Server, args: &Value) -> Result<ToolOutput> {
         .map(|pid| (pid.to_string(), json!({"enabled": false})))
         .collect();
     let sandbox_config = json!({
-        "general": {"language": config.general.language, "launch_at_login": false, "auto_check_updates": false},
+        "general": {"language": config.general.language, "launch_at_login": false, "auto_check_updates": false, "auto_update_plugins": false},
         "clipboard": {"enabled": false, "record_images": false},
         "onboarding_done": true,
         "extensions": extensions,

@@ -553,7 +553,11 @@ impl SettingsView {
     /// 轮询注册表的代数，变了就重绘，各行的「未生效」警示才跟得上。更新状态同理。窗口关闭后自行结束。
     fn watch_hotkey_registry(cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let mut seen = (crate::hotkey::generation(), crate::updates::generation());
+            let mut seen = (
+                crate::hotkey::generation(),
+                crate::updates::generation(),
+                crate::providers::plugins::autoupdate::generation(),
+            );
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(250))
@@ -561,8 +565,12 @@ impl SettingsView {
                 let Some(this) = this.upgrade() else {
                     break;
                 };
-                // 更新状态（检查结果、下载进度）也在后台线程变化，一并轮询。
-                let now = (crate::hotkey::generation(), crate::updates::generation());
+                // 更新状态（检查结果、下载进度）和插件自动更新的结果也在后台线程变化，一并轮询。
+                let now = (
+                    crate::hotkey::generation(),
+                    crate::updates::generation(),
+                    crate::providers::plugins::autoupdate::generation(),
+                );
                 if now != seen {
                     seen = now;
                     this.update(cx, |_, cx| cx.notify());

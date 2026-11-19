@@ -15,6 +15,7 @@
 //!
 //! 开发者文档：docs/plugins.md。
 
+pub mod autoupdate;
 pub mod center;
 pub mod exec;
 pub mod manifest;

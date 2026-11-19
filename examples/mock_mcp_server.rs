@@ -3,7 +3,8 @@
 //!
 //! 工具：
 //! - `echo`：text（必填）、mood（enum）、loud（boolean）、times（integer）→ 文字 + structuredContent
-//!   （里面带上环境变量 `MOCK_TOKEN`，验证钥匙串里的密钥确实传给了服务器）。
+//!   （里面带上环境变量 `MOCK_TOKEN`，验证钥匙串里的密钥确实传给了服务器；以及插件带的服务器拿到的
+//!   `HELMP_PLUGIN_DATA_DIR`）。
 //! - `delete_note`：destructiveHint=true，name（必填）。
 //! - `fail`：返回 isError。
 //! - `picture`：返回一张 1×1 的 PNG。
@@ -97,7 +98,8 @@ fn call(name: &str, args: &Value, out: &mut impl std::io::Write) -> Value {
             json!({
                 "content": [text(line)],
                 "structuredContent": {"said": said, "mood": mood, "loud": loud, "times": times,
-                                      "token": std::env::var("MOCK_TOKEN").unwrap_or_default()}
+                                      "token": std::env::var("MOCK_TOKEN").unwrap_or_default(),
+                                      "data_dir": std::env::var("HELMP_PLUGIN_DATA_DIR").unwrap_or_default()}
             })
         }
         "delete_note" => json!({"content": [text(format!("deleted {}", args["name"].as_str().unwrap_or_default()))]}),

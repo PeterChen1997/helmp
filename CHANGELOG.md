@@ -6,6 +6,30 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Plugins installed from the Plugin Center or a plugin source now update automatically, once a day on the same schedule as Helmp's own update check. Updates whose permissions are unchanged install quietly and stay on; ones that ask for more are installed but paused for your review. Failures leave the old version in place and retry later, and a plugin that's running is updated on the next try. Settings › Plugins has an "Automatically update plugins" switch with the last check's time and result, and a "Check Now" button; from a terminal, `helmp plugins update [--all | <id>]`.
+- Plugins get their own data folder, `HELMP_PLUGIN_DATA_DIR` (`plugin-data/<id>/` in Helmp's data folder), for scripts, list scripts and bundled MCP servers. Updates and reinstalls never touch it.
+- Plugins installed from the Plugin Center or a source can be uninstalled in Settings, which asks whether to delete the plugin's data too (`helmp plugins uninstall <id> [--delete-data]`).
+- Custom plugin sources may include JPEG, WebP and GIF images and larger plugins (4 MiB per file, 16 MiB per plugin). The Plugin Center's limits are unchanged.
+
+### Security
+
+- Every downloaded plugin file is checked by content: images must match their extension's file header, and all other files must be UTF-8 text.
+
+### 简体中文
+
+#### 新增
+
+- 从插件中心或插件源安装的插件现在会自动更新：每天一次，和 Helmp 自己的更新检查同一个节奏。权限没变的静默装上、保持启用；权限变了的装上后暂停，等你确认。失败时旧版本保持不变、稍后再试；正在运行的插件下次再更新。「设置 › 插件」新增「自动更新插件」开关，显示上次检查的时间和结果，并有「现在检查」按钮；命令行：`helmp plugins update [--all | <id>]`。
+- 插件有了自己的数据目录 `HELMP_PLUGIN_DATA_DIR`（Helmp 数据目录下的 `plugin-data/<id>/`），脚本、列表脚本和插件带的 MCP 服务器都能用，更新和重装都不会动它。
+- 从插件中心或插件源安装的插件可以在设置里卸载，卸载时会问要不要一并删除插件数据（`helmp plugins uninstall <id> [--delete-data]`）。
+- 自定义插件源里的插件可以带 JPEG、WebP、GIF 图片，体积上限也放宽了（单个文件 4 MiB、每个插件 16 MiB）。插件中心的限制不变。
+
+#### 安全
+
+- 下载的每个插件文件都按内容核对：图片的文件头必须和扩展名一致，其余文件必须是 UTF-8 文本。
+
 ## [0.4.15] - 2026-11-19
 
 ### Fixed

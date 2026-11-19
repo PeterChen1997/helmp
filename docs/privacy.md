@@ -2,7 +2,7 @@
 
 English · [简体中文](privacy.zh-CN.md)
 
-Short version: Helmp has no account. It sends anonymous usage stats and crash reports, which you can turn off in Settings › General › Privacy (see below). Everything it stores stays in one folder on your Mac. The only network requests it makes go to the model endpoints you configure for Translate, to the hosts of plugins you turned on when you run them, and, unless you turn it off, to Helmp's update feed once a day (a plain download of a version file that carries nothing about you). MCP servers you add are programs or services you chose: Helmp starts or connects to them and sends them the arguments of the tools you run; what they contact is up to them.
+Short version: Helmp has no account. It sends anonymous usage stats and crash reports, which you can turn off in Settings › General › Privacy (see below). Everything it stores stays in one folder on your Mac. The only network requests it makes go to the model endpoints you configure for Translate, to the hosts of plugins you turned on when you run them, and, unless you turn them off, to Helmp's update feed once a day (a plain download of a version file that carries nothing about you) and to the plugin sources your installed plugins came from once a day (to fetch their plugin index). MCP servers you add are programs or services you chose: Helmp starts or connects to them and sends them the arguments of the tools you run; what they contact is up to them.
 
 This page describes what the code does today. If you find a mismatch, please open an issue.
 
@@ -25,6 +25,8 @@ All files live in `~/Library/Application Support/Helmp/` (or `HELMP_DATA_DIR` if
 | `fx.json` | The last ECB exchange rates (date and rate table) used for currency conversion | Safe to delete; downloaded again when online |
 | `snippets.json` | Your text snippets (name, keyword, content, tags) | Settings › Snippets, or delete the file |
 | `plugins/` | Plugins you installed or created (each folder has a `plugin.json`). Plugin secrets are not here; they are in the Keychain | Settings › Plugins, or delete the folder |
+| `plugin-data/<id>/` | Data a plugin's scripts or MCP servers saved (`HELMP_PLUGIN_DATA_DIR`); kept across updates | Settings › Plugins › Uninstall (asks), or delete the folder |
+| `plugin-updates.json` | When plugins were last checked for updates and what happened (plugin ids, versions, error messages) | Delete the file |
 | `mcp/` | MCP client data: `tools.json` (cached tool lists of your servers), `logs/<server>.log` (each server's stderr and start / stop / error lines, trimmed past 1 MB), `images/` (images returned by tools, deleted after 7 days). Server settings are in `config.json`; their tokens are in the Keychain | Safe to delete; tool lists are read again |
 | `emoji-recent.json`, `colors/` | Recently used emoji, and swatch images for colors you converted or picked | Safe to delete |
 | `emoji-recent.json` | Up to 24 emoji you pasted or copied most recently | Delete the file |
@@ -84,7 +86,7 @@ Keychain items are tied to the signature of the app that saved them. A key saved
 - Crash reports (same switch): panics and failed operations (saving settings or recent items, registering the hotkey, installing an update) go to Sentry (`sentry.io`) with the stack trace, error message, Helmp version and macOS version. Your home folder in paths is replaced by `~`; host name and user are removed.
 - Nothing else.
 
-The Plugin Center (Settings › Plugins › Browse Plugin Center, `helmp plugins available` / `install`, or an `install-plugin` link) downloads the plugin index and plugin files from `cdn.jsdelivr.net` only when you use it. Helmp never checks it in the background. See [plugin-center.md](plugin-center.md).
+The Plugin Center (Settings › Plugins › Browse Plugin Center, `helmp plugins available` / `install`, or an `install-plugin` link) downloads the plugin index and plugin files from `cdn.jsdelivr.net` when you use it. With "Automatically update plugins" on (Settings › Plugins, on by default) and at least one plugin installed from the Plugin Center or a plugin source, Helmp also fetches the index of each source those plugins came from once a day (custom sources get their token, as when you install), and downloads a plugin's files when there's a new version. It sends nothing about you or your other plugins. Turn the switch off and Helmp doesn't contact them in the background. See [plugin-center.md](plugin-center.md).
 
 Things that may reach the network because *you* asked for them: web search results (<kbd>↵</kbd> opens the search URL in your default browser; Helmp itself sends nothing, and the subtitle shows the exact URL), opening a link from the clipboard history or from a QR code, deep links to the Claude / ChatGPT desktop apps, and any script command you run.
 

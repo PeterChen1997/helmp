@@ -360,5 +360,9 @@ fn plugin_bundled_servers_only_appear_after_enabling() {
     assert_eq!(row.title, "Echo Text");
     let out = on.run_in(&row.id, &row.id, "", &["--form", "text=from plugin"]);
     assert!(out.contains("plain: from plugin"), "{out}");
+    // 和插件脚本一样拿到更新不动的数据目录。
+    let data = on.data.join("plugin-data/com.example.mcp");
+    assert!(out.contains(&format!("\"data_dir\": \"{}\"", data.display())), "{out}");
+    assert!(data.is_dir());
     assert!(on.cli(&["mcp-client", "list"]).contains("\tcom.example.mcp/notes\tplugin:com.example.mcp\t"));
 }

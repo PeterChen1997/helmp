@@ -10,6 +10,8 @@
 //! - 和自带插件同 id 的插件不安装（不能遮住自带插件），给出说明。
 //! - 自定义插件源（`config.plugin_sources`，见 `sources`）和公开插件中心结构相同，可以带鉴权请求头；
 //!   浏览时合并展示（同 id 公开插件中心优先），更新只从安装记录里的源取。校验、原子安装、默认停用对所有源一样。
+//! - 插件包限制按源区分（`Limits`）：公开插件中心与注册表脚本一致；自定义源放宽体积并允许 jpg / webp / gif。
+//!   安装时每个文件再按内容核对（`check_content`）：图片看文件头，其余必须是 UTF-8 文本。
 //! - 演练模式（`HELMP_DRY_RUN=1`）下只访问本机地址（端到端测试的假服务）。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +38,79 @@ pub const INDEX_SCHEMA: u32 = 1;
 pub const MAX_FILE_BYTES: u64 = 512 * 1024;
 pub const MAX_PLUGIN_BYTES: u64 = 2 * 1024 * 1024;
 pub const MAX_FILES: usize = 64;
+
+/// 一个源允许的插件包：单个文件、合计大小、文件数，以及除 UTF-8 文本外允许的图片格式（按扩展名，内容按文件头核对）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub max_file: u64,
+    pub max_total: u64,
+    pub max_files: usize,
+    pub images: &'static [&'static str],
+}
+
+/// 公开插件中心：与注册表校验脚本、`helmp plugins submit` 一致，只认 png。
+pub const PUBLIC_LIMITS: Limits = Limits {
+    max_file: MAX_FILE_BYTES,
+    max_total: MAX_PLUGIN_BYTES,
+    max_files: MAX_FILES,
+    images: &["png"],
+};
+
+/// 自定义插件源：源由用户自己选择信任，允许常见图片格式（插图、动图）和更大的体积；
+/// 合计 16 MiB 仍让每日自动更新的下载量保持在一张照片的量级。
+pub const CUSTOM_LIMITS: Limits = Limits {
+    max_file: 4 * 1024 * 1024,
+    max_total: 16 * 1024 * 1024,
+    max_files: MAX_FILES,
+    images: &["png", "jpg", "jpeg", "webp", "gif"],
+};
+
+/// 认得的图片扩展名（小写）。
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
+
+/// 文件头是不是这种图片。
+fn image_magic(ext: &str, bytes: &[u8]) -> bool {
+    match ext {
+        "png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "jpg" | "jpeg" => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        "gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+/// 一个文件的内容是否允许：图片扩展名的文件头必须真是那种图片（改了扩展名的文件拒绝），
+/// 其余文件必须是 UTF-8 文本（不含 NUL）。
+pub fn check_content(path: &str, bytes: &[u8], limits: &Limits) -> Result<()> {
+    let ext = Path::new(path)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        if !limits.images.contains(&ext.as_str()) {
+            bail!(trf!(
+                "{path}：这个源不接受 .{ext} 文件（允许的图片：{}）",
+                "{path}: .{ext} files aren't accepted from this source (allowed images: {})",
+                limits.images.join(", ")
+            ));
+        }
+        if !image_magic(&ext, bytes) {
+            bail!(trf!(
+                "{path} 的内容不是 .{ext} 图片（扩展名与文件头不符），已拒绝安装",
+                "{path} isn't really a .{ext} image (its header doesn't match the extension); refusing to install"
+            ));
+        }
+        return Ok(());
+    }
+    if std::str::from_utf8(bytes).is_err() || bytes.contains(&0) {
+        bail!(trf!(
+            "{path} 不是文本文件（只允许 UTF-8 文本和 {} 图片），已拒绝安装",
+            "{path} isn't a text file (only UTF-8 text and {} images are allowed); refusing to install",
+            limits.images.join(" / ")
+        ));
+    }
+    Ok(())
+}
 const MAX_INDEX_BYTES: u64 = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -119,8 +194,9 @@ fn valid_sha256(hex: &str) -> bool {
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
-/// 解析并检查索引：schema、id、文件列表（路径、哈希格式、大小限制）。有问题就整体拒绝。
-pub fn parse_index(text: &str) -> Result<Index> {
+/// 解析并检查索引：schema、id、文件列表（路径、哈希格式、按源的大小限制，见 [`Registry::limits`]）。
+/// 有问题就整体拒绝。
+pub fn parse_index(text: &str, limits: &Limits) -> Result<Index> {
     let index: Index = serde_json::from_str(text).map_err(|err| {
         anyhow!(trf!(
             "插件中心索引格式不对：{err}",
@@ -136,7 +212,7 @@ pub fn parse_index(text: &str) -> Result<Index> {
     }
     let mut ids = BTreeSet::new();
     for listing in &index.plugins {
-        check_listing(listing)?;
+        check_listing(listing, limits)?;
         if !ids.insert(listing.id.as_str()) {
             bail!(trf!(
                 "插件中心索引里 {} 重复",
@@ -148,7 +224,13 @@ pub fn parse_index(text: &str) -> Result<Index> {
     Ok(index)
 }
 
-fn check_listing(listing: &Listing) -> Result<()> {
+fn check_listing(listing: &Listing, limits: &Limits) -> Result<()> {
+    let Limits {
+        max_file,
+        max_total,
+        max_files,
+        ..
+    } = *limits;
     let id = &listing.id;
     if !manifest::valid_id(id) {
         bail!(trf!(
@@ -156,10 +238,10 @@ fn check_listing(listing: &Listing) -> Result<()> {
             "Invalid plugin id {id:?} in the index"
         ));
     }
-    if listing.files.len() > MAX_FILES {
+    if listing.files.len() > max_files {
         bail!(trf!(
-            "{id} 的文件太多（{} 个，上限 {MAX_FILES}）",
-            "{id} has too many files ({}, limit {MAX_FILES})",
+            "{id} 的文件太多（{} 个，上限 {max_files}）",
+            "{id} has too many files ({}, limit {max_files})",
             listing.files.len()
         ));
     }
@@ -187,20 +269,20 @@ fn check_listing(listing: &Listing) -> Result<()> {
                 file.path
             ));
         }
-        if file.size > MAX_FILE_BYTES {
+        if file.size > max_file {
             bail!(trf!(
-                "{id} 的文件 {} 太大（{} 字节，上限 {MAX_FILE_BYTES}）",
-                "{id}: {} is too large ({} bytes, limit {MAX_FILE_BYTES})",
+                "{id} 的文件 {} 太大（{} 字节，上限 {max_file}）",
+                "{id}: {} is too large ({} bytes, limit {max_file})",
                 file.path,
                 file.size
             ));
         }
         total += file.size;
     }
-    if total > MAX_PLUGIN_BYTES {
+    if total > max_total {
         bail!(trf!(
-            "{id} 总共 {total} 字节，超过上限 {MAX_PLUGIN_BYTES}",
-            "{id} is {total} bytes in total, over the {MAX_PLUGIN_BYTES} limit"
+            "{id} 总共 {total} 字节，超过上限 {max_total}",
+            "{id} is {total} bytes in total, over the {max_total} limit"
         ));
     }
     if !paths.contains("plugin.json") {
@@ -321,6 +403,15 @@ impl Registry {
             record.custom && record.registry == self.base
         } else {
             !record.custom
+        }
+    }
+
+    /// 这个源允许的插件包大小与图片格式：自定义源放宽，公开插件中心与注册表脚本保持一致。
+    pub fn limits(&self) -> &'static Limits {
+        if self.custom {
+            &CUSTOM_LIMITS
+        } else {
+            &PUBLIC_LIMITS
         }
     }
 
@@ -503,7 +594,7 @@ impl Client {
                     "The plugin index isn't UTF-8 text"
                 ))
             })
-            .and_then(|text| parse_index(&text));
+            .and_then(|text| parse_index(&text, self.registry.limits()));
         parsed.map_err(|err| {
             report_failure(&self.registry, "invalid_index");
             if self.registry.custom {
@@ -805,6 +896,18 @@ pub fn install(id: &str, source: Option<&str>) -> Result<Installed> {
         }
         (None, None) => find_in_sources(id, &config)?,
     };
+    install_from(id, &client, &index, record.map(|record| record.version))
+}
+
+/// 从已取到索引的源安装或更新 `id`（`previous` 是已装的版本）。不比已装的新时不下载。
+/// 自动更新对同一个源的多个插件共用一次索引。
+pub fn install_from(
+    id: &str,
+    client: &Client,
+    index: &Index,
+    previous: Option<String>,
+) -> Result<Installed> {
+    let root = registry::user_dir()?;
     let base = client.registry.base.clone();
     let listing = index.get(id).with_context(|| {
         if client.registry.custom {
@@ -820,7 +923,6 @@ pub fn install(id: &str, source: Option<&str>) -> Result<Installed> {
             )
         }
     })?;
-    let previous = record.map(|record| record.version);
     check_local_conflict(id, &root, previous.is_some(), &registry::load_all())?;
     let target = root.join(id);
     if let Some(version) = &previous
@@ -837,8 +939,9 @@ pub fn install(id: &str, source: Option<&str>) -> Result<Installed> {
     }
     let files = files_base(&base, index.commit.as_deref());
     let record = client.registry.record(&listing.version);
-    let dir = install_into(listing, &root, &record, |path| {
-        client.get(&format!("{files}plugins/{id}/{path}"), MAX_FILE_BYTES)
+    let limits = client.registry.limits();
+    let dir = install_into(listing, &root, &record, limits, |path| {
+        client.get(&format!("{files}plugins/{id}/{path}"), limits.max_file)
     })
     .inspect_err(|_| report_failure(&client.registry, "install_rejected"))?;
     crate::config::update(|config| {
@@ -855,6 +958,67 @@ pub fn install(id: &str, source: Option<&str>) -> Result<Installed> {
         previous,
         up_to_date: false,
     })
+}
+
+/// 卸载从插件中心 / 插件源装的插件：删掉插件目录，清掉安装记录、启用状态和确认过的权限（再装回来要重新确认）。
+/// `delete_data`：一并删掉数据目录（`HELMP_PLUGIN_DATA_DIR`）和偏好设置；否则留着，重装后接着用。
+/// 手动放进插件文件夹的插件不在这里删（那是用户自己的文件）。
+pub fn uninstall(id: &str, delete_data: bool) -> Result<()> {
+    // id 要拼进路径：先确认它只是一个合法 id，不能借 `../` 删到插件文件夹外面。
+    if !manifest::valid_id(id) {
+        bail!(trf!("插件 id {id:?} 不合法", "Invalid plugin id {id:?}"));
+    }
+    if is_bundled(id) {
+        bail!(trf!(
+            "{id} 是 Helmp 自带的插件，不能卸载，只能停用",
+            "{id} comes bundled with Helmp; it can be turned off but not removed"
+        ));
+    }
+    let config = crate::config::get();
+    let root = registry::user_dir()?;
+    let dir = root.join(id);
+    let Some(record) = install_record(id, &config, Some(&dir)) else {
+        bail!(trf!(
+            "{id} 不是从插件中心或插件源安装的：手动放进来的插件请在插件文件夹里自己删除",
+            "{id} wasn't installed from the plugin center or a plugin source; remove plugins you added by hand from the plugins folder yourself"
+        ));
+    };
+    let result = (|| -> Result<()> {
+        if dir.exists() {
+            // 先整体挪开再删：删到一半失败时，插件文件夹里也不会留下半个插件。
+            let removed = root.join(format!(".removed-{id}-{}", unique_suffix()));
+            std::fs::rename(&dir, &removed)
+                .with_context(|| trf!("移除 {}", "Couldn't remove {}", dir.display()))?;
+            if let Err(err) = std::fs::remove_dir_all(&removed) {
+                eprintln!("helmp: 清理 {} 失败：{err}", removed.display());
+            }
+        }
+        crate::config::update(|config| {
+            if delete_data {
+                config.plugins.remove(id);
+            } else if let Some(settings) = config.plugins.get_mut(id) {
+                settings.enabled = None;
+                settings.consent.clear();
+                settings.installed = None;
+            }
+        })?;
+        if delete_data {
+            let data = registry::data_path(id)?;
+            if data.exists() {
+                std::fs::remove_dir_all(&data)
+                    .with_context(|| trf!("删除 {}", "Couldn't delete {}", data.display()))?;
+            }
+        }
+        Ok(())
+    })();
+    registry::reload();
+    if result.is_err() {
+        // 错误文案里有本机路径，上报只带固定原因。
+        crate::telemetry::report("plugins.uninstall", &anyhow!("uninstall failed"));
+    }
+    result?;
+    crate::telemetry::plugin_uninstalled(record.custom, delete_data);
+    Ok(())
 }
 
 /// 按源的顺序找第一个列出了 `id` 的源。都没有时把失败的源一并说明。
@@ -949,9 +1113,10 @@ pub fn install_into(
     listing: &Listing,
     root: &Path,
     record: &RegistryInstall,
+    limits: &Limits,
     fetch: impl Fn(&str) -> Result<Vec<u8>>,
 ) -> Result<PathBuf> {
-    check_listing(listing)?;
+    check_listing(listing, limits)?;
     let id = &listing.id;
     let staging = root.join(format!(".install-{id}-{}", unique_suffix()));
     let result = (|| -> Result<()> {
@@ -977,6 +1142,7 @@ pub fn install_into(
                     file.sha256
                 ));
             }
+            check_content(&file.path, &bytes, limits)?;
             let path = staging.join(&file.path);
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -1217,7 +1383,7 @@ mod tests {
             r#"[{{"path":"plugin.json","sha256":"{sha}","size":10,"executable":false}},{{"path":"bin/run.sh","sha256":"{sha}","size":5,"executable":true}}]"#
         ))
         .replace(r#""author":"A","#, r#""author":"A","review":[],"future":{"x":1},"#);
-        let index = parse_index(&text).unwrap();
+        let index = parse_index(&text, &PUBLIC_LIMITS).unwrap();
         let memo = index.get("com.example.memo").unwrap();
         assert_eq!(memo.files.len(), 2);
         assert!(memo.files[1].executable);
@@ -1245,33 +1411,121 @@ mod tests {
                 r#"[{{"path":"plugin.json","sha256":"{sha}","size":1}},{{"path":{},"sha256":"{sha}","size":1}}]"#,
                 serde_json::to_string(path).unwrap()
             ));
-            assert!(parse_index(&text).is_err(), "{path:?} 应被拒绝");
+            assert!(parse_index(&text, &PUBLIC_LIMITS).is_err(), "{path:?} 应被拒绝");
         }
         let text = index_json(&format!(
             r#"[{{"path":"plugin.json","sha256":"{sha}","size":1}}]"#
         ));
-        assert!(parse_index(&text).is_ok());
-        assert!(parse_index(&text.replace(r#""schema":1"#, r#""schema":2"#)).is_err());
+        assert!(parse_index(&text, &PUBLIC_LIMITS).is_ok());
+        assert!(parse_index(&text.replace(r#""schema":1"#, r#""schema":2"#), &PUBLIC_LIMITS).is_err());
         // 没有 plugin.json、哈希不是 64 位十六进制、文件超限：同样拒绝。
         assert!(
-            parse_index(&index_json(&format!(
-                r#"[{{"path":"a.sh","sha256":"{sha}","size":1}}]"#
-            )))
+            parse_index(
+                &index_json(&format!(r#"[{{"path":"a.sh","sha256":"{sha}","size":1}}]"#)),
+                &PUBLIC_LIMITS
+            )
             .is_err()
         );
         assert!(
-            parse_index(&index_json(
-                r#"[{"path":"plugin.json","sha256":"xyz","size":1}]"#
-            ))
+            parse_index(
+                &index_json(r#"[{"path":"plugin.json","sha256":"xyz","size":1}]"#),
+                &PUBLIC_LIMITS
+            )
             .is_err()
         );
         assert!(
-            parse_index(&index_json(&format!(
-                r#"[{{"path":"plugin.json","sha256":"{sha}","size":{}}}]"#,
-                MAX_FILE_BYTES + 1
-            )))
+            parse_index(
+                &index_json(&format!(
+                    r#"[{{"path":"plugin.json","sha256":"{sha}","size":{}}}]"#,
+                    MAX_FILE_BYTES + 1
+                )),
+                &PUBLIC_LIMITS
+            )
             .is_err()
         );
+    }
+
+    #[test]
+    fn only_custom_sources_get_the_larger_size_limits() {
+        // 自定义源放宽了体积（用户自己选择信任它）；公开插件中心必须和注册表脚本、submit 保持一致，不能被顺带放宽。
+        assert_eq!(
+            (PUBLIC_LIMITS.max_file, PUBLIC_LIMITS.max_total, PUBLIC_LIMITS.max_files),
+            (512 * 1024, 2 * 1024 * 1024, 64)
+        );
+        assert_eq!(PUBLIC_LIMITS.images, ["png"]);
+        let sha = "c".repeat(64);
+        let one_mib = index_json(&format!(
+            r#"[{{"path":"plugin.json","sha256":"{sha}","size":1}},{{"path":"art.jpg","sha256":"{sha}","size":{}}}]"#,
+            1024 * 1024
+        ));
+        assert!(parse_index(&one_mib, &PUBLIC_LIMITS).is_err());
+        assert!(parse_index(&one_mib, &CUSTOM_LIMITS).is_ok());
+        let public = Registry::public(&Config::default());
+        let custom = custom("Team", "https://plugins.example.com/", false);
+        assert_eq!(public.limits(), &PUBLIC_LIMITS);
+        assert_eq!(custom.limits(), &CUSTOM_LIMITS);
+        // 自定义源也有上限：单个文件超过 4 MiB、合计超过 16 MiB 都拒绝。
+        let big = index_json(&format!(
+            r#"[{{"path":"plugin.json","sha256":"{sha}","size":1}},{{"path":"a.gif","sha256":"{sha}","size":{}}}]"#,
+            4 * 1024 * 1024 + 1
+        ));
+        assert!(parse_index(&big, &CUSTOM_LIMITS).is_err());
+        let many: Vec<String> = (0..5)
+            .map(|i| format!(r#"{{"path":"a{i}.gif","sha256":"{sha}","size":{}}}"#, 4 * 1024 * 1024))
+            .collect();
+        let total = index_json(&format!(
+            r#"[{{"path":"plugin.json","sha256":"{sha}","size":1}},{}]"#,
+            many.join(",")
+        ));
+        assert!(parse_index(&total, &CUSTOM_LIMITS).is_err());
+    }
+
+    #[test]
+    fn file_contents_must_match_their_extension() {
+        // 资源按文件头认，不只看扩展名：改个扩展名就想把可执行文件、别的格式混进来，一律拒绝。
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+        const JPG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10];
+        const GIF: &[u8] = b"GIF89a\x01\x00";
+        const WEBP: &[u8] = b"RIFF\x10\x00\x00\x00WEBPVP8 ";
+        const MACHO: &[u8] = &[0xCF, 0xFA, 0xED, 0xFE, 7, 0, 0, 1];
+        for (path, bytes) in [
+            ("icon.png", PNG),
+            ("art/photo.jpg", JPG),
+            ("art/photo.JPEG", JPG),
+            ("anim.gif", GIF),
+            ("pic.webp", WEBP),
+            ("bin/run.sh", b"#!/bin/sh\n".as_slice()),
+        ] {
+            check_content(path, bytes, &CUSTOM_LIMITS).unwrap_or_else(|err| panic!("{path}: {err:#}"));
+        }
+        for (path, bytes) in [
+            ("icon.png", JPG),
+            ("photo.jpg", PNG),
+            ("anim.gif", b"GIF is just text".as_slice()),
+            ("pic.webp", b"RIFF\x10\x00\x00\x00AVI LIST".as_slice()),
+            ("photo.jpg", MACHO),
+            ("notes.txt", MACHO),
+            ("tool", MACHO),
+        ] {
+            assert!(check_content(path, bytes, &CUSTOM_LIMITS).is_err(), "{path} 应被拒绝");
+        }
+        // 公开插件中心只认 png，其他图片格式不能借自定义源的规则混进来。
+        check_content("icon.png", PNG, &PUBLIC_LIMITS).unwrap();
+        for (path, bytes) in [("photo.jpg", JPG), ("anim.gif", GIF), ("pic.webp", WEBP)] {
+            assert!(check_content(path, bytes, &PUBLIC_LIMITS).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn disguised_files_are_refused_at_install_time() {
+        // 安装时逐个文件按文件头核对：哈希对得上也不行（索引本身就可能是伪装的人写的）。
+        let root = tmp("disguised");
+        let macho: &[u8] = &[0xCF, 0xFA, 0xED, 0xFE, 7, 0, 0, 1];
+        let files: &[(&str, &[u8])] = &[("plugin.json", MANIFEST.as_bytes()), ("icon.png", macho)];
+        let err = install_into(&listing(files), &root, &record(), &CUSTOM_LIMITS, server(files)).unwrap_err();
+        assert!(format!("{err:#}").contains("icon.png"), "{err:#}");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0, "不能留下任何文件");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1282,7 +1536,7 @@ mod tests {
             ("plugin.json", MANIFEST.as_bytes()),
             ("bin/run.sh", b"#!/bin/sh\necho hi\n"),
         ];
-        let dir = install_into(&listing(files), &root, &record(), server(files)).unwrap();
+        let dir = install_into(&listing(files), &root, &record(), &PUBLIC_LIMITS, server(files)).unwrap();
         assert_eq!(dir, root.join("com.example.memo"));
         assert_eq!(
             std::fs::read_to_string(dir.join("plugin.json")).unwrap(),
@@ -1313,7 +1567,7 @@ mod tests {
             ("plugin.json", MANIFEST.as_bytes()),
             ("bin/run.sh", b"#!/bin/sh\necho XX\n"),
         ];
-        let err = install_into(&listing(files), &root, &record(), server(served)).unwrap_err();
+        let err = install_into(&listing(files), &root, &record(), &PUBLIC_LIMITS, server(served)).unwrap_err();
         assert!(format!("{err:#}").contains("sha256"), "{err:#}");
         assert_eq!(
             std::fs::read_dir(&root).unwrap().count(),
@@ -1328,10 +1582,10 @@ mod tests {
         // 更新失败（这里是清单 id 与索引不符）时，原来能用的版本必须原样保留。
         let root = tmp("keep");
         let files: &[(&str, &[u8])] = &[("plugin.json", MANIFEST.as_bytes())];
-        install_into(&listing(files), &root, &record(), server(files)).unwrap();
+        install_into(&listing(files), &root, &record(), &PUBLIC_LIMITS, server(files)).unwrap();
         let wrong = MANIFEST.replace("com.example.memo", "com.example.other");
         let bad: &[(&str, &[u8])] = &[("plugin.json", wrong.as_bytes())];
-        let err = install_into(&listing(bad), &root, &record(), server(bad)).unwrap_err();
+        let err = install_into(&listing(bad), &root, &record(), &PUBLIC_LIMITS, server(bad)).unwrap_err();
         assert!(format!("{err:#}").contains("com.example.other"), "{err:#}");
         assert_eq!(
             std::fs::read_to_string(root.join("com.example.memo/plugin.json")).unwrap(),
@@ -1347,7 +1601,7 @@ mod tests {
         let root = tmp("traversal");
         let files: &[(&str, &[u8])] =
             &[("plugin.json", MANIFEST.as_bytes()), ("../escape.sh", b"x")];
-        assert!(install_into(&listing(files), &root, &record(), server(files)).is_err());
+        assert!(install_into(&listing(files), &root, &record(), &PUBLIC_LIMITS, server(files)).is_err());
         assert!(!root.parent().unwrap().join("escape.sh").exists());
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         std::fs::remove_dir_all(&root).unwrap();

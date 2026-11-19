@@ -96,6 +96,8 @@ pub struct General {
     pub reset_after_secs: u64,
     pub panel_screen: PanelScreen,
     pub auto_check_updates: bool,
+    /// 每天检查从插件中心 / 插件源安装的插件有没有新版本并自动更新（见 `providers::plugins::autoupdate`）。
+    pub auto_update_plugins: bool,
     /// 界面语言；旧配置没有这个字段时跟随系统。
     pub language: Language,
     /// 匿名使用统计（Umami）与崩溃报告（Sentry）；关掉后两者都不发（见 `telemetry`）。
@@ -111,6 +113,7 @@ impl Default for General {
             reset_after_secs: 90,
             panel_screen: PanelScreen::Mouse,
             auto_check_updates: true,
+            auto_update_plugins: true,
             language: Language::System,
             telemetry: true,
         }
