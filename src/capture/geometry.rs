@@ -205,12 +205,18 @@ pub fn translate(start: Rect, dx: f64, dy: f64, bounds: Rect) -> Rect {
     Rect::new(x, y, start.w, start.h)
 }
 
+/// 保留屏幕的左右和底边，只把工具栏的可用区域移到顶部安全区下方。
+pub fn toolbar_bounds(screen: Rect, top_inset: f64) -> Rect {
+    let top = top_inset.clamp(0.0, screen.h);
+    Rect::new(screen.x, screen.y + top, screen.w, screen.h - top)
+}
+
 /// 工具栏的左上角：默认在选区外的右下方（右边对齐选区右边）；下面放不下就翻到选区上方；
-/// 上下都放不下（选区几乎占满整屏）就放进选区里面的右下角。水平方向始终留在屏幕内。
+/// 上下都放不下（选区几乎占满整屏）就放进选区里面的右下角。选区可以延伸到 `bounds` 的顶边之外。
 pub fn toolbar_origin(sel: Rect, size: (f64, f64), bounds: Rect, gap: f64) -> Point {
     let (w, h) = size;
     let x = (sel.right() - w).clamp(bounds.x, (bounds.right() - w).max(bounds.x));
-    let below = sel.bottom() + gap;
+    let below = (sel.bottom() + gap).max(bounds.y);
     if below + h <= bounds.bottom() {
         return Point::new(x, below);
     }
@@ -456,6 +462,27 @@ mod tests {
         // 选区很窄、贴着左边：工具栏不能伸出屏幕左边。
         let narrow = Rect::new(0.0, 100.0, 40.0, 40.0);
         assert_eq!(toolbar_origin(narrow, size, SCREEN, 6.0).x, 0.0);
+    }
+
+    #[test]
+    fn toolbar_stays_below_the_top_safe_area() {
+        let size = (240.0, 38.0);
+        let bounds = toolbar_bounds(SCREEN, 38.0);
+        let gap = 6.0;
+        let selections = [
+            // 极浅的贴顶选区：即使放在选区下方也要下移到安全区。
+            (Rect::new(0.0, 0.0, 300.0, 12.0), 38.0),
+            // 贴底时翻到上方，但刘海区的空间不能用，因此放进选区右下角。
+            (Rect::new(400.0, 55.0, 300.0, 927.0), 938.0),
+            // 选区几乎占满整屏，包含顶部安全区，工具栏仍完整落在安全区下方。
+            (Rect::new(2.0, 2.0, 1508.0, 978.0), 936.0),
+        ];
+        for (sel, expected_y) in selections {
+            let origin = toolbar_origin(sel, size, bounds, gap);
+            assert_eq!(origin.y, expected_y, "selection: {sel:?}");
+            assert!(origin.y >= bounds.y);
+            assert!(origin.y + size.1 <= SCREEN.bottom());
+        }
     }
 
     #[test]

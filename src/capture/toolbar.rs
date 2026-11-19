@@ -11,6 +11,7 @@ use gpui_kit::*;
 
 use super::Act;
 use super::annotation::{BLOCK_SIZES, COLORS, Editor, Tool, WIDTHS};
+use super::geometry::Rect;
 use crate::i18n::{tr, trf};
 use crate::style::Palette;
 
@@ -103,12 +104,12 @@ pub fn size() -> (f64, f64) {
 }
 
 /// 选项贴在主工具栏旁，空间不足时改放上方。
-pub fn options_offset(top: f64, bottom: f64) -> Pixels {
-    let offset = ROW_HEIGHT + OPTIONS_GAP;
-    if top + f64::from(offset + ROW_HEIGHT) <= bottom {
-        px(offset)
+pub fn options_offset(top: f64, bounds: Rect) -> Pixels {
+    let offset = f64::from(ROW_HEIGHT + OPTIONS_GAP);
+    if top + offset + f64::from(ROW_HEIGHT) <= bounds.bottom() {
+        px(offset as f32)
     } else {
-        px((-top as f32).max(-offset))
+        px((-offset).max(bounds.y - top) as f32)
     }
 }
 

@@ -41,6 +41,8 @@ pub struct Screen {
     pub frame: Rect,
     /// NSScreen.visibleFrame（AppKit 全局坐标，去掉菜单栏和程序坞）。
     pub visible: Rect,
+    /// NSScreen.safeAreaInsets.top（点）。
+    pub safe_area_top: f64,
     pub scale: f64,
     /// 这块屏上的窗口（本屏坐标，从前到后），悬停高亮用。
     pub windows: Vec<Rect>,
@@ -92,6 +94,7 @@ pub fn screens(mtm: MainThreadMarker) -> Vec<Screen> {
                 id,
                 frame: rect(screen.frame()),
                 visible: rect(screen.visibleFrame()),
+                safe_area_top: screen.safeAreaInsets().top,
                 scale: screen.backingScaleFactor(),
                 windows: Vec::new(),
             })
@@ -243,6 +246,7 @@ fn from_fixture(fixture: &Path, main: Option<&Screen>, dir: &Path) -> Result<Vec
             id: main.map_or(0, |main| main.id),
             frame,
             visible: frame,
+            safe_area_top: 0.0,
             scale,
             windows: Vec::new(),
         },

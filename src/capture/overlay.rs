@@ -449,7 +449,10 @@ impl Render for Overlay {
                 root = root.children(handles(sel, &pal));
             }
             if selected && !pressing && !ocr && !busy {
-                let origin = geometry::toolbar_origin(sel, toolbar::size(), bounds, TOOLBAR_GAP);
+                let top_inset = frozen.screen.safe_area_top.max(frozen.visible().y);
+                let toolbar_bounds = geometry::toolbar_bounds(bounds, top_inset);
+                let origin =
+                    geometry::toolbar_origin(sel, toolbar::size(), toolbar_bounds, TOOLBAR_GAP);
                 let entity = cx.entity();
                 root = root.child(
                     div()
@@ -460,7 +463,7 @@ impl Render for Overlay {
                             &session.editor,
                             primary,
                             &self.hex,
-                            toolbar::options_offset(origin.y, bounds.bottom()),
+                            toolbar::options_offset(origin.y, toolbar_bounds),
                             &pal,
                             Rc::new(move |edit, window, cx| {
                                 entity.update(cx, |overlay, cx| {
