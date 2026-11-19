@@ -6,6 +6,20 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-11-19
+
+### Fixed
+
+- The Clipboard History entry on the home screen now shows its subtitle in Chinese when the interface language is Chinese.
+- Messages shown when a built-in feature (MCP Tools, Agent Sessions, Manifest Plugins) is turned off now consistently point to Settings › Plugins › Built-in Features, instead of calling it an extension or plugin.
+
+### 简体中文
+
+#### 修复
+
+- 首页「剪贴板历史」入口的副标题在中文界面下不再显示英文。
+- 内置功能（MCP 工具、Agent 会话、清单插件）关闭时的提示统一指向「设置 › 插件 › 内置功能」，不再把它们叫作「扩展」或「插件」。
+
 ## [0.4.13] - 2026-11-18
 
 ### Added
