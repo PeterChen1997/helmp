@@ -25,8 +25,15 @@ art = Image.open(src).convert("RGBA")
 W, H = art.size
 mask, (ex0, ey0, ex1, ey1), (hx0, hy0, hx1, hy1) = emblem_mask(art)
 
-# ---------- App 图标：以标志为中心裁正方形，标志落在正中 ----------
-cx, cy = (ex0 + ex1) / 2, (ey0 + ey1) / 2
+# ---------- App 图标：以标志的面积重心为中心裁正方形 ----------
+# 不用外框中心：右上角的星芒会把外框中心拉向右上，H 字身就显得偏左偏下（CARM-253）。
+# 按白色像素的加权重心居中，H 在水平方向上看起来正中，星芒的分量也算进去了。
+def centroid(values: list[int]) -> float:
+    return sum(i * v for i, v in enumerate(values)) / sum(values)
+
+
+cx = centroid([sum(mask.crop((x, 0, x + 1, H)).tobytes()) for x in range(W)])
+cy = centroid([sum(mask.crop((0, y, W, y + 1)).tobytes()) for y in range(H)])
 half = int(min(cx, W - cx, cy, H - cy))
 window = art.crop((int(cx - half), int(cy - half), int(cx + half), int(cy + half)))
 
