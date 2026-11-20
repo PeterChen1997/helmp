@@ -276,6 +276,8 @@ pub struct Launcher {
     fresh_list: bool,
     /// 面板为展示结果重新弹出的时刻（见 `RESHOW_GRACE`）；普通唤起时为 None。
     reshown_at: Option<Instant>,
+    /// 最近一次唤起的时刻：唤起后的焦点核对只认自己那一次。
+    shown_at: Option<Instant>,
     scroll: ScrollHandle,
     /// 渲染时记录：第 i 个结果在滚动容器里是第几个子元素（小节标题也占位）。
     row_children: Vec<usize>,
@@ -397,6 +399,7 @@ impl Launcher {
             executed: false,
             fresh_list: false,
             reshown_at: None,
+            shown_at: None,
             scroll: ScrollHandle::new(),
             row_children: Vec::new(),
             lang_generation: crate::i18n::generation(),
@@ -587,6 +590,28 @@ impl Launcher {
         self.input.read(cx).focus_handle(cx).focus(window, cx);
         self.refresh(cx);
         cx.notify();
+        self.check_focus_after_show(window, cx);
+    }
+
+    /// 唤起后核对面板有没有真的拿到键盘，没有就退回非激活面板并上报（见 `panel::verify_focus`）。
+    fn check_focus_after_show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown_at = Instant::now();
+        self.shown_at = Some(shown_at);
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(crate::panel::FOCUS_CHECK_DELAY).await;
+            let _ = this.update_in(cx, |this, window, _| {
+                // 这期间收起过、或又唤起了一次（由那次自己核对）就不管。
+                if !this.visible || this.shown_at != Some(shown_at) {
+                    return;
+                }
+                let before = crate::panel::focus_state(window);
+                let check = crate::panel::verify_focus(window);
+                if check != crate::panel::FocusCheck::Ok {
+                    crate::telemetry::panel_focus_failed(check, this.scope_id(), &before);
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- The launcher panel could appear without taking the keyboard: typing went nowhere and clicking the search box did nothing (reported when opening clipboard history from a browser). If the panel hasn't received the keyboard shortly after it opens, Helmp now takes it back, and reports the case to crash reporting (no search text or clipboard content is sent).
+
+### 简体中文
+
+#### 修复
+
+- 唤起面板后偶尔拿不到键盘：打字没反应、点搜索框也没反应（从浏览器叫出剪贴板历史时遇到）。现在面板打开后若没拿到键盘，Helmp 会把键盘要回来，并把这种情况报给错误监控（不发送搜索内容和剪贴板内容）。
+
 ## [0.4.18] - 2026-11-20
 
 ### Added

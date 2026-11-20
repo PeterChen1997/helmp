@@ -122,9 +122,7 @@ pub fn show(window: &mut Window, cx: &mut App) {
     ensure_text_input(&ns_window);
     // HELMP_SELF_TEST_KEY_WINDOW：自检里需要面板真的成为 key window（测真实按键与输入法）时才设，
     // 会短暂抢焦点；平时自检仍放在屏幕外、不抢键盘。
-    if std::env::var_os("HELMP_SELF_TEST").is_some()
-        && std::env::var_os("HELMP_SELF_TEST_KEY_WINDOW").is_none()
-    {
+    if offscreen_self_test() {
         // 图形自检不能抢用户的键盘：摆在屏幕外，也不成为 key window（按键由自检直接注入）。
         ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
         ns_window.orderFrontRegardless();
@@ -152,6 +150,127 @@ pub fn show(window: &mut Window, cx: &mut App) {
         "panel.show 激活 App 后：is_key={}",
         ns_window.isKeyWindow()
     ));
+}
+
+/// 唤起后多久核对面板有没有真的拿到键盘。激活是异步的：`activate` 刚返回时 App 还没激活，
+/// 正常情况下几十毫秒内就成为 key（自检的 show-latency）。
+pub const FOCUS_CHECK_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// 唤起后的焦点核对结果，见 [`verify_focus`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusCheck {
+    /// 面板已经拿到键盘。
+    Ok,
+    /// 系统没让 Helmp 到前台，已退回非激活面板，键盘回到了面板。
+    Recovered,
+    /// 退回之后面板仍不是 key window。
+    Lost,
+}
+
+/// 键盘按键此刻会不会进面板：面板必须是 key window，并且要么是非激活面板（不需要激活也收键盘），
+/// 要么 Helmp 已激活、且系统当前的输入上下文就是面板输入框的（`input_current`）。
+/// 面板是 key、但 App 没激活时，按键进的是前台那个 App；App 激活了、输入上下文却不是面板的，
+/// 字同样插不进输入框。
+pub fn receives_keys(key: bool, app_active: bool, nonactivating: bool, input_current: bool) -> bool {
+    key && (nonactivating || (app_active && input_current))
+}
+
+/// 面板此刻有没有键盘，见 [`receives_keys`]。
+pub fn has_keyboard(window: &Window) -> bool {
+    ns_window(window).is_some_and(|ns_window| {
+        receives_keys(
+            ns_window.isKeyWindow(),
+            app_is_active(),
+            is_nonactivating(&ns_window),
+            input_context_current(&ns_window),
+        )
+    })
+}
+
+/// 系统当前的文字输入上下文是不是面板第一响应者（GPUIView）的。
+fn input_context_current(ns_window: &NSWindow) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let ours = ns_window
+        .firstResponder()
+        .and_then(|r| r.downcast::<objc2_app_kit::NSView>().ok())
+        .and_then(|view| view.inputContext());
+    match (ours, objc2_app_kit::NSTextInputContext::currentInputContext(mtm)) {
+        (Some(ours), Some(current)) => std::ptr::eq(Retained::as_ptr(&ours), Retained::as_ptr(&current)),
+        _ => false,
+    }
+}
+
+fn app_is_active() -> bool {
+    MainThreadMarker::new()
+        .is_some_and(|mtm| objc2_app_kit::NSApplication::sharedApplication(mtm).isActive())
+}
+
+fn is_nonactivating(ns_window: &NSWindow) -> bool {
+    ns_window
+        .styleMask()
+        .contains(objc2_app_kit::NSWindowStyleMask::NonactivatingPanel)
+}
+
+/// 诊断：面板是不是 key、Helmp 激活没有、是不是退回了非激活面板、前台是哪个 App（bundle id，不含任何内容）。
+pub fn focus_state(window: &Window) -> String {
+    let Some(ns_window) = ns_window(window) else {
+        return "no-ns-window".into();
+    };
+    let front = objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .and_then(|app| app.bundleIdentifier())
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    format!(
+        "key={} app_active={} nonactivating={} input_current={} frontmost={front}",
+        ns_window.isKeyWindow(),
+        app_is_active(),
+        is_nonactivating(&ns_window),
+        input_context_current(&ns_window)
+    )
+}
+
+/// 唤起 [`FOCUS_CHECK_DELAY`] 之后核对面板有没有真的拿到键盘，没有就退回非激活面板（CARM-340）。
+///
+/// 面板唤起时要激活 Helmp（输入法只给激活的 App 组字，见 [`make_activating`]），但激活可能被系统拒绝：
+/// macOS 27 的 WindowServer 只让「用户刚操作过」的 App 到前台，否则记一条
+/// `CPS: Denying Helmp the right to be in front because it is not in the list of permittedFrontASNs`。
+/// 被拒时 `makeKeyAndOrderFront` 照样把面板摆上屏幕，但 Helmp 没激活、面板也不是 key：
+/// 用户看得到面板，打的字却进不去（进了原来的 App）；下次唤起被放行时又正常，所以是偶发。
+/// 这时给面板加回 NonactivatingPanel 再 makeKey：
+/// 非激活面板不需要 App 到前台也能成为 key window（Spotlight 式），键盘回到面板。
+/// 收起时 [`hide`] 去掉这个样式，下次唤起照常先激活 App。窗口和 App 都对、只是系统输入上下文
+/// 不是面板的，就重新设一次第一响应者。两种情况都会经调用方上报 Sentry `panel.not_key`。
+pub fn verify_focus(window: &Window) -> FocusCheck {
+    let Some(ns_window) = ns_window(window) else {
+        return FocusCheck::Lost;
+    };
+    if offscreen_self_test() || !ns_window.isVisible() || has_keyboard(window) {
+        return FocusCheck::Ok;
+    }
+    crate::trace::log(format!("面板唤起后没拿到键盘：{}", focus_state(window)));
+    if ns_window.isKeyWindow() && app_is_active() {
+        // 窗口和 App 都对，只是输入上下文没跟上：重新设一次第一响应者，让 AppKit 重新激活输入上下文。
+        ns_window.makeFirstResponder(None);
+        ensure_text_input(&ns_window);
+    } else {
+        ns_window.setStyleMask(ns_window.styleMask() | objc2_app_kit::NSWindowStyleMask::NonactivatingPanel);
+        ns_window.makeKeyAndOrderFront(None);
+        ensure_text_input(&ns_window);
+    }
+    if has_keyboard(window) {
+        FocusCheck::Recovered
+    } else {
+        FocusCheck::Lost
+    }
+}
+
+/// 图形自检默认把面板摆在屏幕外、不抢键盘（见 [`show`]）。
+fn offscreen_self_test() -> bool {
+    std::env::var_os("HELMP_SELF_TEST").is_some()
+        && std::env::var_os("HELMP_SELF_TEST_KEY_WINDOW").is_none()
 }
 
 /// GPUI 的窗口内容视图是一层普通 NSView 容器，真正接收文字输入的 `GPUIView` 在它里面。
@@ -376,6 +495,10 @@ pub fn hide(window: &mut Window) {
     match ns_window(window) {
         Some(ns_window) => {
             ns_window.orderOut(None);
+            // 唤起时若退回过非激活面板（见 verify_focus），恢复成激活型，下次唤起照常激活 App、输入法能组字。
+            if is_nonactivating(&ns_window) {
+                ns_window.setStyleMask(panel_style_mask(ns_window.styleMask()));
+            }
             restore_previous_app(&ns_window);
         }
         // 拿不到原生窗口说明平台层变了，大声报出来而不是假装隐藏成功。
@@ -557,6 +680,22 @@ mod tests {
         // 哪怕以后 GPUI 带上了可关闭 / 最小化 / 缩放，这些会长出按钮的样式也都去掉。
         let mask = panel_style_mask(gpui_popup | M::Closable | M::Miniaturizable | M::Resizable);
         assert_eq!(mask & (M::Closable | M::Miniaturizable | M::Resizable | M::Titled), M::Borderless);
+    }
+
+    #[test]
+    fn keys_reach_the_panel_only_when_it_really_has_the_keyboard() {
+        // 正常唤起：面板是 key、Helmp 已激活、系统输入上下文是面板的。
+        assert!(receives_keys(true, true, false, true));
+        // CARM-340：系统没让 Helmp 到前台，面板摆上了屏幕但不是 key —— 用户看得到面板却打不了字，必须判为没键盘。
+        assert!(!receives_keys(false, false, false, false));
+        // 面板是 key 但 App 没激活：按键进的是前台那个 App。
+        assert!(!receives_keys(true, false, false, false));
+        // 窗口、App 都对，输入上下文却不是面板的：字插不进输入框。
+        assert!(!receives_keys(true, true, false, false));
+        // 退回非激活面板后：不需要 App 激活也收键盘（Spotlight 式），这正是兜底要达到的状态。
+        assert!(receives_keys(true, false, true, false));
+        // 非激活面板不是 key 时仍然没有键盘（锁屏时就是这样）。
+        assert!(!receives_keys(false, false, true, false));
     }
 
     #[test]

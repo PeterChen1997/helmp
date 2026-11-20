@@ -174,6 +174,25 @@ fn note_size_bucket(width: f64) -> &'static str {
     }
 }
 
+/// 面板唤起后没拿到键盘（CARM-340，见 `panel::verify_focus`）：Sentry 记 `panel.not_key`，Umami 记 `panel_focus_fallback`。
+/// 只带核对结果、范围 id 和焦点状态（key / 激活 / 前台 App 的 bundle id），不带搜索词与剪贴板内容。
+/// 一次运行最多报 20 次，免得某台机器上每次唤起都被拒时刷屏。
+pub fn panel_focus_failed(check: crate::panel::FocusCheck, scope: Option<&str>, state: &str) {
+    static REPORTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let recovered = check == crate::panel::FocusCheck::Recovered;
+    let scope = scope.unwrap_or("root");
+    eprintln!("helmp: 面板唤起后没拿到键盘（recovered={recovered} scope={scope} {state}）");
+    if REPORTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 20 {
+        return;
+    }
+    let err = anyhow::anyhow!("唤起后面板不是 key window：recovered={recovered} scope={scope} {state}");
+    report("panel.not_key", &err);
+    track(
+        "panel_focus_fallback",
+        json!({ "recovered": recovered, "scope": scope }),
+    );
+}
+
 /// 从剪贴板历史写回一条文本：`mode` 为 `paste` / `copy` / `plain_text`，`formats` 是一起写回的富文本种类
 /// （来自固定表的短名，如 `rtf+html`；没有为 `plain`）。只发这两个枚举，不发内容。
 pub fn clipboard_paste(mode: &'static str, formats: &[&'static str]) {

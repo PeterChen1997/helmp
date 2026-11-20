@@ -248,6 +248,11 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         };
 
         report("initial".into(), cx);
+        if let Ok(rounds) = std::env::var("HELMP_SELF_TEST_FOCUS_LOOP") {
+            focus_loop(window, launcher.clone(), &rounds, cx).await;
+            cx.update(|cx| cx.quit());
+            return;
+        }
         // 全局快捷键真实的注册结果（每个快捷键位一项）：确认「截图」「截图识别文字」都各自注册上了。
         println!("self-test hotkeys: {}", hotkey::describe_active());
 
@@ -740,6 +745,67 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
         cx.update(|cx| cx.quit());
     })
     .detach();
+}
+
+/// 自检：反复「叫出面板 → 用真实 HID 按键打一个字 → 收起」，核对每次面板都真的拿到键盘（CARM-340）。
+/// `rounds` 是轮数；`HELMP_SELF_TEST_FOCUS_COMMAND` 是 `clipboard`（默认，⇧⌘V 的命令）或 `toggle`（⌥Space）。
+/// 每轮打印焦点状态（key / 激活 / 输入上下文 / 是否退回了非激活面板）。需要辅助功能权限与 HELMP_SELF_TEST_KEY_WINDOW。
+/// 面板没拿到键盘时绝不发字（免得打进别的 App）。
+async fn focus_loop(window: AnyWindowHandle, launcher: Entity<Launcher>, rounds: &str, cx: &mut AsyncApp) {
+    use std::time::{Duration, Instant};
+
+    let rounds: u32 = rounds.parse().unwrap_or(30);
+    let command = match std::env::var("HELMP_SELF_TEST_FOCUS_COMMAND").as_deref() {
+        Ok("toggle") => hotkey::Command::Toggle,
+        _ => hotkey::Command::Scope("clipboard"),
+    };
+    if !permissions::accessibility_trusted() {
+        println!("self-test focus: Helmp 没有辅助功能权限，发不了按键");
+        return;
+    }
+    let has_keyboard = |cx: &mut AsyncApp| {
+        window
+            .update(cx, |_, window, _| panel::has_keyboard(window))
+            .unwrap_or(false)
+    };
+    let mut passed = 0;
+    for round in 1..=rounds {
+        let started = Instant::now();
+        cx.update(|cx| hotkey::execute(command, cx));
+        while !has_keyboard(cx) && started.elapsed() < Duration::from_millis(1500) {
+            cx.background_executor().timer(Duration::from_millis(10)).await;
+        }
+        let ready_ms = started.elapsed().as_millis();
+        let (visible, scope) =
+            launcher.read_with(cx, |launcher, _| (launcher.is_visible(), launcher.scope_id().map(str::to_string)));
+        let keyboard = has_keyboard(cx);
+        let typed = if keyboard {
+            post_hid_key('x');
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            launcher.read_with(cx, |launcher, _| launcher.query().ends_with('x'))
+        } else {
+            false
+        };
+        let state = window
+            .update(cx, |_, window, _| panel::focus_state(window))
+            .unwrap_or_default();
+        let ok = visible && typed;
+        passed += u32::from(ok);
+        println!(
+            "self-test focus {round}: {} visible={visible} scope={scope:?} keyboard={keyboard} ready={ready_ms}ms typed={typed} {state}",
+            if ok { "ok" } else { "FAIL" },
+        );
+        let launcher = launcher.clone();
+        let _ = window.update(cx, move |_, window, cx| {
+            launcher.update(cx, |launcher, cx| {
+                if launcher.is_visible() {
+                    launcher.hide(window, cx);
+                }
+            })
+        });
+        cx.background_executor().timer(Duration::from_millis(400)).await;
+    }
+    println!("self-test focus summary: {passed}/{rounds} ok");
 }
 
 /// 自检：从 HID 层发一个真实按键（keyDown + keyUp），和物理键盘一样经过系统输入法（豆包组字等）。
