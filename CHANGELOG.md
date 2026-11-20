@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-11-20
+
 ### Fixed
 
 - The launcher panel could appear without taking the keyboard: typing went nowhere and clicking the search box did nothing (reported when opening clipboard history from a browser). If the panel hasn't received the keyboard shortly after it opens, Helmp now takes it back, and reports the case to crash reporting (no search text or clipboard content is sent).
