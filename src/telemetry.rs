@@ -253,6 +253,29 @@ pub fn plugin_notification_permission(granted: bool) {
     track("plugin_notification_permission", json!({ "granted": granted }));
 }
 
+/// 插件主题生效（每天最多一次）：是不是按日期自动换上的、有没有背景图。不发插件 id 和主题名。
+pub fn plugin_theme_applied(dated: bool, image: bool) {
+    track(
+        "plugin_theme_applied",
+        json!({ "dated": dated, "image": image }),
+    );
+}
+
+/// 用户在「设置 › 外观」里选了主题：`plugin` = 插件提供的，否则是默认配色。不发插件 id。
+pub fn plugin_theme_selected(plugin: bool) {
+    track("plugin_theme_select", json!({ "plugin": plugin }));
+}
+
+/// 打开 / 关掉「按日期自动切换主题」。
+pub fn plugin_theme_by_date(enabled: bool) {
+    track("plugin_theme_by_date", json!({ "enabled": enabled }));
+}
+
+/// 点了「今天不用」（`skip`）或「今天也用」。
+pub fn plugin_theme_skip_today(skip: bool) {
+    track("plugin_theme_skip_today", json!({ "skip": skip }));
+}
+
 /// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceEvent {

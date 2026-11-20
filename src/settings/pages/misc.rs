@@ -6,6 +6,7 @@ use gpui_kit::*;
 
 use super::display_path;
 use crate::config::{self, Appearance};
+use crate::providers::plugins::{self, greeting, theme};
 use crate::i18n::{tr, trf};
 use crate::settings::model::{self, AGENT_SOURCES, APPEARANCE_OPTIONS, OCR_LANGUAGES};
 use crate::settings::widgets;
@@ -338,7 +339,8 @@ impl SettingsView {
         pal: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let current = config::get().appearance;
+        let config = config::get();
+        let current = config.appearance;
         let mut tiles = div().flex().gap(px(16.));
         for (appearance, label_zh, label_en) in APPEARANCE_OPTIONS {
             let label = tr(label_zh, label_en);
@@ -383,29 +385,284 @@ impl SettingsView {
                     ),
             );
         }
-        div()
-            .flex()
-            .flex_col()
+
+        let themes = theme::available(&config, &plugins::registry::current());
+        let today = greeting::local_date(chrono::Utc::now(), &chrono::Local);
+        let selected = theme::selected_available(&config, &themes);
+        let active = theme::resolve(&config, &themes, today);
+        let selected_name = selected
+            .as_ref()
+            .and_then(|key| themes.iter().find(|theme| theme.key == *key))
+            .map_or_else(|| tr("默认", "Default").to_string(), |theme| theme.name.clone());
+
+        let mut page = div().flex().flex_col();
+        if config.theme.by_date
+            && let Some((dated, until)) = theme::dated_today(&themes, today)
+        {
+            page = page.child(self.theme_date_banner(
+                dated,
+                until,
+                &selected_name,
+                theme::skipped_today(&config, today),
+                today,
+                pal,
+                cx,
+            ));
+        }
+        page = page
+            .child(widgets::group_header(tr("明暗", "Light and Dark"), pal))
             .child(widgets::group(
-                vec![
-                    div()
-                        .px(px(14.))
-                        .py(px(16.))
-                        .child(tiles)
-                        .into_any_element(),
-                ],
+                vec![div().px(px(14.)).py(px(16.)).child(tiles).into_any_element()],
                 pal,
             ))
-            .child(widgets::help_text(
+            .child(widgets::group_header(
                 tr(
-                    "影响启动器面板、设置窗口与引导窗口。跟随系统时随「系统设置 › 外观」自动切换。",
-                    "Applies to the launcher panel, Settings and the welcome window. Auto follows System Settings › Appearance.",
+                    "主题 · 只换配色，明暗仍按上面的设置",
+                    "Theme · changes colors only; light and dark follow the setting above",
                 ),
                 pal,
+            ));
+
+        let live = active.as_ref().filter(|active| active.dated).map(|active| active.theme.key.clone());
+        let mut cards = div().flex().flex_wrap().gap(px(10.)).p(px(10.));
+        cards = cards.child(self.theme_card(
+            "default".into(),
+            tr("默认", "Default").into(),
+            tr("Helmp 内置", "Built into Helmp").into(),
+            (style::light(), style::dark()),
+            (None, None),
+            selected.is_none(),
+            false,
+            None,
+            pal,
+            cx,
+        ));
+        for theme in &themes {
+            let mut subtitle = theme.plugin_name.clone();
+            if let Some(range) = theme.dates.first() {
+                subtitle = format!("{subtitle} · {}", range.describe());
+            }
+            cards = cards.child(self.theme_card(
+                theme.key.clone().into(),
+                theme.name.clone().into(),
+                subtitle.into(),
+                (
+                    style::themed(style::light(), &theme.light),
+                    style::themed(style::dark(), &theme.dark),
+                ),
+                (theme.image_light.clone(), theme.image_dark.clone()),
+                selected.as_deref() == Some(theme.key.as_str()),
+                live.as_deref() == Some(theme.key.as_str()),
+                Some(theme.key.clone()),
+                pal,
+                cx,
+            ));
+        }
+        page = page.child(widgets::group(vec![cards.into_any_element()], pal));
+
+        if themes.iter().any(|theme| !theme.dates.is_empty()) {
+            page = page.child(widgets::group(
+                vec![
+                    widgets::row(
+                        widgets::label_with_help(
+                            tr("按日期自动切换主题", "Switch themes by date"),
+                            tr(
+                                "到日期自动换上带日期的主题，过后回到你选的主题",
+                                "Dated themes switch on by themselves on their days, then hand back to your choice",
+                            ),
+                            pal,
+                        ),
+                        widgets::switch(
+                            "theme-by-date",
+                            config.theme.by_date,
+                            tr("按日期自动切换主题", "Switch themes by date"),
+                            pal,
+                            cx.listener(|this, on: &bool, window, cx| {
+                                let on = *on;
+                                this.save(cx, |c| c.theme.by_date = on);
+                                crate::telemetry::plugin_theme_by_date(on);
+                                sync_component_theme(window, cx);
+                                cx.refresh_windows();
+                            }),
+                        ),
+                    )
+                    .into_any_element(),
+                ],
+                pal,
+            ));
+        }
+        page.child(widgets::help_text(
+            if themes.is_empty() {
+                tr(
+                    "影响启动器面板、设置窗口与引导窗口。跟随系统时随「系统设置 › 外观」自动切换。安装提供主题的插件后，可以在这里选择。",
+                    "Applies to the launcher panel, Settings and the welcome window. Auto follows System Settings › Appearance. Themes from plugins you install show up here.",
+                )
+            } else {
+                tr(
+                    "影响启动器面板、设置窗口与引导窗口。主题来自已启用的插件，停用或卸载插件后回到默认配色。",
+                    "Applies to the launcher panel, Settings and the welcome window. Themes come from enabled plugins; disabling or removing the plugin returns to the default colors.",
+                )
+            },
+            pal,
+        ))
+        .into_any_element()
+    }
+
+    /// 日期主题今天生效时，页面顶部的说明条：「今天不用」只管今天，点错了可以「今天也用」。
+    #[allow(clippy::too_many_arguments)]
+    fn theme_date_banner(
+        &self,
+        dated: &theme::Available,
+        until: chrono::NaiveDate,
+        selected_name: &str,
+        skipped: bool,
+        today: chrono::NaiveDate,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let back = until
+            .succ_opt()
+            .map(|day| day.format("%m-%d").to_string())
+            .unwrap_or_default();
+        let (title, detail, button) = if skipped {
+            (
+                trf!("今天不用「{}」", "Not using \u{201c}{}\u{201d} today", dated.name),
+                tr("明天起照常按日期换上。", "It switches on again by date tomorrow.").to_string(),
+                tr("今天也用", "Use it today"),
+            )
+        } else {
+            (
+                trf!(
+                    "今天在「{}」的生效日期内，已自动换上",
+                    "\u{201c}{}\u{201d} is on today because of its dates",
+                    dated.name
+                ),
+                trf!(
+                    "{back} 起恢复你选的「{selected_name}」。",
+                    "Your choice (\u{201c}{selected_name}\u{201d}) comes back on {back}."
+                ),
+                tr("今天不用", "Not today"),
+            )
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .mb(px(18.))
+            .px(px(14.))
+            .py(px(10.))
+            .rounded(px(10.))
+            .bg(pal.accent.opacity(0.12))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(pal.fg)
+                            .child(title),
+                    )
+                    .child(widgets::help_text(detail, pal)),
+            )
+            .child(widgets::push_button(
+                "theme-skip-today",
+                button,
+                false,
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    let skip = !skipped;
+                    this.save(cx, |c| {
+                        c.theme.skip_date = skip.then(|| today.to_string());
+                    });
+                    crate::telemetry::plugin_theme_skip_today(skip);
+                    sync_component_theme(window, cx);
+                    cx.refresh_windows();
+                }),
             ))
             .into_any_element()
     }
 
+    /// 一张主题卡片：缩略图左浅右深（用主题配色画的迷你面板），下面是名字和来源。
+    #[allow(clippy::too_many_arguments)]
+    fn theme_card(
+        &self,
+        id: SharedString,
+        name: SharedString,
+        subtitle: SharedString,
+        (light, dark): (Palette, Palette),
+        (image_light, image_dark): (Option<std::path::PathBuf>, Option<std::path::PathBuf>),
+        selected: bool,
+        live: bool,
+        key: Option<String>,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("theme-{id}")))
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .w(px(166.))
+            .p(px(6.))
+            .rounded(px(10.))
+            .border_2()
+            .border_color(if selected { pal.accent } else { transparent_black() })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                let key = key.clone();
+                crate::telemetry::plugin_theme_selected(key.is_some());
+                this.save(cx, |c| c.theme.selected = key);
+                sync_component_theme(window, cx);
+                cx.refresh_windows();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .h(px(84.))
+                    .rounded(px(7.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(pal.separator)
+                    .child(theme_thumb_half(&light, image_light))
+                    .child(theme_thumb_half(&dark, image_dark)),
+            )
+            .child(
+                div()
+                    .mt(px(2.))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(pal.fg)
+                    .truncate()
+                    .child(name),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .line_height(px(15.))
+                    .text_color(pal.muted)
+                    .child(subtitle),
+            )
+            .when(live, |card| {
+                card.child(
+                    div()
+                        .absolute()
+                        .top(px(10.))
+                        .right(px(10.))
+                        .px(px(6.))
+                        .rounded(px(5.))
+                        .bg(gpui_kit::rgba(0x000000a6))
+                        .text_size(px(10.5))
+                        .text_color(gpui_kit::rgba(0xffffffff))
+                        .child(tr("生效中", "On now")),
+                )
+            })
+            .into_any_element()
+    }
     pub(in crate::settings) fn render_about(
         &mut self,
         pal: &Palette,
@@ -607,4 +864,51 @@ fn update_rows(pal: &Palette) -> Vec<AnyElement> {
         );
     }
     rows
+}
+
+/// 主题缩略图的一半：用这套配色画一个迷你面板（搜索栏、选中行、两行文字），有背景图就铺在搜索栏里。
+fn theme_thumb_half(pal: &Palette, image: Option<std::path::PathBuf>) -> Div {
+    let line = |color: Hsla, width: f32| div().h(px(3.)).w(relative(width)).rounded(px(2.)).bg(color);
+    let base = Hsla { a: 1., ..pal.panel };
+    let mut bar = div()
+        .relative()
+        .flex()
+        .items_center()
+        .h(px(20.))
+        .px(px(7.))
+        .border_b_1()
+        .border_color(pal.separator);
+    if let Some(path) = image {
+        bar = bar.child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .overflow_hidden()
+                .child(img(path).size_full().object_fit(ObjectFit::Cover))
+                .child(div().absolute().top_0().left_0().size_full().bg(Hsla { a: 0.55, ..base })),
+        );
+    }
+    div()
+        .flex_1()
+        .h_full()
+        .flex()
+        .flex_col()
+        .bg(base)
+        .child(bar.child(line(pal.muted, 0.6)))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .mx(px(4.))
+                .mt(px(6.))
+                .h(px(14.))
+                .px(px(4.))
+                .rounded(px(3.))
+                .bg(pal.selection)
+                .child(line(pal.selection_fg, 0.55)),
+        )
+        .child(div().flex().flex_col().gap(px(3.)).mx(px(8.)).mt(px(6.)).child(line(pal.fg, 0.5)).child(line(pal.muted, 0.7)))
+        .child(div().flex().flex_col().gap(px(3.)).mx(px(8.)).mt(px(6.)).child(line(pal.fg, 0.4)).child(line(pal.muted, 0.6)))
 }

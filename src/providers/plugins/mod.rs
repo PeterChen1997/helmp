@@ -29,6 +29,7 @@ pub mod secrets;
 pub mod sources;
 pub mod submit;
 pub mod template;
+pub mod theme;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};

@@ -45,6 +45,8 @@ sha1 = "0.10"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4", "v7"] }
 png = "0.18"
+# 插件主题：校验时读背景图的平均颜色估算对比度（GPUI 已经带了同一版本和这些格式）。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # MCP 客户端：只读导入 Codex 的 ~/.codex/config.toml。
 toml = "1"
 dispatch2 = "0.3"

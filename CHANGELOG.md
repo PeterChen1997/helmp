@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Plugins can provide color themes. Declare `themes` in `plugin.json` with a light and a dark set of four colors (background, text, accent, selection), an optional image shown behind the search bar, and optional dates. Pick a theme in Settings › Appearance, under Light / Dark / Auto: a theme only changes colors, for the launcher panel, Settings and the welcome window. A theme with dates (`MM-DD` ranges every year, wrapping over New Year if needed, or `YYYY-MM-DD` ranges) switches on by itself during them and hands back to your choice afterwards; Settings says which theme is on and until when, offers "Not today", and "Switch themes by date" turns this off. Turning the plugin off or uninstalling it returns to the default colors right away. Validation rejects colors and images that would make text hard to read and says by how much. Themes are a permission you confirm when turning the plugin on. See the plugin docs and `examples/plugins/com.example.seasonal-themes`.
+
+### 简体中文
+
+#### 新增
+
+- 插件可以提供界面主题。在 `plugin.json` 里声明 `themes`：浅色、深色各一套四个颜色（底色、文字、强调色、选中色），可选一张铺在搜索栏后面的图片，可选生效日期。在「设置 › 外观」里「跟随系统 / 浅色 / 深色」下面选主题：主题只换配色，启动器面板、设置窗口、引导窗口都会换上。带日期的主题（`MM-DD` 每年重复，可以跨年；或 `YYYY-MM-DD` 只那一段）到日子自动换上，过后恢复你选的主题；设置里会说明哪个主题生效、到哪天，可以「今天不用」，「按日期自动切换主题」开关可以整个关掉。停用或卸载插件后马上回到默认配色。校验会拦下让文字看不清的配色和图片，并说明差多少。主题是一项权限，启用插件时确认。详见插件文档和 `examples/plugins/com.example.seasonal-themes`。
+
 ## [0.4.17] - 2026-11-20
 
 ### Added

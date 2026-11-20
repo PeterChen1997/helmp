@@ -199,6 +199,7 @@ fn notes_quit_self_test(cx: &mut App, append: String) {
 /// - `HELMP_SELF_TEST_AGENT_CONFIRM`：可选，`<查询>|<结果 id>`，弹出 agent 请求执行的确认页。
 /// - `HELMP_SELF_TEST_SETTINGS`：可选，在屏幕外打开设置窗口的某一页（页面名中英文都行），
 ///   之后的按键、`click:` / `scroll:` 和 `snap:` 都作用于设置窗口。
+/// - `HELMP_SELF_TEST_ONBOARDING`：可选，在屏幕外打开引导窗口，之后的 `snap:` 截它。
 /// - 截图界面（快捷键 `screenshot` / `screenshot-capture` 或 `HELMP_SELF_TEST_KEYS` 里的操作打开）开着时，
 ///   按键和鼠标送给它（遮罩 → 识别结果 → 最新的钉图），每步之后多打印一段 `capture=…` 状态。
 ///   配合 `HELMP_CAPTURE_FIXTURE=<png>` 用一张图代替真实截屏（见 src/capture/freeze.rs）。
@@ -231,6 +232,12 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     }
                     // 面板不能有标题栏和红绿灯按钮（见 panel::panel_style_mask）。
                     println!("self-test panel-chrome {label}: {}", panel::chrome_state(window));
+                    // 生效的插件主题（没有时是默认配色）。
+                    let theme = providers::plugins::theme::current().map_or_else(
+                        || "default".to_string(),
+                        |active| format!("{} dated={}", active.theme.key, active.dated),
+                    );
+                    println!("self-test theme {label}: {theme}");
                 })
                 .expect("launcher window gone");
         };
@@ -333,6 +340,15 @@ fn self_test(cx: &mut App, window: AnyWindowHandle, launcher: Entity<Launcher>, 
                     }
                 }
                 None => println!("self-test 没有这个设置页：{name}"),
+            }
+        }
+        // HELMP_SELF_TEST_ONBOARDING=1：在屏幕外打开引导窗口，之后的截图作用于它（同上）。
+        if std::env::var_os("HELMP_SELF_TEST_ONBOARDING").is_some() {
+            cx.update(onboarding::show);
+            cx.background_executor().timer(settle).await;
+            match cx.update(|cx| onboarding::window_handle(cx)) {
+                Some(handle) => target = handle,
+                None => println!("self-test 引导窗口没有打开"),
             }
         }
         let settings_target = target;

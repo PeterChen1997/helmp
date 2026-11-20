@@ -33,6 +33,8 @@ pub struct Config {
     #[serde(default)]
     pub devtools: DevToolsConfig,
     pub appearance: Appearance,
+    /// 插件提供的界面主题（只换配色，浅 / 深仍按 `appearance`），见 `providers::plugins::theme`。
+    pub theme: ThemeConfig,
     /// 额外的脚本目录（默认目录 `<data_dir>/scripts` 总是包含）。
     pub script_dirs: Vec<String>,
     /// 清单插件（`plugin.json`）按插件 id 的启用状态、授权与非密钥偏好设置。密钥只在钥匙串。
@@ -73,6 +75,7 @@ impl Default for Config {
             files: FilesConfig::default(),
             devtools: DevToolsConfig::default(),
             appearance: Appearance::System,
+            theme: ThemeConfig::default(),
             script_dirs: Vec::new(),
             plugins: BTreeMap::new(),
             mcp: Default::default(),
@@ -503,6 +506,30 @@ pub struct McpServerConfig {
 pub struct DevToolsConfig {
     /// 「公网 IP」只在回车时请求这个地址（返回纯文本 IP）。空 = https://api.ipify.org。
     pub public_ip_url: String,
+}
+
+/// 「设置 › 外观」里的主题选择。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ThemeConfig {
+    /// 用户选的主题：`插件 id/主题 id`；None = 默认配色。插件停用后仍记着，重新启用时恢复。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected: Option<String>,
+    /// 声明了日期的主题到日子自动换上、过后恢复。
+    pub by_date: bool,
+    /// 点了「今天不用」的那天（本机日期 `YYYY-MM-DD`）：这天不按日期换主题。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_date: Option<String>,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            selected: None,
+            by_date: true,
+            skip_date: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -2683,7 +2683,7 @@ impl NoteWindow {
                 .bg(pal.accent)
                 .text_size(px(10.5))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(gpui_kit::white())
+                .text_color(pal.accent_fg)
                 .when(grip_on_left, |el| el.left(px(20.)))
                 .when(!grip_on_left, |el| el.right(px(20.)))
                 .child(format!("{:.0} × {:.0}", frame.w, frame.h))

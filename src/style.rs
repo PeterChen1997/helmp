@@ -1,9 +1,11 @@
 //! 设计稿配色（macOS Tahoe 原生，见 design/canvas 的视觉规范便签）。浅色、深色两套，
-//! 按窗口外观和「设置 › 外观」选择。启动器面板、设置窗口、引导窗口共用。
+//! 按窗口外观和「设置 › 外观」选择；插件主题生效时换成主题的配色（`themed`）。
+//! 启动器面板、设置窗口、引导窗口共用。
 
 use gpui_kit::*;
 
 use crate::config::Appearance;
+use crate::providers::plugins::theme::{Colors, Rgb};
 use crate::provider::{Tint, Tone};
 
 #[derive(Clone, Copy)]
@@ -28,6 +30,8 @@ pub struct Palette {
     pub card: Hsla,
     pub control: Hsla,
     pub accent: Hsla,
+    /// 强调色底上的文字（主按钮、角标）。
+    pub accent_fg: Hsla,
     pub danger: Hsla,
 }
 
@@ -53,6 +57,7 @@ pub fn light() -> Palette {
         card: c(0xffffff99),
         control: c(0xffffffff),
         accent: c(0x0b63e5ff),
+        accent_fg: c(0xffffffff),
         danger: c(0xb3261eff),
     }
 }
@@ -75,6 +80,7 @@ pub fn dark() -> Palette {
         card: c(0xffffff12),
         control: c(0x3a3a3eff),
         accent: c(0x3b8bffff),
+        accent_fg: c(0xffffffff),
         danger: c(0xff6b5eff),
     }
 }
@@ -89,10 +95,34 @@ pub fn palette(window: &Window) -> Palette {
             _ => light(),
         },
     };
+    // 插件主题只换配色，浅 / 深仍按上面的设置（见 providers::plugins::theme）。
+    if let Some(active) = crate::providers::plugins::theme::current() {
+        pal = themed(pal, active.theme.colors(pal.dark));
+    }
     // 液态玻璃自己就保证了文字可读；面板再铺七成多的底色会把折射和高光盖住，调淡一些。
     if crate::panel::liquid_glass_available() {
-        pal.panel = if pal.dark { c(0x26262999) } else { c(0xf6f6f880) };
+        pal.panel.a = if pal.dark { 0x99 as f32 / 255. } else { 0x80 as f32 / 255. };
     }
+    pal
+}
+
+/// 把插件主题的配色套到浅 / 深色上：清单只给四个令牌，半透明度沿用默认配色，其余颜色由令牌推导；
+/// 中性的叠色（分隔线、按键底、卡片）保持不变。
+pub fn themed(mut pal: Palette, colors: &Colors) -> Palette {
+    let with_alpha = |rgb: Rgb, alpha: u32| c(rgb.hex() << 8 | alpha);
+    let opaque = |rgb: Rgb| with_alpha(rgb, 0xff);
+    let (bg, fg) = (colors.background, colors.foreground);
+    pal.panel = with_alpha(bg, if pal.dark { 0xc7 } else { 0xbd });
+    pal.window = with_alpha(bg, if pal.dark { 0xf2 } else { 0xf0 });
+    pal.sidebar = with_alpha(bg.mix(fg, 0.06), 0xb3);
+    pal.fg = opaque(fg);
+    pal.muted = opaque(colors.muted);
+    pal.key_fg = opaque(fg.mix(bg, 0.2));
+    pal.selection = opaque(colors.selection);
+    pal.selection_fg = opaque(colors.selection_fg);
+    pal.selection_muted = with_alpha(colors.selection_fg, if pal.dark { 0xd9 } else { 0xe0 });
+    pal.accent = opaque(colors.accent);
+    pal.accent_fg = opaque(colors.accent_fg);
     pal
 }
 

@@ -231,6 +231,11 @@ fn toggle_glyphs() -> Option<String> {
         .map(|hotkey| crate::hotkey::glyphs(&hotkey))
 }
 
+/// 已打开的引导窗口（图形自检截图用）。
+pub fn window_handle(cx: &App) -> Option<AnyWindowHandle> {
+    cx.try_global::<OnboardingWindow>().map(|global| global.0)
+}
+
 /// 运行中再次打开 Helmp：引导还没做完就回到引导窗口，否则直接唤起面板。
 pub fn reopen(cx: &mut App) {
     if crate::config::get().onboarding_done {
@@ -250,7 +255,11 @@ fn show_panel(cx: &mut App) {
 
 /// 显示（或前置）引导窗口。
 pub fn show(cx: &mut App) {
-    cx.activate(true);
+    // 图形自检时摆在屏幕外、不激活（与设置窗口相同，见 settings::self_test_offscreen）。
+    let offscreen = crate::settings::self_test_offscreen();
+    if !offscreen {
+        cx.activate(true);
+    }
     if let Some(handle) = cx.try_global::<OnboardingWindow>().map(|global| global.0)
         && handle
             .update(cx, |_, window, _| window.activate_window())
@@ -264,13 +273,13 @@ pub fn show(cx: &mut App) {
             appears_transparent: true,
             traffic_light_position: Some(point(px(16.), px(16.))),
         }),
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            WINDOW_SIZE,
-            cx,
-        ))),
-        focus: true,
-        show: true,
+        window_bounds: Some(WindowBounds::Windowed(if offscreen {
+            Bounds::new(point(px(-10000.), px(-10000.)), WINDOW_SIZE)
+        } else {
+            Bounds::centered(None, WINDOW_SIZE, cx)
+        })),
+        focus: !offscreen,
+        show: !offscreen,
         kind: WindowKind::Normal,
         is_movable: true,
         is_resizable: false,
@@ -285,7 +294,12 @@ pub fn show(cx: &mut App) {
             cx.set_global(OnboardingWindow(handle));
             let _ = handle.update(cx, |_, window, cx| {
                 sync_component_theme(window, cx);
-                window.activate_window();
+                if !offscreen {
+                    window.activate_window();
+                } else if let Some(ns_window) = crate::panel::ns_window(window) {
+                    ns_window.setFrameOrigin(objc2_foundation::NSPoint::new(-10000.0, -10000.0));
+                    ns_window.orderFrontRegardless();
+                }
             });
         }
         Err(err) => eprintln!("helmp: 打开引导窗口失败：{err:#}"),
@@ -413,7 +427,7 @@ impl Onboarding {
                     .font_weight(FontWeight::MEDIUM)
                     .when(primary, |el| {
                         el.bg(pal.accent)
-                            .text_color(pal.selection_fg)
+                            .text_color(pal.accent_fg)
                             .hover(|el| el.opacity(0.9))
                     })
                     .when(!primary, |el| {
@@ -553,7 +567,7 @@ impl Render for Onboarding {
                     .rounded(px(7.))
                     .cursor_pointer()
                     .bg(pal.accent)
-                    .text_color(pal.selection_fg)
+                    .text_color(pal.accent_fg)
                     .font_weight(FontWeight::MEDIUM)
                     .hover(|el| el.opacity(0.9))
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {

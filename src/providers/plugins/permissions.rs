@@ -3,6 +3,8 @@
 //! - 打开：open 动作的 scheme（https、obsidian…）；地址整段是模板时为「任意链接或文件」。
 //! - 剪贴板读取（声明了 clipboard.read）、写入（copy / paste）、模拟按键（paste）、运行脚本（script / list）。
 //! - 在搜索框显示寄语（声明了 greetings）。
+//! - 提供界面主题（声明了 themes；带日期的会自动换上，单独一个权限键）。
+//! - 提供界面主题（声明了 themes；带日期的会自动换上）。
 //! - 在后台定时运行脚本（声明了 schedules）、发送系统通知（声明了 notifications）。
 //!
 //! 用户插件启用前把这些列给用户确认；确认过的权限键（`keys`）存进配置，清单权限变了要重新确认。
@@ -30,6 +32,10 @@ pub struct Permissions {
     pub background: bool,
     /// 发送系统通知（清单的 permissions 声明了 `notifications`）。
     pub notify: bool,
+    /// 提供界面主题（清单声明了 `themes`）。
+    pub theme: bool,
+    /// 有带日期的主题：到日子会自动换上。
+    pub dated_theme: bool,
 }
 
 impl Permissions {
@@ -39,6 +45,8 @@ impl Permissions {
             greeting: manifest.greetings.is_some(),
             background: !manifest.schedules.is_empty(),
             notify: manifest.sends_notifications(),
+            theme: !manifest.themes.is_empty(),
+            dated_theme: manifest.themes.iter().any(|theme| !theme.dates.is_empty()),
             ..Self::default()
         };
         for server in manifest.mcp_servers.values() {
@@ -148,6 +156,12 @@ impl Permissions {
         if self.notify {
             keys.push("notify".into());
         }
+        // 带日期的主题会自己换上：和只提供主题是不同的权限，加了日期要重新确认。
+        if self.dated_theme {
+            keys.push("theme:dated".into());
+        } else if self.theme {
+            keys.push("theme".into());
+        }
         keys.extend(
             self.processes
                 .iter()
@@ -236,6 +250,17 @@ impl Permissions {
         }
         if self.notify {
             lines.push(tr("发送通知", "Send notifications").into());
+        }
+        if self.dated_theme {
+            lines.push(
+                tr(
+                    "提供界面主题，并在指定日期自动换上",
+                    "Provide color themes and switch to them on set dates",
+                )
+                .into(),
+            );
+        } else if self.theme {
+            lines.push(tr("提供界面主题", "Provide color themes").into());
         }
         lines
     }
@@ -356,5 +381,28 @@ mod tests {
         assert_ne!(with.keys(), without.keys());
         let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || with.describe());
         assert!(lines.contains(&"在搜索框显示提示语".to_string()), "{lines:?}");
+    }
+
+    #[test]
+    fn themes_need_consent_and_dates_need_it_again() {
+        // 换界面配色是插件对 Helmp 的改动，到日子自己换上更是：启用前列出来；新版加了日期要重新确认。
+        let command = r#"[{"id":"a","title":"A","action":{"type":"open","url":"https://example.com"}}]"#;
+        let colors = r##"{"background":"#ffffff","foreground":"#111111","accent":"#0b63e5","selection":"#0b63e5"}"##;
+        let dark = r##"{"background":"#1e1e20","foreground":"#f5f5f7","accent":"#3b8bff","selection":"#0a5fd6"}"##;
+        let plain = derive(
+            command,
+            &format!(r#""themes":[{{"id":"t","name":"T","light":{colors},"dark":{dark}}}],"#),
+        );
+        let dated = derive(
+            command,
+            &format!(
+                r#""themes":[{{"id":"t","name":"T","light":{colors},"dark":{dark},"dates":[{{"from":"12-20","to":"12-26"}}]}}],"#
+            ),
+        );
+        assert!(plain.keys().contains(&"theme".to_string()));
+        assert!(dated.keys().contains(&"theme:dated".to_string()));
+        assert_ne!(plain.keys(), dated.keys());
+        let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || dated.describe());
+        assert!(lines.contains(&"提供界面主题，并在指定日期自动换上".to_string()), "{lines:?}");
     }
 }

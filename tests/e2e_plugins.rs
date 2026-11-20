@@ -599,6 +599,46 @@ fn gui_greeting_shows_only_in_the_empty_global_search() {
     assert!(!off.contains(greeting) && off.contains("placeholder="), "{off}");
 }
 
+#[test]
+#[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_plugins -- --ignored"]
+fn gui_theme_follows_the_choice_and_falls_back_when_the_plugin_is_off() {
+    // 选了插件主题后面板用它；插件停用后回到默认配色，不能留下一个读不出的界面。
+    // 设了 HELMP_SNAPSHOT_DIR 且用 `--features readme-shots` 编译时，存一张离屏截图。
+    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/plugins/com.example.seasonal-themes");
+    let install = |h: &Helmp| {
+        let dir = h.root.join("data/plugins/com.example.seasonal-themes/images");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(example.join("plugin.json"), dir.parent().unwrap().join("plugin.json")).unwrap();
+        for image in std::fs::read_dir(example.join("images")).unwrap() {
+            let image = image.unwrap().path();
+            std::fs::copy(&image, dir.join(image.file_name().unwrap())).unwrap();
+        }
+    };
+    let snap = if std::env::var("HELMP_SNAPSHOT_DIR").is_ok() { " snap:theme-panel" } else { "" };
+    let run = |enabled: bool, by_date: bool| {
+        let h = Helmp::new();
+        install(&h);
+        let h = h
+            .config(enable("com.example.seasonal-themes", &["theme:dated"]))
+            .config(move |c| {
+                c["plugins"]["com.example.seasonal-themes"]["enabled"] = json!(enabled);
+                c["theme"] = json!({"selected": "com.example.seasonal-themes/spring", "by_date": by_date});
+            })
+            .env("HELMP_NO_WELCOME", "1")
+            .env("HELMP_SELF_TEST", "1")
+            .env("HELMP_SELF_TEST_KEYS", format!("wait:1{snap}"));
+        h.cli(&[])
+    };
+    // 关掉按日期切换：结果与今天是几号无关，一定是用户选的主题。
+    let on = run(true, false);
+    let line = self_test_line(&on, "self-test theme ");
+    assert!(line.ends_with("com.example.seasonal-themes/spring dated=false"), "{line}");
+    let off = run(false, false);
+    let line = self_test_line(&off, "self-test theme ");
+    assert!(line.ends_with(": default"), "插件停用后要回到默认配色：{line}");
+}
+
 // ---------------------------------------------------------------- 定时任务
 
 /// 一个带定时任务的插件：`tick.sh` 每跑一次往数据目录的 runs 里记一行，并请求发一条通知。

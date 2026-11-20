@@ -127,10 +127,11 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | `icon`、`tint` | | Lucide 图标名或插件目录里的 `.png`；底色：`blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | 只能声明 `"clipboard.read"`（用 `{{clipboard}}` 时必须有）和 `"notifications"`（定时任务可以发通知）；其他权限都从清单推导 |
 | `preferences` | | 见下 |
-| `commands` | 是* | 至少一个（*只带 `mcpServers`、或只提供 `greetings` / `schedules` 的插件可以没有） |
+| `commands` | 是* | 至少一个（*只带 `mcpServers`、或只提供 `greetings` / `schedules` / `themes` 的插件可以没有） |
 | `mcpServers` | | 插件带的 MCP 服务器；插件启用时它们的工具变成命令。见 [MCP 服务器](mcp-client.zh-CN.md#插件可以带服务器) |
 | `greetings` | | 空搜索框里显示的文字，见[搜索框寄语](#搜索框寄语) |
 | `schedules` | | 定时运行的脚本，可以发通知，见[定时任务与通知](#定时任务与通知) |
+| `themes` | | 界面主题，可带背景图和生效日期，见[主题](#主题) |
 
 ### 偏好设置
 
@@ -217,6 +218,7 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 | 在搜索框显示提示语 | `greetings` |
 | 在后台定时运行插件目录里的脚本 | `schedules` |
 | 发送通知 | `"permissions": ["notifications"]` |
+| 提供界面主题（并在指定日期自动换上） | `themes`（带 `dates`） |
 
 自带插件默认启用。你的插件默认停用，启用时 Helmp 记下你确认过的权限；权限变了会再问一次。
 
@@ -298,6 +300,57 @@ helmp plugins validate ~/Library/Application\ Support/Helmp/plugins/com.example.
 - **不拖慢面板。** 寄语是纯声明：不联网、不跑脚本，打开面板时只在内存里挑一条。会自己变的内容（天气、订阅）请用列表命令，或者更新插件。
 
 寄语是一项权限（「在搜索框显示提示语」）：启用插件时要确认；插件更新后新加了寄语，也要重新确认。
+
+## 主题
+
+插件可以提供界面主题。用户在「设置 › 外观」里，在「跟随系统 / 浅色 / 深色」下面选主题：主题只换配色，浅 / 深仍按原来的设置，所以每个主题都要有浅色、深色两套。启动器面板、设置窗口和引导窗口都会换上。
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.seasonal-themes",
+  "name": "Seasonal Themes",
+  "version": "1.0.0",
+  "author": "Example",
+  "themes": [
+    {
+      "id": "winter",
+      "name": { "en": "Winter Holidays", "zh-Hans": "冬日节庆" },
+      "light": { "background": "#fdf8f2", "foreground": "#2b1d17", "accent": "#b3261e", "selection": "#b3261e" },
+      "dark": { "background": "#182030", "foreground": "#f3efe6", "accent": "#e0b64a", "selection": "#9a2a22" },
+      "image": { "light": "images/winter-light.png", "dark": "images/winter-dark.png" },
+      "dates": [{ "from": "12-20", "to": "12-26" }]
+    }
+  ]
+}
+```
+
+带两个主题和配图的完整示例见 [`examples/plugins/com.example.seasonal-themes`](../examples/plugins/com.example.seasonal-themes/plugin.json)。插件可以只有 `themes`、没有命令，最多提供 10 个主题。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 插件内唯一（字母、数字、`_`、`-`） |
+| `name` | 设置里主题卡片上的名字（文案） |
+| `light`、`dark` | 配色，都是 `#rrggbb`：`background`（面板和窗口的底色，半透明由 Helmp 自己加）、`foreground`（文字）、`accent`（开关、选中的标签、主按钮）、`selection`（列表选中行） |
+| `image` | 可选，插件目录里的图片 `{ "light", "dark" }`（至少一张）：png、jpg、webp 或 gif，不超过 4 MiB。只铺在搜索栏后面，上面压一层底色，结果列表始终落在纯色底上 |
+| `dates` | 可选，日期段 `{ "from", "to" }`，含两头（`to` 缺省等于 `from`）。都写 `MM-DD`（每年重复；`from` 比 `to` 晚表示跨年），或都写 `YYYY-MM-DD`（只那一段） |
+
+只开放这四个颜色；其余颜色（次要文字、侧栏、选中行和按钮上的文字）由它们推导。校验会检查推导后的结果读不读得清，读不清时报出字段和对比度：
+
+- `foreground` 与 `background`：至少 4.5:1；次要文字（由两者混出来）至少 3:1。
+- `accent` 与 `background`：至少 3:1。
+- 浅色套的底色要比文字亮，深色套要比文字暗：输入框等系统组件按浅 / 深配色。
+- 有背景图时：用图的平均颜色与底色各半混合（搜索栏一带最少压着这么多底色），文字同样要满足上面的对比度。浅色套配浅色图，深色套配深色图。图很花时平均色过了也可能显得乱，记得在面板里看一眼。
+- 选中行和强调色底上的文字自动取白或黑，哪个清楚用哪个。
+
+日期：
+
+- **到日子自动换上。** 今天落在某个日期段里时，这个主题代替用户选的主题，日期段结束的第二天交还。用户的选择本身不会被改写。「设置 › 外观」顶部会说明哪个主题生效、到哪天，并有「今天不用」按钮（点错了可以「今天也用」）；「按日期自动切换主题」开关可以整个关掉。
+- **按本机时区。** 「今天」是电脑所在时区的日期。每年重复的 `02-29`（无论在开头还是结尾）在平年落到 2 月 28 日。
+- **同时只有一个。** 几个主题同时在日期内时，取插件 id 排序最前的（同一插件内按清单顺序）。
+- **停用或卸载插件** 后马上回到默认配色。用户的选择仍然记着，重新启用插件后恢复。
+
+主题是一项权限（「提供界面主题」；有主题带 `dates` 时是「提供界面主题，并在指定日期自动换上」）：启用插件时要确认；插件更新后新加了主题或日期，也要重新确认。
 
 ## 定时任务与通知
 

@@ -127,10 +127,11 @@ Text fields (`name`, `title`…) take a plain string or `{"en": "…", "zh-Hans"
 | `icon`, `tint` | | Lucide icon name or `.png` in the folder; tint: `blue` `indigo` `purple` `orange` `teal` `green` `red` `gray` `graphite` |
 | `permissions` | | Only `"clipboard.read"` (needed for `{{clipboard}}`) and `"notifications"` (lets scheduled tasks send notifications) can be declared; everything else is derived |
 | `preferences` | | See below |
-| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers`, or only provides `greetings` or `schedules`) |
+| `commands` | yes* | At least one (*optional when the plugin only bundles `mcpServers`, or only provides `greetings`, `schedules` or `themes`) |
 | `mcpServers` | | MCP servers the plugin brings; their tools become commands while the plugin is enabled. See [MCP servers](mcp-client.md#plugins-can-bundle-servers) |
 | `greetings` | | Text for the empty search box. See [Search-box greetings](#search-box-greetings) |
 | `schedules` | | Scripts that run on a schedule and may send notifications. See [Scheduled tasks and notifications](#scheduled-tasks-and-notifications) |
+| `themes` | | Color themes, optionally with a banner image and dates. See [Themes](#themes) |
 
 ### Preferences
 
@@ -217,6 +218,7 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Show messages in the search box | `greetings` |
 | Run scripts from the plugin folder in the background on a schedule | `schedules` |
 | Send notifications | `"permissions": ["notifications"]` |
+| Provide color themes (and switch to them on set dates) | `themes` (with `dates`) |
 
 Bundled plugins are on by default. Your plugins are off until you turn them on; Helmp stores the permissions you confirmed and asks again if they change.
 
@@ -298,6 +300,57 @@ Rules:
 - **Cheap by design.** Greetings are declarative: nothing is fetched, no script runs, and picking one is an in-memory lookup when the panel opens. For text that changes on its own (weather, a feed), use a list command or update the plugin.
 
 Greetings are a permission ("Show messages in the search box"): you confirm it when you turn the plugin on, and a plugin that adds greetings in an update needs your review again.
+
+## Themes
+
+A plugin can provide color themes. You pick one in Settings › Appearance, under the Light / Dark / Auto choice: a theme only changes colors, and light or dark still follows that setting, so every theme has a light set and a dark set. It applies to the launcher panel, Settings and the welcome window.
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "com.example.seasonal-themes",
+  "name": "Seasonal Themes",
+  "version": "1.0.0",
+  "author": "Example",
+  "themes": [
+    {
+      "id": "winter",
+      "name": { "en": "Winter Holidays", "zh-Hans": "冬日节庆" },
+      "light": { "background": "#fdf8f2", "foreground": "#2b1d17", "accent": "#b3261e", "selection": "#b3261e" },
+      "dark": { "background": "#182030", "foreground": "#f3efe6", "accent": "#e0b64a", "selection": "#9a2a22" },
+      "image": { "light": "images/winter-light.png", "dark": "images/winter-dark.png" },
+      "dates": [{ "from": "12-20", "to": "12-26" }]
+    }
+  ]
+}
+```
+
+A complete example with two themes and their images is in [`examples/plugins/com.example.seasonal-themes`](../examples/plugins/com.example.seasonal-themes/plugin.json). A plugin may consist of `themes` alone, with no commands; it can provide up to 10.
+
+| Field | Description |
+|---|---|
+| `id` | Unique within the plugin (letters, digits, `_`, `-`) |
+| `name` | Text shown on the theme's card in Settings |
+| `light`, `dark` | Colors, each `#rrggbb`: `background` (panel and windows; Helmp adds its own translucency), `foreground` (text), `accent` (switches, selected labels, primary buttons), `selection` (the selected row) |
+| `image` | Optional `{ "light", "dark" }` images in the plugin folder (at least one): png, jpg, webp or gif, up to 4 MiB. Shown behind the search bar only, under a layer of the background color, so result rows always sit on plain color |
+| `dates` | Optional `{ "from", "to" }` ranges, both ends included (`to` defaults to `from`). Both `MM-DD` (every year; a `from` later than `to` wraps over New Year) or both `YYYY-MM-DD` (that range only) |
+
+Only these four colors are open; everything else (secondary text, sidebar, text on the selection and on buttons) is derived from them. Validation checks that the result is readable, and reports the field and the ratio when it isn't:
+
+- `foreground` on `background`: at least 4.5:1; secondary text (mixed from the two): at least 3:1.
+- `accent` on `background`: at least 3:1.
+- The light set's background must be lighter than its text, and the dark set's darker; system controls such as text fields follow light or dark.
+- With an image: the same text ratios against the image's average color, mixed half-and-half with the background (the least cover the search bar gets). Use a light image for the light set and a dark one for the dark set. A busy image can still look noisy even when its average passes, so check it in the panel.
+- Text on the selection and on the accent is white or black, whichever reads better.
+
+Dates:
+
+- **Dated themes switch on by themselves.** On a day inside one of its ranges, the theme replaces your choice and hands it back the day after the range ends. Your choice itself is never changed. Settings › Appearance says which theme is on and until when, with a **Not today** button (and **Use it today** to undo). The **Switch themes by date** switch turns this off.
+- **Local time.** "Today" is the date in your Mac's time zone. A yearly `02-29` (as either end) falls on February 28 in common years.
+- **One at a time.** When several themes are inside their dates, the first by plugin id (then manifest order) wins.
+- **Turning the plugin off** (or uninstalling it) returns to the default colors right away. Your choice is kept, so turning the plugin back on restores it.
+
+Themes are a permission ("Provide color themes", or "…and switch to them on set dates" when any theme has `dates`): you confirm it when you turn the plugin on, and a plugin that adds themes or dates in an update needs your review again.
 
 ## Scheduled tasks and notifications
 

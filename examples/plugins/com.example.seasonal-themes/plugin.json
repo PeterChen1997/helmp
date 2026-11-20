@@ -1,0 +1,34 @@
+{
+  "$comment": "Example: a themes-only plugin. Two color themes with banner images; each switches on by itself during its dates, then hands back to the user's choice.",
+  "schemaVersion": 1,
+  "id": "com.example.seasonal-themes",
+  "name": { "en": "Seasonal Themes", "zh-Hans": "季节主题" },
+  "description": {
+    "en": "A winter holiday theme and a spring theme, each turning on during its season.",
+    "zh-Hans": "冬日节庆和春日两个主题，各自在当季自动换上。"
+  },
+  "version": "1.0.0",
+  "author": "Example",
+  "homepage": "https://example.com/seasonal-themes",
+  "license": "MIT",
+  "icon": "palette",
+  "tint": "red",
+  "themes": [
+    {
+      "id": "winter",
+      "name": { "en": "Winter Holidays", "zh-Hans": "冬日节庆" },
+      "light": { "background": "#fdf8f2", "foreground": "#2b1d17", "accent": "#b3261e", "selection": "#b3261e" },
+      "dark": { "background": "#182030", "foreground": "#f3efe6", "accent": "#e0b64a", "selection": "#9a2a22" },
+      "image": { "light": "images/winter-light.png", "dark": "images/winter-dark.png" },
+      "dates": [{ "from": "12-20", "to": "12-26" }]
+    },
+    {
+      "id": "spring",
+      "name": { "en": "Spring", "zh-Hans": "春日" },
+      "light": { "background": "#fef7f8", "foreground": "#2d1f24", "accent": "#c2416b", "selection": "#c2416b" },
+      "dark": { "background": "#261c22", "foreground": "#f7eef1", "accent": "#f08bac", "selection": "#a8345c" },
+      "image": { "light": "images/spring-light.png", "dark": "images/spring-dark.png" },
+      "dates": [{ "from": "03-20", "to": "04-10" }]
+    }
+  ]
+}

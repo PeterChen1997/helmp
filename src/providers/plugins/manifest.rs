@@ -108,7 +108,69 @@ pub struct Manifest {
     /// 定时任务：按间隔、每天固定时刻或指定日期，在后台运行插件目录里的脚本（见 `schedule`）。
     #[serde(default)]
     pub schedules: Vec<ScheduleSpec>,
+    /// 界面主题：浅 / 深两套配色，可选面板顶部背景图和生效日期（见 `theme`）。纯声明。
+    #[serde(default)]
+    pub themes: Vec<ThemeSpec>,
 }
+
+/// 一个主题。用户在「设置 › 外观」里选；声明了 `dates` 的到日子自动换上、过后恢复。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ThemeSpec {
+    /// 给人看的注释（JSON 没有注释语法），任意内容，忽略。
+    #[serde(rename = "$comment", default)]
+    _comment: Option<serde::de::IgnoredAny>,
+    pub id: String,
+    pub name: Text,
+    pub light: ThemeColors,
+    pub dark: ThemeColors,
+    /// 面板顶部的背景图（插件目录里的图片），浅 / 深各一张，至少一张。
+    #[serde(default)]
+    pub image: Option<ThemeImage>,
+    /// 生效日期段：到日子自动换上（用户可以在设置里关掉）。
+    #[serde(default)]
+    pub dates: Vec<ThemeDates>,
+}
+
+/// 一套配色，都是 `#rrggbb`。其余颜色（次要文字、侧栏等）由它们推导。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ThemeColors {
+    /// 底色：面板、设置窗口、引导窗口（Helmp 自己加半透明）。
+    pub background: String,
+    /// 正文文字。
+    pub foreground: String,
+    /// 强调色：开关、选中的标签与边框。
+    pub accent: String,
+    /// 列表选中行的底色（上面的文字自动取白或黑）。
+    pub selection: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeImage {
+    #[serde(default)]
+    pub light: Option<String>,
+    #[serde(default)]
+    pub dark: Option<String>,
+}
+
+/// 日期段：`from` 到 `to`（含两头，缺省只那一天）。写法与寄语的 `dates` 相同：
+/// 都是 `MM-DD`（每年重复，`from` 比 `to` 晚表示跨年）或都是 `YYYY-MM-DD`（只那一段）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThemeDates {
+    pub from: String,
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+/// 一个插件最多提供多少个主题。
+pub const MAX_THEMES: usize = 10;
+/// 主题背景图的体积上限（与自定义插件源的单文件上限相同）。
+pub const MAX_THEME_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
+/// 主题背景图能用的格式（与自定义插件源相同）。
+pub const THEME_IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 
 /// 一个定时任务。触发方式三选一：`everyMinutes`；`at`（每天这个时刻）；`date`（可再加 `at`，缺省 00:00）。
 #[derive(Debug, Clone, Deserialize)]
@@ -786,6 +848,121 @@ impl Checker<'_> {
             }
             for (name, value) in &script.env {
                 self.template(&format!("{at}.script.env.{name}"), value, Place::Schedule, None);
+            }
+        }
+    }
+
+    fn themes(&mut self, themes: &[ThemeSpec], dir: Option<&Path>) {
+        if themes.len() > MAX_THEMES {
+            self.error(
+                "themes",
+                trf!("最多 {MAX_THEMES} 个", "at most {MAX_THEMES} entries"),
+            );
+        }
+        let mut ids = BTreeSet::new();
+        for (index, theme) in themes.iter().enumerate() {
+            let at = format!("themes[{index}]");
+            self.key(&format!("{at}.id"), &theme.id);
+            if !ids.insert(theme.id.as_str()) {
+                self.error(
+                    &format!("{at}.id"),
+                    trf!("id {:?} 重复", "duplicate id {:?}", theme.id),
+                );
+            }
+            self.text(&format!("{at}.name"), &theme.name);
+            let images = theme.image.as_ref();
+            for (mode, colors, image) in [
+                ("light", &theme.light, images.and_then(|image| image.light.as_deref())),
+                ("dark", &theme.dark, images.and_then(|image| image.dark.as_deref())),
+            ] {
+                let image = image.and_then(|path| {
+                    self.theme_image(&format!("{at}.image.{mode}"), path, dir)
+                });
+                if let Err(problems) =
+                    super::theme::check_colors(colors, mode == "dark", image.as_ref())
+                {
+                    for (field, problem) in problems {
+                        let at = if field == "image" {
+                            format!("{at}.image.{mode}")
+                        } else {
+                            format!("{at}.{mode}.{field}")
+                        };
+                        self.error(&at, problem);
+                    }
+                }
+            }
+            if images.is_some_and(|image| image.light.is_none() && image.dark.is_none()) {
+                self.error(
+                    &format!("{at}.image"),
+                    tr("light 和 dark 至少要有一张", "needs light, dark or both").into(),
+                );
+            }
+            for (d, dates) in theme.dates.iter().enumerate() {
+                if let Err(problem) = super::theme::DateRange::parse(dates) {
+                    self.error(&format!("{at}.dates[{d}]"), problem);
+                }
+            }
+        }
+    }
+
+    /// 背景图：插件目录里的图片，格式与体积受限。有目录时读出来算平均色（给对比度校验用）。
+    fn theme_image(
+        &mut self,
+        at: &str,
+        path: &str,
+        dir: Option<&Path>,
+    ) -> Option<super::theme::Tone> {
+        let ext = Path::new(path)
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !safe_relative(path) {
+            self.error(
+                at,
+                tr(
+                    "图片路径必须相对插件目录，不能含 ..",
+                    "image path must be relative to the plugin folder without ..",
+                )
+                .into(),
+            );
+            return None;
+        }
+        if !THEME_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+            self.error(
+                at,
+                trf!(
+                    "{path} 不是支持的图片格式（png、jpg、webp、gif）",
+                    "{path} isn't a supported image (png, jpg, webp or gif)"
+                ),
+            );
+            return None;
+        }
+        let file = dir?.join(path);
+        let size = match std::fs::metadata(&file) {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            _ => {
+                self.error(at, trf!("找不到图片 {path}", "image {path} not found"));
+                return None;
+            }
+        };
+        if size > MAX_THEME_IMAGE_BYTES {
+            self.error(
+                at,
+                trf!(
+                    "{path} 超过 4 MiB",
+                    "{path} is larger than 4 MiB"
+                ),
+            );
+            return None;
+        }
+        match super::theme::average_color(&file) {
+            Ok(color) => Some(color),
+            Err(err) => {
+                self.error(
+                    at,
+                    trf!("{path} 读不出来：{err}", "couldn't read {path}: {err}"),
+                );
+                None
             }
         }
     }
@@ -1496,6 +1673,7 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
         check.greetings(greetings);
     }
     check.schedules(&manifest.schedules, dir);
+    check.themes(&manifest.themes, dir);
     if manifest.sends_notifications() && manifest.schedules.is_empty() {
         check.error(
             "permissions",
@@ -1510,12 +1688,13 @@ fn validate(manifest: &Manifest, dir: Option<&Path>, errors: &mut Vec<String>) {
         && manifest.mcp_servers.is_empty()
         && manifest.greetings.is_none()
         && manifest.schedules.is_empty()
+        && manifest.themes.is_empty()
     {
         check.error(
             "commands",
             tr(
-                "至少要有一个命令（或 mcpServers、greetings、schedules）",
-                "needs at least one command (or mcpServers / greetings / schedules)",
+                "至少要有一个命令（或 mcpServers、greetings、schedules、themes）",
+                "needs at least one command (or mcpServers / greetings / schedules / themes)",
             )
             .into(),
         );

@@ -2518,6 +2518,7 @@ impl Launcher {
 
     fn render_search_bar(&self, pal: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let mut bar = div()
+            .relative()
             .flex()
             .flex_none()
             .items_center()
@@ -2526,6 +2527,7 @@ impl Launcher {
             .px(px(20.))
             .border_b_1()
             .border_color(pal.separator)
+            .children(theme_banner(pal))
             .child(
                 gpui_kit::component::Icon::empty()
                     .path("icons/search.svg")
@@ -2653,6 +2655,32 @@ impl Launcher {
         footer = footer.child(right);
         footer.into_any_element()
     }
+}
+
+/// 插件主题的背景图：只铺在搜索栏里（下沿正好是分隔线，列表文字始终落在纯色底上），
+/// 上面压一层底色，从 `IMAGE_SCRIM` 往下加深，占位文字靠它保持清楚（校验按 `IMAGE_SCRIM` 估算）。
+fn theme_banner(pal: &Palette) -> Option<AnyElement> {
+    use crate::providers::plugins::theme;
+    let active = theme::current()?;
+    let path = active.theme.image(pal.dark)?.clone();
+    #[allow(clippy::cast_possible_truncation)]
+    let scrim = theme::IMAGE_SCRIM as f32;
+    let tint = |a: f32| Hsla { a, ..pal.panel };
+    Some(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .overflow_hidden()
+            .child(img(path).size_full().object_fit(ObjectFit::Cover))
+            .child(div().absolute().top_0().left_0().size_full().bg(linear_gradient(
+                180.,
+                linear_color_stop(tint(scrim), 0.),
+                linear_color_stop(tint(scrim + 0.25), 1.),
+            )))
+            .into_any_element(),
+    )
 }
 
 impl Render for Launcher {
