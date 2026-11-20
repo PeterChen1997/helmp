@@ -11,11 +11,14 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{
     Input, InputEvent, InputState, Position, Textarea, TextareaState,
 };
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::text::TextView;
+use gpui_kit::component::{Disableable as _, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -263,6 +266,8 @@ pub struct Launcher {
     revision: u64,
     result: Option<ResultView>,
     form: Option<FormState>,
+    /// 下拉菜单的状态按元素 ID 缓存，收起面板时切换 ID，避免下次打开时残留菜单。
+    form_menu_generation: u64,
     /// 刚进入范围：下一次建出输入即译的表单（翻译）时，把焦点放进表单的文本框。
     focus_form: bool,
     actions_open: bool,
@@ -390,6 +395,7 @@ impl Launcher {
             revision: 0,
             result: None,
             form: None,
+            form_menu_generation: 0,
             focus_form: false,
             actions_open: false,
             action_selected: 0,
@@ -621,6 +627,7 @@ impl Launcher {
         agents::mark_read_batch(self.viewed_completions.finish());
         self.expanded_agent_info = None;
         self.actions_open = false;
+        self.form_menu_generation += 1;
         self.hidden_at = Some(Instant::now());
         crate::panel::hide(window);
         cx.notify();
@@ -2440,19 +2447,37 @@ impl Launcher {
                     .child(Textarea::new(area).appearance(false).h_full())
                     .into_any_element(),
                 FieldState::Select(selected) => {
-                    let options = match &field.kind {
-                        FieldKind::Select { options } => options.clone(),
-                        FieldKind::Text { .. } | FieldKind::Secret { .. } => Vec::new(),
+                    let FieldKind::Select { options } = &field.kind else {
+                        unreachable!("select state must belong to a select field");
                     };
-                    let label = options
-                        .get(*selected)
+                    let selected = *selected;
+                    let current = options
+                        .get(selected)
                         .map(|(label, _)| label.clone())
                         .unwrap_or_default();
-                    div()
-                        .id(SharedString::from(format!("field-{fx}")))
-                        .flex()
-                        .items_center()
-                        .justify_between()
+                    let item_id = form.item_id.clone();
+                    let launcher = cx.weak_entity();
+                    let choices: Vec<_> = options.iter().map(|(label, _)| label.clone()).collect();
+                    // 多行输入框会撑满剩余高度，请把后面的菜单朝上展开。
+                    let anchor = if form.states[..fx]
+                        .iter()
+                        .any(|state| matches!(state, FieldState::Area(_)))
+                    {
+                        Anchor::BottomLeft
+                    } else {
+                        Anchor::TopLeft
+                    };
+                    let id = ElementId::NamedInteger(
+                        format!("form-{item_id}-field-{fx}").into(),
+                        self.form_menu_generation,
+                    );
+                    Button::new(id)
+                        .small()
+                        .label(current)
+                        .accessibility_label(field.label.clone())
+                        .dropdown_caret(true)
+                        .disabled(choices.is_empty())
+                        .w_full()
                         .h(px(28.))
                         .px(px(10.))
                         .rounded(px(7.))
@@ -2460,19 +2485,32 @@ impl Launcher {
                         .border_1()
                         .border_color(pal.separator)
                         .text_color(pal.fg)
-                        .child(label)
-                        .child(div().text_color(pal.muted).child("⌄"))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            // 点一下切到下一个选项（菜单式下拉留待后续）。
-                            if let Some(form) = &mut this.form
-                                && let Some(FieldState::Select(ix)) = form.states.get_mut(fx)
-                            {
-                                *ix = (*ix + 1) % options.len().max(1);
-                                // 输入即译：换了目标语言 / 模型就按新选项重新翻译。
-                                this.schedule_auto_run(window, cx);
-                                cx.notify();
+                        .dropdown_menu_with_anchor(anchor, move |mut menu, _, _| {
+                            menu = menu.scrollable(true);
+                            for (index, label) in choices.iter().enumerate() {
+                                let launcher = launcher.clone();
+                                let item_id = item_id.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label.clone())
+                                        .checked(index == selected)
+                                        .on_click(move |_, window, cx| {
+                                            let _ = launcher.update(cx, |this, cx| {
+                                                if let Some(form) = &mut this.form
+                                                    && form.item_id == item_id
+                                                    && let Some(FieldState::Select(value)) =
+                                                        form.states.get_mut(fx)
+                                                    && *value != index
+                                                {
+                                                    *value = index;
+                                                    this.schedule_auto_run(window, cx);
+                                                    cx.notify();
+                                                }
+                                            });
+                                        }),
+                                );
                             }
-                        }))
+                            menu
+                        })
                         .into_any_element()
                 }
             };

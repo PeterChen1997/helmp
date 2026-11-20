@@ -85,6 +85,45 @@ fn translate_calls_the_configured_model_and_offers_actions() {
 }
 
 #[test]
+#[ignore = "打开屏幕外的真实面板。手动运行：cargo test --release --test e2e_core gui_translate_commits_only_after_picking_a_dropdown_option -- --ignored"]
+fn gui_translate_commits_only_after_picking_a_dropdown_option() {
+    let server = MockServer::start(|_| {
+        let message = json!({"message": {"role": "assistant", "content": "translated"}, "done": true});
+        (200, message.to_string())
+    });
+    let h = Helmp::new()
+        .config(|c| {
+            c["models"] = json!([{"id": "m1", "name": "Mock", "kind": "ollama",
+                "base_url": server.url, "model": "mock"}]);
+        })
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_LINK", "helmp://scope/translate?q=hello")
+        .env(
+            "HELMP_SELF_TEST_KEYS",
+            "click:100,383 click:500,380 click:100,383 click:100,214 wait:1",
+        );
+    let out = h.cli(&[]);
+    // 展开、点外部取消、再次展开，都保留当前值；点菜单中的日文才重新翻译。
+    let states: Vec<_> = out
+        .lines()
+        .filter(|line| line.starts_with("self-test key click:"))
+        .collect();
+    let [open, dismiss, reopen, pick] = states.as_slice() else {
+        panic!("未完成下拉菜单操作：{out}");
+    };
+    for state in [open, dismiss, reopen] {
+        assert!(state.contains(r#"("target", "auto")"#), "{state}");
+    }
+    assert!(pick.contains(r#"("target", "ja")"#), "{pick}");
+    let translated = out.lines().find(|line| line.starts_with("self-test key wait:1:"));
+    assert!(
+        translated.is_some_and(|line| line.contains("Translation · Japanese")),
+        "{out}"
+    );
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
 fn ocr_reads_text_and_qr_from_an_image_file() {
     // 截图识别的核心是 Vision 识别：中英混排要按行读出，图里的二维码链接要读出来。
     let h = Helmp::new();
