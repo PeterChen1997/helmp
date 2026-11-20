@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-11-20
+
 ### Added
 
 - Plugins can provide color themes. Declare `themes` in `plugin.json` with a light and a dark set of four colors (background, text, accent, selection), an optional image shown behind the search bar, and optional dates. Pick a theme in Settings › Appearance, under Light / Dark / Auto: a theme only changes colors, for the launcher panel, Settings and the welcome window. A theme with dates (`MM-DD` ranges every year, wrapping over New Year if needed, or `YYYY-MM-DD` ranges) switches on by itself during them and hands back to your choice afterwards; Settings says which theme is on and until when, offers "Not today", and "Switch themes by date" turns this off. Turning the plugin off or uninstalling it returns to the default colors right away. Validation rejects colors and images that would make text hard to read and says by how much. Themes are a permission you confirm when turning the plugin on. See the plugin docs and `examples/plugins/com.example.seasonal-themes`.
