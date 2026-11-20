@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-11-20
+
 ### Added
 
 - Plugins can provide search-box greetings: a line of text shown in the empty global search box, such as a quote of the day or a note for a special date. Declare `greetings` in `plugin.json` with a rotation (every open, or once a day) and optional entries for specific dates (`MM-DD` every year, or `YYYY-MM-DD`). Greetings are a permission you confirm when turning the plugin on, and each plugin's greetings can be turned off in Settings › Plugins. See the plugin docs and `examples/plugins/com.example.daily-quote`.
