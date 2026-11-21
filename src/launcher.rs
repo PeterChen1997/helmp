@@ -9,16 +9,18 @@
 //! 表单项标了 `auto_run` 时（翻译），输入停顿 `AUTO_RUN_DELAY` 后自动执行，等待和执行期间详情区显示加载占位。
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui_kit::base::Popover;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{
     Input, InputEvent, InputState, Position, Textarea, TextareaState,
 };
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::text::TextView;
-use gpui_kit::component::{Disableable as _, Sizable as _};
+use gpui_kit::component::{Disableable as _, Icon, IconName, IndexPath, Sizable as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -33,6 +35,7 @@ use crate::style::{self, Palette};
 
 pub const PANEL_SIZE: Size<Pixels> = size(px(720.), px(520.));
 const SIDE_WIDTH: Pixels = px(310.);
+const FORM_SIDE_PADDING: Pixels = px(20.);
 
 /// 面板可见时定期重查，让 agent 状态、剪贴板等后台变化与新生成的图标反映到界面。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
@@ -190,6 +193,49 @@ enum FieldState {
     Area(Entity<TextareaState>),
     /// 选中的 option 下标。
     Select(usize),
+}
+
+struct FormChoices {
+    labels: Vec<SharedString>,
+    selected: usize,
+    color: Hsla,
+}
+
+impl ListDelegate for FormChoices {
+    type Item = ListItem;
+
+    fn items_count(&self, _: usize, _: &App) -> usize {
+        self.labels.len()
+    }
+
+    fn set_selected_index(
+        &mut self,
+        _: Option<IndexPath>,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) {
+    }
+
+    fn render_item(
+        &mut self,
+        index: IndexPath,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let label = self.labels.get(index.row)?.clone();
+        Some(
+            ListItem::new(index.row)
+                .h(px(26.))
+                .px(px(5.))
+                .rounded(px(4.))
+                .text_size(px(13.))
+                .text_color(self.color)
+                .accessibility_label(label.clone())
+                .check_icon(Icon::new(IconName::Check))
+                .confirmed(index.row == self.selected)
+                .child(div().truncate().child(label)),
+        )
+    }
 }
 
 struct FormState {
@@ -2414,13 +2460,14 @@ impl Launcher {
         let Some(form) = &self.form else {
             return div().into_any_element();
         };
+        let control_width = SIDE_WIDTH - FORM_SIDE_PADDING * 2. - px(1.);
         let mut pane = div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .w(SIDE_WIDTH)
             .flex_none()
-            .px(px(20.))
+            .px(FORM_SIDE_PADDING)
             .py(px(18.))
             .border_r_1()
             .border_color(pal.separator);
@@ -2456,8 +2503,8 @@ impl Launcher {
                         .map(|(label, _)| label.clone())
                         .unwrap_or_default();
                     let item_id = form.item_id.clone();
-                    let launcher = cx.weak_entity();
-                    let choices: Vec<_> = options.iter().map(|(label, _)| label.clone()).collect();
+                    let labels: Vec<SharedString> =
+                        options.iter().map(|(label, _)| label.clone().into()).collect();
                     // 多行输入框会撑满剩余高度，请把后面的菜单朝上展开。
                     let anchor = if form.states[..fx]
                         .iter()
@@ -2471,12 +2518,11 @@ impl Launcher {
                         format!("form-{item_id}-field-{fx}").into(),
                         self.form_menu_generation,
                     );
-                    Button::new(id)
+                    let button = Button::new(id.clone())
                         .small()
                         .label(current)
                         .accessibility_label(field.label.clone())
                         .dropdown_caret(true)
-                        .disabled(choices.is_empty())
                         .w_full()
                         .h(px(28.))
                         .px(px(10.))
@@ -2484,34 +2530,69 @@ impl Launcher {
                         .bg(pal.control)
                         .border_1()
                         .border_color(pal.separator)
-                        .text_color(pal.fg)
-                        .dropdown_menu_with_anchor(anchor, move |mut menu, _, _| {
-                            menu = menu.scrollable(true);
-                            for (index, label) in choices.iter().enumerate() {
-                                let launcher = launcher.clone();
-                                let item_id = item_id.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(label.clone())
-                                        .checked(index == selected)
-                                        .on_click(move |_, window, cx| {
-                                            let _ = launcher.update(cx, |this, cx| {
-                                                if let Some(form) = &mut this.form
-                                                    && form.item_id == item_id
-                                                    && let Some(FieldState::Select(value)) =
-                                                        form.states.get_mut(fx)
-                                                    && *value != index
-                                                {
-                                                    *value = index;
-                                                    this.schedule_auto_run(window, cx);
-                                                    cx.notify();
-                                                }
-                                            });
-                                        }),
-                                );
+                        .shadow_none()
+                        .text_color(pal.fg);
+                    if labels.is_empty() {
+                        button.disabled(true).into_any_element()
+                    } else {
+                        let pal = *pal;
+                        let choose = Rc::new(cx.listener(move |this, index: &IndexPath, window, cx| {
+                            if let Some(form) = &mut this.form
+                                && form.item_id == item_id
+                                && let Some(FieldState::Select(value)) = form.states.get_mut(fx)
+                                && *value != index.row
+                            {
+                                *value = index.row;
+                                this.schedule_auto_run(window, cx);
+                                cx.notify();
                             }
-                            menu
-                        })
-                        .into_any_element()
+                        }));
+                        Popover::new(id)
+                            .w(control_width)
+                            .anchor(anchor)
+                            .offset(px(4.))
+                            .trigger(button)
+                            .content(move |_, window, cx| {
+                                let popover = cx.weak_entity();
+                                let list = window.use_keyed_state(
+                                    ("form-choices", cx.entity_id()),
+                                    cx,
+                                    |window, cx| {
+                                        let choose = choose.clone();
+                                        window
+                                            .subscribe(&cx.entity(), cx, move |_, event, window, cx| {
+                                                if let ListEvent::Confirm(index) = event {
+                                                    let _ = popover.update(cx, |state, cx| {
+                                                        state.dismiss(window, cx)
+                                                    });
+                                                    choose(index, window, cx);
+                                                }
+                                            })
+                                            .detach();
+                                        let list = ListState::new(
+                                            FormChoices {
+                                                labels: labels.clone(),
+                                                selected,
+                                                color: pal.fg,
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                        list.focus_handle(cx).focus(window, cx);
+                                        list
+                                    },
+                                );
+                                div()
+                                    .w(control_width)
+                                    .rounded(px(7.))
+                                    .bg(pal.control)
+                                    .border_1()
+                                    .border_color(pal.separator)
+                                    .overflow_hidden()
+                                    .child(List::new(&list).p(px(4.)).max_h(px(268.)))
+                            })
+                            .into_any_element()
+                    }
                 }
             };
             let grow = matches!(state, FieldState::Area(_));

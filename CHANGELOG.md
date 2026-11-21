@@ -8,13 +8,13 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ### Fixed
 
-- The source language, target language, and model controls in Translate now open a dropdown. Translation reruns when you choose a different option.
+- The source language, target language, and model controls in Translate now open a dropdown that matches the width and color of its control, with no shadow. Translation reruns when you choose a different option.
 
 ### 简体中文
 
 #### 修复
 
-- 翻译面板的源语言、目标语言和模型控件现在会弹出下拉菜单。选中不同选项后会重新翻译。
+- 翻译面板的源语言、目标语言和模型控件现在会弹出下拉菜单。菜单与控件等宽、同色，且没有阴影。选中不同选项后会重新翻译。
 
 ## [0.4.19] - 2026-11-20
 
