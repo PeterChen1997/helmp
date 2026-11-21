@@ -6,27 +6,19 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-11-21
+
 ### Fixed
 
+- The launcher panel could appear without taking the keyboard: typing went nowhere and clicking the search box did nothing (reported when opening clipboard history from a browser). If the panel hasn't received the keyboard shortly after it opens, Helmp now takes it back, and reports the case to crash reporting (no search text or clipboard content is sent).
 - The source language, target language, and model controls in Translate now open a dropdown that matches the width and color of its control, with no shadow. Translation reruns when you choose a different option.
 
 ### 简体中文
 
 #### 修复
 
-- 翻译面板的源语言、目标语言和模型控件现在会弹出下拉菜单。菜单与控件等宽、同色，且没有阴影。选中不同选项后会重新翻译。
-
-## [0.4.19] - 2026-11-20
-
-### Fixed
-
-- The launcher panel could appear without taking the keyboard: typing went nowhere and clicking the search box did nothing (reported when opening clipboard history from a browser). If the panel hasn't received the keyboard shortly after it opens, Helmp now takes it back, and reports the case to crash reporting (no search text or clipboard content is sent).
-
-### 简体中文
-
-#### 修复
-
 - 唤起面板后偶尔拿不到键盘：打字没反应、点搜索框也没反应（从浏览器叫出剪贴板历史时遇到）。现在面板打开后若没拿到键盘，Helmp 会把键盘要回来，并把这种情况报给错误监控（不发送搜索内容和剪贴板内容）。
+- 翻译面板的源语言、目标语言和模型控件现在会弹出下拉菜单。菜单与控件等宽、同色，且没有阴影。选中不同选项后会重新翻译。
 
 ## [0.4.18] - 2026-11-20
 
