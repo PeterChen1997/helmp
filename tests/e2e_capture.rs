@@ -169,6 +169,12 @@ fn gui_ocr_mode_recognizes_on_release_and_copies() {
         "演练模式不能写真实剪贴板：{done}"
     );
     assert!(done.contains("2 lines"), "标题要说出行数：{done}");
+    // CARM-88：结果窗口必须是非激活面板。激活型窗口只有 Helmp 在前台时才收得到键，
+    // 激活被系统拒绝或前台被别的 App 拿走时 Esc 会落进那个 App，结果窗口关不掉。
+    assert!(
+        done.contains("result_nonactivating=Some(true)"),
+        "识别结果窗口要是非激活面板：{done}"
+    );
 }
 
 #[test]

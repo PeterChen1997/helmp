@@ -388,7 +388,21 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
         }
         overlays.push(handle);
     }
-    session.update(cx, |session, _| session.overlays = overlays.clone());
+    // 遮罩一出现就按指针当前位置高亮它下面的窗口（CARM-88）：悬停原来只在 mouse-moved 里算，
+    // 按下截图键后不动鼠标就一直没有高亮。这时还没有鼠标事件，主动读一次指针位置做初始命中。
+    let initial_hover = frozen.get(key_index).map(|screen| {
+        let p = geometry::point_from_appkit(screen.screen.frame, mouse);
+        (
+            geometry::clamp_point(p, screen.bounds()),
+            screen.screen.windows.clone(),
+        )
+    });
+    session.update(cx, |session, _| {
+        session.overlays = overlays.clone();
+        if let Some((p, windows)) = &initial_hover {
+            session.selectors[key_index].hover_at(*p, windows);
+        }
+    });
     // 先不抢焦点地把各屏的遮罩都摆上，最后让鼠标所在屏的那块成为 key window（键盘落在那里）。
     for (ix, handle) in overlays.iter().enumerate() {
         let key = ix == key_index;
@@ -803,7 +817,7 @@ pub fn snapshot_underlay(window: &Window, path: &std::path::Path) -> anyhow::Res
 /// 图形自检：截图界面此刻的状态，一行打印。
 pub fn debug_state(cx: &mut App) -> String {
     let session = state(cx).session.clone();
-    let (overlays, selection, busy) = match &session {
+    let (overlays, selection, hover, busy) = match &session {
         Some(session) => {
             let session = session.read(cx);
             (
@@ -811,10 +825,16 @@ pub fn debug_state(cx: &mut App) -> String {
                 session
                     .selected()
                     .map(|(_, rect)| (rect.x, rect.y, rect.w, rect.h)),
+                // 鼠标下高亮的窗口（还没框选时）。
+                session
+                    .selectors
+                    .iter()
+                    .find_map(Selector::hover)
+                    .map(|rect| (rect.x, rect.y, rect.w, rect.h)),
                 session.busy,
             )
         }
-        None => (0, None, false),
+        None => (0, None, None, false),
     };
     let result = state(cx).result.as_ref().map(|(_, view)| view.clone());
     let result = result.map(|view| view.read(cx).summary());
@@ -822,6 +842,12 @@ pub fn debug_state(cx: &mut App) -> String {
     let result_focused = state(cx).result.clone().and_then(|(handle, view)| {
         handle
             .update(cx, |_, window, cx| view.read(cx).focused(window, cx))
+            .ok()
+    });
+    // 识别结果窗口是不是非激活面板：Helmp 激活被拒时它也要收得到 Esc（CARM-88）。
+    let result_nonactivating = state(cx).result.clone().and_then(|(handle, _)| {
+        handle
+            .update(cx, |_, window, _| native::is_nonactivating(window))
             .ok()
     });
     // 每张钉图「宽x高@缩放」，最新的在后。
@@ -837,7 +863,7 @@ pub fn debug_state(cx: &mut App) -> String {
         .collect();
     let captures = state(cx);
     format!(
-        "overlays={overlays} selection={selection:?} busy={busy} result={result:?} result_focused={result_focused:?} pins={} pin_sizes={pins:?} log={:?}",
+        "overlays={overlays} selection={selection:?} hover={hover:?} busy={busy} result={result:?} result_focused={result_focused:?} result_nonactivating={result_nonactivating:?} pins={} pin_sizes={pins:?} log={:?}",
         captures.pins.len(),
         captures.log
     )

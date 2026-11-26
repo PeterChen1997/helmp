@@ -20,7 +20,7 @@ use super::geometry::Rect;
 pub enum Kind {
     /// 冻结屏幕的遮罩：盖住菜单栏和程序坞（屏保层级），激活 Helmp 拿键盘。
     Overlay,
-    /// 识别结果窗口：浮在其他 App 上面，激活 Helmp 拿键盘（回车复制、Esc 关闭）。
+    /// 识别结果窗口：浮在其他 App 上面，拿键盘（回车复制、Esc 关闭）。非激活面板：Helmp 没被激活时也收得到键。
     Result,
     /// 钉图：始终置顶，点它不激活 Helmp（不打断用户在别的 App 里的输入），Helmp 隐藏时也留着。
     Pin,
@@ -36,9 +36,13 @@ pub fn setup(window: &Window, kind: Kind, frame: Rect, offscreen: bool) {
         return;
     };
     // 无边框：带标题栏样式的窗口会被系统限制在菜单栏下面，盖不住整块屏幕。
-    // 去掉 NonactivatingPanel 的窗口会激活 Helmp（要键盘的遮罩和结果窗口）；钉图和提示保留它。
+    // 去掉 NonactivatingPanel 的窗口会激活 Helmp（要键盘的遮罩）；钉图、提示和识别结果保留它。
+    // 识别结果（CARM-88）：激活型窗口只有 Helmp 是前台 App 时才收得到键。激活被 WindowServer 拒绝、
+    // 或前台被别的 App 拿走时，它仍是 Helmp 的 key window（isKeyWindow 为真，补救检查看不出来），
+    // 按键却进了前台 App，Esc 关不掉。非激活面板不依赖 App 激活就能成为 key、直接收键（Spotlight 式），
+    // 结果窗口是只读的，不需要输入法组字。
     let mut mask = NSWindowStyleMask::Borderless;
-    if matches!(kind, Kind::Pin | Kind::Toast) {
+    if matches!(kind, Kind::Pin | Kind::Toast | Kind::Result) {
         mask |= NSWindowStyleMask::NonactivatingPanel;
     }
     ns_window.setStyleMask(mask);
@@ -198,6 +202,15 @@ impl FrameHandle {
 /// 窗口是不是 key window（键盘落在它上面）。
 pub fn is_key(window: &Window) -> bool {
     crate::panel::ns_window(window).is_some_and(|ns_window| ns_window.isKeyWindow())
+}
+
+/// 是不是非激活面板（不需要 Helmp 激活就能当 key window 收键）。自检用。
+pub fn is_nonactivating(window: &Window) -> bool {
+    crate::panel::ns_window(window).is_some_and(|ns_window| {
+        ns_window
+            .styleMask()
+            .contains(NSWindowStyleMask::NonactivatingPanel)
+    })
 }
 
 /// Helmp 此刻是不是前台 App。

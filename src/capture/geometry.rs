@@ -309,6 +309,11 @@ pub fn from_appkit(display: Rect, global: Rect) -> Rect {
     )
 }
 
+/// AppKit 全局坐标的点（如 `NSEvent.mouseLocation`）→ 显示器内的点，[`from_appkit`] 的点版本。
+pub fn point_from_appkit(display: Rect, (x, y): (f64, f64)) -> Point {
+    Point::new(x - display.x, display.y + display.h - y)
+}
+
 /// CoreGraphics 全局坐标（原点在主屏左上、y 向下，`CGWindowListCopyWindowInfo` 和 `CGDisplayBounds` 用它）
 /// 的矩形 → 某块屏内的矩形。`display` 是这块屏的 `CGDisplayBounds`。
 pub fn cg_to_local(display: Rect, global: Rect) -> Rect {
@@ -561,6 +566,23 @@ mod tests {
         let frame = to_appkit(side, sel);
         assert_eq!(frame, Rect::new(1612.0, 790.0, 300.0, 150.0));
         assert_eq!(from_appkit(side, frame), sel);
+    }
+
+    #[test]
+    fn mouse_location_maps_to_the_same_point_the_overlay_reports() {
+        // 遮罩一出现就要按指针位置高亮窗口（CARM-88），这时还没有鼠标事件，只能读 NSEvent.mouseLocation
+        // （AppKit 全局坐标，y 向上）。换算错了高亮的就是上下颠倒的另一个窗口，副屏上还会差一整块屏。
+        let main = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        assert_eq!(
+            point_from_appkit(main, (100.0, 882.0)),
+            Point::new(100.0, 100.0)
+        );
+        // 副屏在主屏右侧、底边更低（原点为负）：和 from_appkit 换算一个零大小的矩形结果一致。
+        let side = Rect::new(1512.0, -300.0, 2560.0, 1440.0);
+        let p = point_from_appkit(side, (1612.0, 940.0));
+        assert_eq!(p, Point::new(100.0, 200.0));
+        let r = from_appkit(side, Rect::new(1612.0, 940.0, 0.0, 0.0));
+        assert_eq!((r.x, r.y), (p.x, p.y));
     }
 
     #[test]
