@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- When macOS opens the launcher panel slowly and Helmp has already fallen back to the keyboard-only panel, Helmp now switches the panel back once it becomes active, so input methods such as Chinese Pinyin compose again without reopening the panel. A fallback that restored the keyboard is now reported to crash reporting as a warning instead of an error; a panel that still has no keyboard is still an error.
+
+### 简体中文
+
+#### 修复
+
+- 面板唤起较慢、Helmp 已退回只收键盘的面板时，Helmp 获得前台后会把面板改回原样，中文等输入法不用重新唤起就能组字。退回后键盘已恢复的情况改为以警告级别报给错误监控，退回后仍拿不到键盘的情况仍按错误上报。
+
 ## [0.4.19] - 2026-11-21
 
 ### Fixed

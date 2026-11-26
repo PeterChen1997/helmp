@@ -267,6 +267,26 @@ pub fn verify_focus(window: &Window) -> FocusCheck {
     }
 }
 
+/// 退回非激活面板之后多久再看一次 Helmp 有没有被激活（见 [`restore_activating_if_active`]）。
+pub const LATE_ACTIVATION_DELAY: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// [`verify_focus`] 退回非激活面板后，激活请求若只是来得慢（不是被 WindowServer 拒绝），Helmp 稍后仍会被激活。
+/// 这时把面板改回激活型并重新 makeKey：非激活面板上输入法组不了字（见 [`make_activating`]），
+/// 不必等到下次唤起才恢复。返回是否改回了。
+pub fn restore_activating_if_active(window: &Window) -> bool {
+    let Some(ns_window) = ns_window(window) else {
+        return false;
+    };
+    if !ns_window.isVisible() || !is_nonactivating(&ns_window) || !app_is_active() {
+        return false;
+    }
+    ns_window.setStyleMask(panel_style_mask(ns_window.styleMask()));
+    ns_window.makeKeyAndOrderFront(None);
+    ensure_text_input(&ns_window);
+    crate::trace::log(format!("Helmp 晚到的激活生效，面板改回激活型：{}", focus_state(window)));
+    true
+}
+
 /// 图形自检默认把面板摆在屏幕外、不抢键盘（见 [`show`]）。
 fn offscreen_self_test() -> bool {
     std::env::var_os("HELMP_SELF_TEST").is_some()

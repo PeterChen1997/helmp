@@ -662,6 +662,13 @@ impl Launcher {
                     crate::telemetry::panel_focus_failed(check, this.scope_id(), &before);
                 }
             });
+            // 退回了非激活面板的，过一会儿再看 Helmp 是否晚到地被激活了，是就改回激活型（输入法要组字）。
+            cx.background_executor().timer(crate::panel::LATE_ACTIVATION_DELAY).await;
+            let _ = this.update_in(cx, |this, window, _| {
+                if this.visible && this.shown_at == Some(shown_at) {
+                    crate::panel::restore_activating_if_active(window);
+                }
+            });
         })
         .detach();
     }

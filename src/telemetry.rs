@@ -92,7 +92,13 @@ pub fn init() -> Option<sentry::ClientInitGuard> {
 
 /// 把一个处理过的错误报给 Sentry。`place` 是固定的位置名（如 `history.save`），作为标题与标签。
 pub fn report(place: &'static str, err: &anyhow::Error) {
+    report_at(place, err, sentry::Level::Error);
+}
+
+/// 同 [`report`]，但指定级别：系统已自愈、不影响使用的自诊断报 `Warning`，不在错误列表里每天刷屏。
+pub fn report_at(place: &'static str, err: &anyhow::Error, level: sentry::Level) {
     let mut event = sentry::event_from_error::<dyn std::error::Error>(err.as_ref());
+    event.level = level;
     event.message = Some(format!("{place}: {err:#}"));
     event.tags.insert("place".into(), place.into());
     // 标题用位置名（anyhow 的类型名都是 `Error`，看不出是哪里）；附上调用处的堆栈
@@ -176,7 +182,7 @@ fn note_size_bucket(width: f64) -> &'static str {
 
 /// 面板唤起后没拿到键盘（CARM-340，见 `panel::verify_focus`）：Sentry 记 `panel.not_key`，Umami 记 `panel_focus_fallback`。
 /// 只带核对结果、范围 id 和焦点状态（key / 激活 / 前台 App 的 bundle id），不带搜索词与剪贴板内容。
-/// 一次运行最多报 20 次，免得某台机器上每次唤起都被拒时刷屏。
+/// 一次运行最多报 20 次，免得某台机器上每次唤起都被拒时刷屏。级别见 [`panel_focus_level`]。
 pub fn panel_focus_failed(check: crate::panel::FocusCheck, scope: Option<&str>, state: &str) {
     static REPORTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let recovered = check == crate::panel::FocusCheck::Recovered;
@@ -186,11 +192,20 @@ pub fn panel_focus_failed(check: crate::panel::FocusCheck, scope: Option<&str>, 
         return;
     }
     let err = anyhow::anyhow!("唤起后面板不是 key window：recovered={recovered} scope={scope} {state}");
-    report("panel.not_key", &err);
+    report_at("panel.not_key", &err, panel_focus_level(check));
     track(
         "panel_focus_fallback",
         json!({ "recovered": recovered, "scope": scope }),
     );
+}
+
+/// `panel.not_key` 的级别（CARM-494）：系统拒绝 Helmp 到前台后已退回非激活面板、键盘回到面板
+/// （`Recovered`）是可自愈的，记 warning；退回后仍拿不到键盘（`Lost`）用户就打不了字，仍记 error。
+fn panel_focus_level(check: crate::panel::FocusCheck) -> sentry::Level {
+    match check {
+        crate::panel::FocusCheck::Lost => sentry::Level::Error,
+        crate::panel::FocusCheck::Ok | crate::panel::FocusCheck::Recovered => sentry::Level::Warning,
+    }
 }
 
 /// 从剪贴板历史写回一条文本：`mode` 为 `paste` / `copy` / `plain_text`，`formats` 是一起写回的富文本种类
@@ -500,6 +515,15 @@ mod tests {
         assert_eq!(known_provider("/Users/alice/secret.txt"), "other");
         assert_eq!(known_provider("我的密码是 123"), "other");
         assert_eq!(known_provider(""), "other");
+    }
+
+    #[test]
+    fn panel_focus_level_only_errors_when_keyboard_is_lost() {
+        // 已自愈的 panel.not_key 每天都会出现（系统偶尔不让 Helmp 到前台），报 error 会淹没真问题；
+        // 退回后仍没键盘是用户真的打不了字，必须留在 error。
+        use crate::panel::FocusCheck;
+        assert_eq!(panel_focus_level(FocusCheck::Recovered), sentry::Level::Warning);
+        assert_eq!(panel_focus_level(FocusCheck::Lost), sentry::Level::Error);
     }
 
     #[test]
