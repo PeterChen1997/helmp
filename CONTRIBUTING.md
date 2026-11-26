@@ -31,7 +31,7 @@ cargo test --release
 cargo clippy --release --all-targets -- -D warnings
 ```
 
-CI runs the same two commands on macOS. Tests that depend on your own machine (real agent sessions, real terminals) are marked `#[ignore]`; run them with `-- --ignored` when you touch that code.
+Run both checks locally on macOS before committing. The GitHub Actions CI workflow is disabled. Tests that depend on your own machine (real agent sessions, real terminals) are marked `#[ignore]`; run them with `-- --ignored` when you touch that code.
 
 ### End-to-end tests
 
@@ -132,7 +132,7 @@ cargo test --release
 cargo clippy --release --all-targets -- -D warnings
 ```
 
-CI 在 macOS 上跑的就是这两条。依赖本机环境的测试（真实的 agent 会话、真实的终端进程）标了 `#[ignore]`，改到相关代码时用 `-- --ignored` 跑一下。
+提交前在 macOS 本机执行上面两条检查。GitHub Actions CI 已停用。依赖本机环境的测试（真实的 agent 会话、真实的终端进程）标了 `#[ignore]`，改到相关代码时用 `-- --ignored` 跑一下。
 
 ### 端到端测试
 
