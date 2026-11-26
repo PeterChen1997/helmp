@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.21] - 2026-11-26
+
 ### Fixed
 
 - Clipboard history shows a preview of the first available image in files copied from Finder and still lists the file paths.
