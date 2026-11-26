@@ -33,6 +33,8 @@ enum Status {
     Running,
     /// (中文, 英文)：渲染时按当前语言取，切换语言后跟着变。
     Ok((&'static str, &'static str)),
+    /// 测试连接成功，附带拉模型列表的结果：拉到几个，或没拉到的原因（后端给的已本地化文案）。
+    Connected(std::result::Result<usize, String>),
     Err(String),
 }
 
@@ -57,6 +59,14 @@ pub struct ModelsPane {
     /// Ollama 模型 id → 是否在线。
     online: HashMap<String, bool>,
     menu: Option<Menu>,
+    /// 模型条目 id → 测试连接时拉到的模型列表（只在内存里，不写盘）。没拉到或拉到空列表就没有这一项。
+    lists: HashMap<String, Vec<String>>,
+    /// 模型名下方的候选浮层是否展开，以及高亮的是筛选结果里的第几项。
+    picker_open: bool,
+    picker_ix: usize,
+    picker_scroll: ScrollHandle,
+    /// 指针是否在模型名输入框上：点输入框本身不算「点外面」，浮层不收起。
+    model_field_hovered: bool,
     /// 输入框占位文字按哪一代语言设置的（`i18n::generation`）；None 表示还没设置。
     placeholders_for: Option<u64>,
     _subscriptions: Vec<Subscription>,
@@ -80,11 +90,17 @@ impl ModelsPane {
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
-                move |this, _, event: &InputEvent, _, cx| {
-                    if let InputEvent::Change = event {
+                move |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Change => {
                         let value = state_for_read.read(cx).value().to_string();
                         this.on_text_changed(field, value, cx);
+                        if field == TextField::Model {
+                            this.open_picker(cx);
+                        }
                     }
+                    InputEvent::Focus if field == TextField::Model => this.open_picker(cx),
+                    InputEvent::Blur if field == TextField::Model => this.close_picker(cx),
+                    _ => {}
                 },
             ));
         }
@@ -110,6 +126,11 @@ impl ModelsPane {
             status: Status::Idle,
             online: HashMap::new(),
             menu: None,
+            lists: HashMap::new(),
+            picker_open: false,
+            picker_ix: 0,
+            picker_scroll: ScrollHandle::new(),
+            model_field_hovered: false,
             placeholders_for: None,
             _subscriptions: subscriptions,
         };
@@ -232,6 +253,7 @@ impl ModelsPane {
         self.selected = Some(id);
         self.status = Status::Idle;
         self.menu = None;
+        self.picker_open = false;
         self.load_selected(window, cx);
         cx.notify();
     }
@@ -282,6 +304,8 @@ impl ModelsPane {
             Err(err) => Status::Err(save_failed(&err)),
         };
         self.online.remove(&model.id);
+        self.lists.remove(&model.id);
+        self.picker_open = false;
         self.key_dirty = false;
         self.selected = config::get().models.first().map(|model| model.id.clone());
         self.load_selected(window, cx);
@@ -315,10 +339,15 @@ impl ModelsPane {
             self.base_url
                 .update(cx, |state, cx| state.set_value(new_url, window, cx));
         }
+        // 换了接口类型，旧服务商的模型列表不再适用。
+        self.lists.remove(&model.id);
+        self.picker_open = false;
         self.status = Status::Idle;
         self.check_ollama(cx);
     }
 
+    /// 测试连接，同时拉模型列表。两个请求互不影响：连接测试失败（比如还没填模型名）时，
+    /// 列表拉到了照样能选。
     fn test(&mut self, cx: &mut Context<Self>) {
         self.save_key(cx);
         let Some(model) = self.selected_model() else {
@@ -328,26 +357,49 @@ impl ModelsPane {
             return;
         }
         self.status = Status::Running;
+        self.picker_open = false;
         cx.notify();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let id = model.id.clone();
             let kind = model.kind;
-            let result = cx
-                .background_spawn(async move { crate::models::test_connection(&model, None) })
-                .await;
+            let for_list = model.clone();
+            // 两个任务都先启动再等，所以是并行的。
+            let test =
+                cx.background_spawn(async move { crate::models::test_connection(&model, None) });
+            let list =
+                cx.background_spawn(async move { crate::models::list_models(&for_list, None) });
+            let result = test.await;
+            let list = list.await;
+            crate::telemetry::models_list_fetched(
+                kind_value(kind),
+                list.is_ok(),
+                list.as_ref().map_or(0, Vec::len),
+            );
+            if let Err(err) = &list {
+                crate::telemetry::report("models.list", err);
+            }
             let _ = this.update(cx, |this, cx| {
                 if kind == ModelKind::Ollama {
                     this.online.insert(id.clone(), result.is_ok());
                 }
+                let fetched = match list {
+                    Ok(names) => {
+                        let count = names.len();
+                        if names.is_empty() {
+                            this.lists.remove(&id);
+                        } else {
+                            this.lists.insert(id.clone(), names);
+                        }
+                        Ok(count)
+                    }
+                    Err(err) => {
+                        this.lists.remove(&id);
+                        Err(format!("{err:#}"))
+                    }
+                };
                 if this.selected.as_deref() == Some(id.as_str()) {
                     this.status = match result {
-                        Ok(()) if kind == ModelKind::Ollama => {
-                            Status::Ok(("连接正常", "Connected"))
-                        }
-                        Ok(()) => Status::Ok((
-                            "连接正常 · Key 已存入钥匙串",
-                            "Connected · Key saved to Keychain",
-                        )),
+                        Ok(()) => Status::Connected(fetched),
                         Err(err) => Status::Err(format!("{err:#}")),
                     };
                 }
@@ -385,6 +437,102 @@ impl ModelsPane {
         .detach();
     }
 
+    /// 选中条目拉到的模型列表（没拉到就是 None，模型名就是普通文本框）。
+    fn current_list(&self) -> Option<&[String]> {
+        self.selected
+            .as_deref()
+            .and_then(|id| self.lists.get(id))
+            .map(Vec::as_slice)
+    }
+
+    /// 浮层里的候选：按模型名输入框当前的内容筛选。
+    fn picker_matches(&self, cx: &App) -> (Vec<String>, String) {
+        let query = self.model.read(cx).value().to_string();
+        let matches = self
+            .current_list()
+            .map(|all| {
+                crate::models::filter_models(all, &query)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        (matches, query)
+    }
+
+    /// 有列表时展开浮层，高亮停在当前值上（不在候选里就停在第一项）。
+    fn open_picker(&mut self, cx: &mut Context<Self>) {
+        if self.current_list().is_none() || self.loaded != self.selected {
+            return;
+        }
+        let (matches, query) = self.picker_matches(cx);
+        self.picker_ix = matches.iter().position(|name| *name == query).unwrap_or(0);
+        self.picker_scroll.scroll_to_item(self.picker_ix);
+        self.picker_open = true;
+        cx.notify();
+    }
+
+    fn close_picker(&mut self, cx: &mut Context<Self>) {
+        if self.picker_open {
+            self.picker_open = false;
+            cx.notify();
+        }
+    }
+
+    /// 从列表里选了一个：写进输入框和 config.json，收起浮层。
+    fn pick_model(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let kind = self.selected_model().map(|model| model.kind);
+        self.model
+            .update(cx, |state, cx| state.set_value(name.clone(), window, cx));
+        // `set_value` 不触发 Change，这里走同一条落盘路径。
+        self.on_text_changed(TextField::Model, name, cx);
+        if let Some(kind) = kind {
+            crate::telemetry::model_picked_from_list(kind_value(kind));
+        }
+        self.picker_open = false;
+        cx.notify();
+    }
+
+    /// 模型名输入框的按键（捕获阶段，先于单行 Input 吞掉 ↑↓ / 回车）：
+    /// ↑↓ 移动高亮（收起时 ↓ / ↑ 重新展开），回车写入高亮项，没有候选时回车就用手填的值，Esc 收起。
+    fn on_model_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.modified() || self.current_list().is_none() {
+            return;
+        }
+        match keystroke.key.as_str() {
+            key @ ("up" | "down") => {
+                if self.picker_open {
+                    let len = self.picker_matches(cx).0.len();
+                    self.picker_ix = step(self.picker_ix, key == "up", len);
+                    self.picker_scroll.scroll_to_item(self.picker_ix);
+                    cx.notify();
+                } else {
+                    self.open_picker(cx);
+                }
+            }
+            "enter" if self.picker_open => {
+                match self.picker_matches(cx).0.into_iter().nth(self.picker_ix) {
+                    Some(name) => self.pick_model(name, window, cx),
+                    // 没有匹配：手填的值已经随输入写进配置了，收起即可。
+                    None => self.close_picker(cx),
+                }
+            }
+            "escape" if self.picker_open => self.close_picker(cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    fn toggle_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picker_open {
+            self.close_picker(cx);
+        } else {
+            self.model.update(cx, |state, cx| state.focus(window, cx));
+            self.open_picker(cx);
+        }
+    }
+
     fn set_translate_model(&mut self, id: String, cx: &mut Context<Self>) {
         if let Err(err) = config::update(|config| config.translate.model_id = Some(id)) {
             self.status = Status::Err(save_failed(&err));
@@ -409,6 +557,42 @@ impl ModelsPane {
         };
         cx.notify();
     }
+}
+
+/// ↑↓ 移动高亮：停在两端，不循环（和启动器列表一致）。
+fn step(ix: usize, up: bool, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    if up {
+        ix.saturating_sub(1).min(len - 1)
+    } else {
+        (ix + 1).min(len - 1)
+    }
+}
+
+/// 模型名里命中筛选词的那一段（字节范围），按 `filter_models` 同样的规则：去首尾空白、大小写不敏感。
+fn match_range(name: &str, query: &str) -> Option<std::ops::Range<usize>> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    // 逐字符转小写，记下每个原字符在小写串里的起点，再把命中范围映射回原串（小写后字节数可能变）。
+    let mut lower = String::new();
+    let mut starts = Vec::new();
+    for (offset, c) in name.char_indices() {
+        starts.push((lower.len(), offset));
+        lower.extend(c.to_lowercase());
+    }
+    let start = lower.find(&query)?;
+    let end = start + query.len();
+    let to_original = |at: usize| {
+        starts
+            .iter()
+            .find(|(lower_at, _)| *lower_at >= at)
+            .map_or(name.len(), |(_, offset)| *offset)
+    };
+    Some(to_original(start)..to_original(end))
 }
 
 fn save_failed(err: &anyhow::Error) -> String {
@@ -795,6 +979,20 @@ impl ModelsPane {
                 format!("✓ {}", tr(zh, en)),
                 style::tone_colors(crate::provider::Tone::Done, pal.dark).1,
             ),
+            Status::Connected(Ok(count)) => (
+                trf!(
+                    "✓ 连接成功 · 拉到 {count} 个模型",
+                    "✓ Connected · {count} models found"
+                ),
+                style::tone_colors(crate::provider::Tone::Done, pal.dark).1,
+            ),
+            Status::Connected(Err(reason)) => (
+                trf!(
+                    "✓ 连接成功 · 模型列表没拉到：{reason}",
+                    "✓ Connected · Couldn't fetch the model list: {reason}"
+                ),
+                style::tone_colors(crate::provider::Tone::Done, pal.dark).1,
+            ),
             Status::Err(text) => (text.clone(), pal.danger),
         };
         let running = matches!(self.status, Status::Running);
@@ -825,7 +1023,7 @@ impl ModelsPane {
             .child(
                 row(false, pal)
                     .child(label(tr("模型名", "Model")))
-                    .child(field(&self.model, true, pal)),
+                    .child(self.render_model_field(pal, cx)),
             )
             .child(
                 row(false, pal)
@@ -854,6 +1052,203 @@ impl ModelsPane {
                         }),
                     ),
             )
+    }
+
+    /// 模型名：文本框 + 拉到列表后右侧的 ⌄ 和下方的候选浮层（方案 A：输入框即筛选）。
+    fn render_model_field(&self, pal: &Palette, cx: &mut Context<Self>) -> Div {
+        let has_list = self.current_list().is_some();
+        let input = div()
+            .id("model-name-field")
+            .w(px(300.))
+            .h(px(24.))
+            .pl(px(8.))
+            .pr(px(if has_list { 2. } else { 8. }))
+            .flex()
+            .items_center()
+            .rounded(px(6.))
+            .bg(pal.control)
+            .border_1()
+            .border_color(if self.picker_open {
+                pal.accent
+            } else {
+                pal.separator
+            })
+            .text_size(px(13.))
+            .font_family("Menlo")
+            .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+                this.model_field_hovered = *hovered;
+            }))
+            // 点输入框就展开（捕获阶段，Input 自己会吃掉按下事件）。已聚焦时再点不会有 Focus 事件。
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                if !this.picker_open {
+                    this.open_picker(cx);
+                }
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.model).appearance(false)),
+            )
+            .when(has_list, |input| {
+                input.child(
+                    div()
+                        .id("model-name-chevron")
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(px(20.))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(pal.key_bg))
+                        .child(
+                            gpui_kit::component::Icon::empty()
+                                .path("icons/chevron-down.svg")
+                                .text_color(pal.key_fg)
+                                .size(px(12.)),
+                        )
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.toggle_picker(window, cx)
+                        })),
+                )
+            });
+        let mut container = div()
+            .ml_auto()
+            .relative()
+            .capture_key_down(cx.listener(Self::on_model_key))
+            .child(input);
+        if self.picker_open
+            && let Some(all) = self.current_list()
+        {
+            let (matches, query) = self.picker_matches(cx);
+            container = container.child(
+                div().absolute().right_0().top(px(28.)).child(
+                    deferred(
+                        anchored()
+                            .anchor(Anchor::TopRight)
+                            .child(self.render_picker(all.len(), &matches, &query, pal, cx)),
+                    )
+                    .with_priority(1),
+                ),
+            );
+        }
+        container
+    }
+
+    fn render_picker(
+        &self,
+        total: usize,
+        matches: &[String],
+        query: &str,
+        pal: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let popup = div()
+            .id("model-picker")
+            .w(px(300.))
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            // 窗口底色是半透明的（靠毛玻璃），浮层盖在表单上要不透明，否则底下的字会透出来。
+            .bg(Hsla {
+                a: 1.,
+                ..pal.window
+            })
+            .border_1()
+            .border_color(pal.separator)
+            .shadow_lg()
+            .overflow_hidden()
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                if !this.model_field_hovered {
+                    this.close_picker(cx);
+                }
+            }));
+        if matches.is_empty() {
+            let typed = query.trim();
+            return popup.child(
+                div()
+                    .px(px(10.))
+                    .py(px(7.))
+                    .text_size(px(12.))
+                    .text_color(pal.muted)
+                    .child(trf!(
+                        "没有匹配的模型，回车直接使用『{typed}』",
+                        "No matching models. Press ↩ to use “{typed}”."
+                    )),
+            );
+        }
+        let current = query.to_string();
+        let mut list = div()
+            .id("model-picker-list")
+            .flex()
+            .flex_col()
+            .max_h(px(240.))
+            .p(px(5.))
+            .overflow_y_scroll()
+            .track_scroll(&self.picker_scroll);
+        for (ix, name) in matches.iter().enumerate() {
+            let on = ix == self.picker_ix;
+            let fg = if on { pal.selection_fg } else { pal.fg };
+            let highlights = match_range(name, query).map(|range| {
+                (
+                    range,
+                    HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        color: Some(if on { pal.selection_fg } else { pal.accent }),
+                        ..Default::default()
+                    },
+                )
+            });
+            let value = name.clone();
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("model-picker-{ix}")))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .h(px(24.))
+                    .px(px(8.))
+                    .rounded(px(5.))
+                    .font_family("Menlo")
+                    .text_size(px(12.5))
+                    .text_color(fg)
+                    .when(on, |row| row.bg(pal.selection))
+                    .when(!on, |row| row.hover(|style| style.bg(pal.key_bg)))
+                    .cursor_pointer()
+                    .child(div().w(px(12.)).flex_none().child(if *name == current {
+                        "✓"
+                    } else {
+                        ""
+                    }))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(StyledText::new(name.clone()).with_highlights(highlights)),
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.pick_model(value.clone(), window, cx)
+                    })),
+            );
+        }
+        let shown = matches.len();
+        popup.child(list).child(
+            div()
+                .flex()
+                .items_center()
+                .h(px(24.))
+                .px(px(10.))
+                .border_t_1()
+                .border_color(pal.separator)
+                .text_size(px(11.5))
+                .text_color(pal.muted)
+                .child(trf!(
+                    "{shown} / {total} 个模型 · ↑↓ 选择 ↩ 确认 esc 收起",
+                    "{shown} / {total} models · ↑↓ select ↩ choose esc close"
+                )),
+        )
     }
 
     fn render_usage(&self, pal: &Palette, cx: &mut Context<Self>) -> Div {
@@ -999,5 +1394,36 @@ impl Render for ModelsPane {
             })
             .child(heading(tr("用途", "Usage"), &pal))
             .child(self.render_usage(&pal, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // 不用 `super::*`：那会带进 gpui_kit 的 `test` 宏，盖掉标准的 `#[test]`。
+    use super::{match_range, step};
+
+    #[test]
+    fn picker_highlight_stops_at_both_ends() {
+        // 和启动器列表一样停在两端不绕回：按住 ↓ 不会从最后一项跳回第一项、误选到别的模型。
+        assert_eq!(step(0, true, 5), 0);
+        assert_eq!(step(0, false, 5), 1);
+        assert_eq!(step(4, false, 5), 4);
+        // 继续输入后候选变少，高亮可能越界，下一次按键要拉回最后一项而不是指向不存在的行。
+        assert_eq!(step(9, true, 3), 2);
+        assert_eq!(step(9, false, 3), 2);
+        assert_eq!(step(0, false, 0), 0);
+    }
+
+    #[test]
+    fn highlight_marks_what_the_filter_matched() {
+        // 高亮必须和筛选同一规则（去首尾空白、大小写不敏感），否则列出来的行看不出为什么命中。
+        assert_eq!(match_range("deepseek-Chat", "  CHAT "), Some(9..13));
+        assert_eq!(match_range("gpt-4o", "gpt"), Some(0..3));
+        assert_eq!(match_range("gpt-4o", "   "), None);
+        assert_eq!(match_range("gpt-4o", "claude"), None);
+        // 小写后字节数会变的字符（İ 小写是两个字符）：范围仍落在原串的字符边界上，切片不能 panic。
+        let name = "İx-qwen";
+        let range = match_range(name, "qwen").unwrap();
+        assert_eq!(&name[range], "qwen");
     }
 }

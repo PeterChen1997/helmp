@@ -73,14 +73,12 @@ fn stored_key_if_needed(model: &ModelConfig, key: Option<&str>) -> Result<Option
 
 /// 拉取服务商的模型列表。未传 Key 时按「测试连接」的规则读钥匙串。
 /// 这是阻塞请求，在后台线程调用。
-#[allow(dead_code)] // 设置页的调用方由 CARM-316 接入。
 pub fn list_models(model: &ModelConfig, key: Option<&str>) -> Result<Vec<String>> {
     let stored = stored_key_if_needed(model, key)?;
     client::list(model, key.or(stored.as_deref()))
 }
 
 /// 去掉查询的首尾空白，再做大小写不敏感的子串匹配，保留原顺序。
-#[allow(dead_code)] // 设置页的调用方由 CARM-316 接入。
 pub fn filter_models<'a>(all: &'a [String], query: &str) -> Vec<&'a str> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {

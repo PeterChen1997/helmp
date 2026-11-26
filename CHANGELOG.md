@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Settings › Models: Test Connection now also fetches the provider's model list (OpenAI-compatible APIs, Ollama and Anthropic). Once it arrives, the Model field shows a ⌄ and a list below it that filters as you type, with ↑↓ to move, ↩ to choose and Esc to close; you can still type a model that isn't listed. The list is fetched even if the connection test fails (say, before a model name is filled in), and if the provider doesn't list its models, the status line says why.
+
+### 简体中文
+
+#### 新增
+
+- 设置 › 模型：「测试连接」时会顺带拉取服务商的模型列表（OpenAI 兼容接口、Ollama、Anthropic）。拉到后模型名输入框右侧出现 ⌄，框下方弹出随输入实时筛选的列表，↑↓ 选择、↩ 确认、Esc 收起；列表里没有的模型照样可以手填。连接测试失败（比如还没填模型名）时列表也照常拉取；服务商不提供列表时，状态行会说明原因。
+
 ## [0.4.21] - 2026-11-26
 
 ### Fixed

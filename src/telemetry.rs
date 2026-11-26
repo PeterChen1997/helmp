@@ -310,6 +310,20 @@ pub fn plugin_theme_skip_today(skip: bool) {
     track("plugin_theme_skip_today", json!({ "skip": skip }));
 }
 
+/// 设置 › 模型「测试连接」顺带拉了一次模型列表：接口类型（`anthropic` / `openai` / `ollama`）、
+/// 是否成功、拉到几个。不发模型名、Base URL 和 Key。
+pub fn models_list_fetched(kind: &'static str, ok: bool, count: usize) {
+    track(
+        "models_list_fetched",
+        json!({ "kind": kind, "ok": ok, "count": count }),
+    );
+}
+
+/// 从拉到的模型列表里选了一个填进模型名：只发接口类型，不发模型名。
+pub fn model_picked_from_list(kind: &'static str) {
+    track("model_picked_from_list", json!({ "kind": kind }));
+}
+
 /// 插件源的增删：`via` 是入口（`settings` / `cli`），`auth` 是否带鉴权。不发名字和地址。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceEvent {
