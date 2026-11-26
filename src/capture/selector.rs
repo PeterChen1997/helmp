@@ -103,6 +103,13 @@ impl Selector {
         }
     }
 
+    /// 还没开始框选时去掉悬停高亮（鼠标去了别的屏）。框选、调整中的状态不动。
+    pub fn clear_hover(&mut self) {
+        if let State::Idle { hover } = &mut self.state {
+            *hover = None;
+        }
+    }
+
     /// 左键按下。`clicks` 是连击次数（双击为 2）。
     pub fn press(&mut self, p: Point, clicks: usize, windows: &[Rect]) -> Effect {
         let p = geometry::clamp_point(p, self.bounds);
@@ -229,6 +236,18 @@ impl Selector {
     }
 }
 
+/// 鼠标停在第 `index` 块屏的 `p` 上（没按键）：更新这块屏的悬停，并去掉其他屏留下的悬停。
+/// 鼠标事件只发给指针所在屏的遮罩，原来那块屏收不到「离开」，不清掉就会两块屏同时高亮（CARM-539）。
+pub fn hover_on(selectors: &mut [Selector], index: usize, p: Point, windows: &[Rect]) {
+    for (ix, selector) in selectors.iter_mut().enumerate() {
+        if ix == index {
+            selector.hover_at(p, windows);
+        } else {
+            selector.clear_hover();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +363,33 @@ mod tests {
             Effect::Selected(Rect::new(900.0, 700.0, 100.0, 100.0))
         );
         assert_eq!(s.selection(), Some(Rect::new(900.0, 700.0, 100.0, 100.0)));
+    }
+
+    #[test]
+    fn moving_to_another_screen_leaves_only_one_highlight() {
+        // 截图键按下时指针在 A 屏的窗口上（初始高亮），不点击直接移到 B 屏的窗口上：只能高亮 B 屏那个。
+        let a_window = Rect::new(100.0, 100.0, 400.0, 300.0);
+        let b_window = Rect::new(50.0, 50.0, 200.0, 200.0);
+        let bounds = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        let mut screens = [Selector::new(bounds), Selector::new(bounds)];
+        hover_on(&mut screens, 0, Point::new(150.0, 150.0), &[a_window]);
+        assert_eq!(screens[0].hover(), Some(a_window));
+        hover_on(&mut screens, 1, Point::new(100.0, 100.0), &[b_window]);
+        assert_eq!(screens[0].hover(), None, "离开的那块屏不能留着高亮");
+        assert_eq!(screens[1].hover(), Some(b_window));
+    }
+
+    #[test]
+    fn hovering_another_screen_keeps_a_selection_in_progress() {
+        // 只清「还没开始框选」的悬停：别的屏上选好的选区不能因为鼠标路过被清掉。
+        let bounds = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        let mut screens = [Selector::new(bounds), Selector::new(bounds)];
+        screens[0].press(Point::new(10.0, 10.0), 1, &[]);
+        screens[0].drag(Point::new(110.0, 60.0));
+        screens[0].release(Point::new(110.0, 60.0));
+        let selected = screens[0].state;
+        assert!(matches!(selected, State::Selected { .. }));
+        hover_on(&mut screens, 1, Point::new(5.0, 5.0), &[]);
+        assert_eq!(screens[0].state, selected);
     }
 }

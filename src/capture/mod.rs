@@ -325,17 +325,25 @@ fn fail(err: anyhow::Error, cx: &mut App) {
 
 fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
     let offscreen = offscreen();
+    // 遮罩一出现就按指针当前位置高亮它下面的窗口（CARM-88）：悬停原来只在 mouse-moved 里算，
+    // 按下截图键后不动鼠标就一直没有高亮。这时还没有鼠标事件，主动读一次指针位置，
+    // 在遮罩画第一帧之前就做好初始命中。键盘落在指针所在的屏（交界线只算一块，见 pointer_screen）。
+    let frames: Vec<Rect> = frozen.iter().map(|f| f.screen.frame).collect();
+    let pointer = geometry::pointer_screen(&frames, native::mouse_location());
+    let key_index = pointer.key;
+    let mut selectors: Vec<Selector> = frozen.iter().map(|f| Selector::new(f.bounds())).collect();
+    if let Some((ix, p)) = pointer.hit {
+        selectors[ix].hover_at(p, &frozen[ix].screen.windows);
+    }
     let session = cx.new(|_| Session {
         mode,
-        selectors: frozen.iter().map(|f| Selector::new(f.bounds())).collect(),
+        selectors,
         screens: frozen.clone(),
         editor: Default::default(),
         mosaic: None,
         overlays: Vec::new(),
         busy: false,
     });
-    let mouse = native::mouse_location();
-    let mut key_index = 0;
     let mut overlays = Vec::new();
     for (ix, screen) in frozen.iter().enumerate() {
         let frame = screen.screen.frame;
@@ -379,30 +387,9 @@ fn open_overlays(mode: Mode, frozen: Vec<Frozen>, cx: &mut App) {
             native::setup(window, native::Kind::Overlay, frame, offscreen);
             native::underlay_image(window, &image, (frame.w, frame.h));
         });
-        let contains = mouse.0 >= frame.x
-            && mouse.0 <= frame.x + frame.w
-            && mouse.1 >= frame.y
-            && mouse.1 <= frame.y + frame.h;
-        if contains {
-            key_index = ix;
-        }
         overlays.push(handle);
     }
-    // 遮罩一出现就按指针当前位置高亮它下面的窗口（CARM-88）：悬停原来只在 mouse-moved 里算，
-    // 按下截图键后不动鼠标就一直没有高亮。这时还没有鼠标事件，主动读一次指针位置做初始命中。
-    let initial_hover = frozen.get(key_index).map(|screen| {
-        let p = geometry::point_from_appkit(screen.screen.frame, mouse);
-        (
-            geometry::clamp_point(p, screen.bounds()),
-            screen.screen.windows.clone(),
-        )
-    });
-    session.update(cx, |session, _| {
-        session.overlays = overlays.clone();
-        if let Some((p, windows)) = &initial_hover {
-            session.selectors[key_index].hover_at(*p, windows);
-        }
-    });
+    session.update(cx, |session, _| session.overlays = overlays.clone());
     // 先不抢焦点地把各屏的遮罩都摆上，最后让鼠标所在屏的那块成为 key window（键盘落在那里）。
     for (ix, handle) in overlays.iter().enumerate() {
         let key = ix == key_index;

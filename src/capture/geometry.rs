@@ -314,6 +314,40 @@ pub fn point_from_appkit(display: Rect, (x, y): (f64, f64)) -> Point {
     Point::new(x - display.x, display.y + display.h - y)
 }
 
+/// 指针落在哪块屏上，见 [`pointer_screen`]。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PointerScreen {
+    /// 键盘落在哪块屏（这块屏的遮罩成为 key window）。
+    pub key: usize,
+    /// 指针实际所在的屏和它在这块屏里的坐标。悬停高亮只在这块屏上算。
+    pub hit: Option<(usize, Point)>,
+}
+
+/// 按 `NSEvent.mouseLocation`（AppKit 全局坐标）找指针所在的屏，`frames` 是各屏的 NSScreen.frame。
+///
+/// 换算成本屏坐标后按和 [`Rect::contains`] 一样的半开区间判断：拼接的两块屏交界线只算一块
+/// （左右拼接算右边那块、上下拼接算下面那块），换算出来的点也一定落在这块屏里，
+/// 不会出现「本屏 x 正好等于屏宽、贴边的窗口全都命中不了」。
+/// 指针在最右 / 最下的外边上时没有屏实际命中，`hit` 为 None（不高亮），键盘退回闭区间里的那块屏；
+/// 都不在时是第一块。
+pub fn pointer_screen(frames: &[Rect], mouse: (f64, f64)) -> PointerScreen {
+    let hit = frames.iter().enumerate().find_map(|(ix, frame)| {
+        let p = point_from_appkit(*frame, mouse);
+        Rect::new(0.0, 0.0, frame.w, frame.h)
+            .contains(p)
+            .then_some((ix, p))
+    });
+    let on_edge = |frame: &Rect| {
+        (frame.x..=frame.right()).contains(&mouse.0)
+            && (frame.y..=frame.bottom()).contains(&mouse.1)
+    };
+    let key = hit
+        .map(|(ix, _)| ix)
+        .or_else(|| frames.iter().position(on_edge))
+        .unwrap_or(0);
+    PointerScreen { key, hit }
+}
+
 /// CoreGraphics 全局坐标（原点在主屏左上、y 向下，`CGWindowListCopyWindowInfo` 和 `CGDisplayBounds` 用它）
 /// 的矩形 → 某块屏内的矩形。`display` 是这块屏的 `CGDisplayBounds`。
 pub fn cg_to_local(display: Rect, global: Rect) -> Rect {
@@ -583,6 +617,46 @@ mod tests {
         assert_eq!(p, Point::new(100.0, 200.0));
         let r = from_appkit(side, Rect::new(1612.0, 940.0, 0.0, 0.0));
         assert_eq!((r.x, r.y), (p.x, p.y));
+    }
+
+    #[test]
+    fn the_seam_between_two_screens_belongs_to_exactly_one_of_them() {
+        // 交界线上两块屏都「闭区间命中」：以前取枚举靠后的那块，换算出的本屏 x 等于屏宽，
+        // 贴边的窗口用半开区间都命中不了，高亮和键盘落到了指针不在的那块屏（CARM-539）。
+        let main = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        // 左边接一块原点为负的副屏，指针正好在 x = 0：两种枚举顺序都只算主屏，本屏坐标在屏内。
+        let left = Rect::new(-1920.0, -98.0, 1920.0, 1080.0);
+        for frames in [[main, left], [left, main]] {
+            let main_ix = frames.iter().position(|f| *f == main).unwrap();
+            let pick = pointer_screen(&frames, (0.0, 500.0));
+            assert_eq!(pick.hit, Some((main_ix, Point::new(0.0, 482.0))));
+            assert_eq!(pick.key, main_ix);
+        }
+        // 上面接一块副屏，指针在交界线 y = 982（主屏顶边）：算主屏（主屏本屏 y = 0），不算上面那块的底边。
+        let above = Rect::new(0.0, 982.0, 1920.0, 1080.0);
+        for frames in [[main, above], [above, main]] {
+            let main_ix = frames.iter().position(|f| *f == main).unwrap();
+            let pick = pointer_screen(&frames, (100.0, 982.0));
+            assert_eq!(pick.hit, Some((main_ix, Point::new(100.0, 0.0))));
+        }
+        // 下面接一块原点为负的副屏，指针在 y = 0（主屏底边）：算下面那块（它的顶边）。
+        let below = Rect::new(-200.0, -1080.0, 1920.0, 1080.0);
+        let pick = pointer_screen(&[main, below], (100.0, 0.0));
+        assert_eq!(pick.hit, Some((1, Point::new(300.0, 0.0))));
+        assert_eq!(pick.key, 1);
+    }
+
+    #[test]
+    fn pointer_on_the_outer_edge_keeps_the_keyboard_but_highlights_nothing() {
+        // 指针在最右边那条外边上：没有屏实际命中，不能拿一个屏外的点去做悬停；键盘仍落在这块屏。
+        let main = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        let left = Rect::new(-1920.0, -98.0, 1920.0, 1080.0);
+        let pick = pointer_screen(&[left, main], (1512.0, 500.0));
+        assert_eq!(pick.hit, None);
+        assert_eq!(pick.key, 1);
+        // 完全不在任何屏上（屏幕刚拔掉）：键盘给第一块，不高亮。
+        let pick = pointer_screen(&[left, main], (5000.0, 5000.0));
+        assert_eq!((pick.key, pick.hit), (0, None));
     }
 
     #[test]

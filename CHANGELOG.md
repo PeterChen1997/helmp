@@ -8,15 +8,17 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ### Fixed
 
-- Screenshot and Recognize Text now highlight the window under the pointer as soon as the capture screen appears, instead of only after you move the mouse.
+- Screenshot and Recognize Text now highlight the window under the pointer as soon as the capture screen appears, instead of only after you move the mouse. With several displays, only the display under the pointer is highlighted, including when the pointer sits right on the seam between two displays or moves to another display.
 - The Recognize Text result window now always takes the keyboard, so Esc, Return, and ⌘T work right away. Before, if macOS didn't bring Helmp to the front (or another app took it back), your keys went to that app and Esc couldn't close the result.
+- The Recognize Text result window no longer disappears when you open and close the launcher panel while it's on screen.
 
 ### 简体中文
 
 #### 修复
 
-- 截图和截图识别文字的选区界面一出现，就高亮鼠标指针下的窗口，不用先动一下鼠标。
+- 截图和截图识别文字的选区界面一出现，就高亮鼠标指针下的窗口，不用先动一下鼠标。多块显示器时只高亮指针所在的那块，指针正好在两块屏的交界处、或移到另一块屏上时也一样。
 - 识别文字的结果窗口一定拿得到键盘，Esc、回车、⌘T 直接生效。以前 macOS 没让 Helmp 到前台（或前台又被别的 App 拿走）时，按键会进到那个 App，Esc 关不掉结果窗口。
+- 识别结果窗口开着时，打开再收起启动面板，结果窗口不再跟着消失。
 
 ## [0.4.20] - 2026-11-26
 

@@ -20,7 +20,8 @@ use super::geometry::Rect;
 pub enum Kind {
     /// 冻结屏幕的遮罩：盖住菜单栏和程序坞（屏保层级），激活 Helmp 拿键盘。
     Overlay,
-    /// 识别结果窗口：浮在其他 App 上面，拿键盘（回车复制、Esc 关闭）。非激活面板：Helmp 没被激活时也收得到键。
+    /// 识别结果窗口：浮在其他 App 上面，拿键盘（回车复制、Esc 关闭）。非激活面板：Helmp 没被激活时也收得到键；
+    /// Helmp 隐藏时也留着。
     Result,
     /// 钉图：始终置顶，点它不激活 Helmp（不打断用户在别的 App 里的输入），Helmp 隐藏时也留着。
     Pin,
@@ -63,8 +64,9 @@ pub fn setup(window: &Window, kind: Kind, frame: Rect, offscreen: bool) {
     );
     // NSPanel 默认在 App 失去前台时隐藏：钉图、结果窗口必须一直留着，用户随时能看到。
     ns_window.setHidesOnDeactivate(false);
-    // 隐藏 Helmp（把焦点还给别的 App）时钉图和提示要留在屏幕上。
-    ns_window.setCanHide(!matches!(kind, Kind::Pin | Kind::Toast));
+    // 隐藏 Helmp（把焦点还给别的 App）时钉图、提示和识别结果要留在屏幕上：识别结果开着时
+    // 唤起再收起启动面板，面板交还前台会隐藏 Helmp，结果窗口不能跟着消失（CARM-539）。
+    ns_window.setCanHide(!matches!(kind, Kind::Pin | Kind::Toast | Kind::Result));
     ns_window.setOpaque(false);
     ns_window.setBackgroundColor(Some(&NSColor::clearColor()));
     ns_window.setHasShadow(matches!(kind, Kind::Pin | Kind::Result | Kind::Toast));

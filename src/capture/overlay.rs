@@ -8,7 +8,7 @@ use gpui_kit::*;
 
 use super::annotation::{BLOCK_SIZES, Tool, WIDTHS};
 use super::geometry::{self, Handle, Hit, Rect};
-use super::selector::{Effect, Selector, State};
+use super::selector::{self, Effect, Selector, State};
 use super::toolbar::{self, Edit};
 use super::{Act, Mode, Primary, Session, act, is_close_key};
 use crate::i18n::tr;
@@ -204,7 +204,8 @@ impl Overlay {
                 {
                     return Effect::None;
                 }
-                session.selectors[index].hover_at(p, &session.screens[index].screen.windows);
+                let windows = &session.screens[index].screen.windows;
+                selector::hover_on(&mut session.selectors, index, p, windows);
                 Effect::None
             };
             cx.notify();
