@@ -1838,6 +1838,7 @@ fn render_detail(
     agent_info: Option<Div>,
 ) -> Div {
     let compact = agent_info.is_some();
+    let image_with_paths = matches!(detail.blocks.as_slice(), [Block::Image(_), Block::Code(_)]);
     let mut pane = div()
         .flex()
         .flex_col()
@@ -1993,7 +1994,13 @@ fn render_detail(
                 .overflow_hidden()
                 .child(
                     img(path.clone())
-                        .max_h(px(if has_result { 96. } else { 220. }))
+                        .max_h(px(if has_result {
+                            96.
+                        } else if image_with_paths {
+                            180.
+                        } else {
+                            220.
+                        }))
                         .max_w_full()
                         // 卡片的 overflow_hidden 只按矩形裁：铺满卡片的图（如色块）要自己圆角。
                         .rounded(px(12.))
@@ -2014,7 +2021,18 @@ fn render_detail(
                 .child(metadata_grid(&detail.metadata, pal, px(8.))),
         );
     }
-    pane
+    if image_with_paths {
+        // 路径很多时，仍能看到完整的路径列表和底部的元数据。
+        div().flex_1().min_w_0().min_h_0().child(
+            div()
+                .id(SharedString::from(format!("file-image-detail:{item_id}")))
+                .size_full()
+                .overflow_y_scroll()
+                .child(pane.flex_none()),
+        )
+    } else {
+        pane
+    }
 }
 
 fn metadata_grid(metadata: &[(String, String)], pal: &Palette, gap: Pixels) -> Div {

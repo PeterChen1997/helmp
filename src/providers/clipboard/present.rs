@@ -1,6 +1,6 @@
 //! 剪贴板条目在面板里的样子：图标、副标题、详情、分组（今天 / 昨天 / 某月某日）。
 //!
-//! 全部是纯函数，只读内存索引里的 `Indexed`；时间相关的都显式接收 `Clock`，测试可控。
+//! 条目信息来自内存索引。文件图片预览会检查路径是否仍有效；时间相关的都显式接收 `Clock`。
 
 use std::path::Path;
 
@@ -181,7 +181,12 @@ pub fn detail(indexed: &Indexed, clock: Clock) -> Detail {
                 )));
             }
         }
-        Kind::Files => blocks.push(Block::Code(indexed.preview.clone())),
+        Kind::Files => {
+            if let Some(path) = indexed.file_images.iter().find(|path| path.is_file()) {
+                blocks.push(Block::Image(path.clone()));
+            }
+            blocks.push(Block::Code(indexed.preview.clone()));
+        }
         Kind::Image => {
             if let Some(path) = &indexed.image_path {
                 blocks.push(Block::Image(path.clone()));

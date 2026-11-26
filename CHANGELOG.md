@@ -6,6 +6,16 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Clipboard history shows a preview of the first available image in files copied from Finder and still lists the file paths.
+
+### 简体中文
+
+#### 修复
+
+- 从访达复制文件后，剪贴板历史详情会预览第一张仍可访问的图片，同时保留文件路径。
+
 ## [0.4.20] - 2026-11-26
 
 ### Fixed

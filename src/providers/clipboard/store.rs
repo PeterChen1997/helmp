@@ -400,10 +400,11 @@ impl Store {
         Ok(formats)
     }
 
-    /// 全部历史，新的在前；`content` 截断到 `preview_chars` 个字符（内存索引只需要这么多）。
+    /// 全部历史，新的在前。文件路径供图片预览用，必须完整读出；其余内容按预览长度截断。
     pub fn load_all(&self, preview_chars: usize) -> Result<Vec<Entry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, kind, substr(content, 1, ?1), length(content), width, height, source_name, source_bundle, copied_at, seq, pinned
+            "SELECT id, kind, CASE WHEN kind = 'files' THEN content ELSE substr(content, 1, ?1) END,
+                    length(content), width, height, source_name, source_bundle, copied_at, seq, pinned
              FROM clips ORDER BY seq DESC",
         )?;
         let limit = i64::try_from(preview_chars).unwrap_or(i64::MAX);

@@ -803,6 +803,17 @@ fn item(entry: &Entry, score: u32, home: Option<&Path>) -> Item {
     }
 }
 
+pub(super) fn is_preview_image(path: &Path) -> bool {
+    use image::ImageFormat;
+
+    matches!(
+        path.extension().and_then(ImageFormat::from_extension),
+        Some(
+            ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP | ImageFormat::Tiff
+        )
+    )
+}
+
 fn detail(entry: &Entry, location: String) -> Detail {
     let ext = entry
         .path
@@ -826,7 +837,7 @@ fn detail(entry: &Entry, location: String) -> Detail {
         metadata.push((tr("上次打开", "Last Opened").into(), full_time(used)));
     }
     metadata.push((tr("位置", "Where").into(), location));
-    let preview = matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "gif"));
+    let preview = !entry.is_dir && is_preview_image(&entry.path);
     Detail {
         icon: Icon::File(entry.path.clone()),
         title: entry.name.clone(),

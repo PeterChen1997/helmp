@@ -12,19 +12,20 @@
 //! 采集遵守 `config.clipboard`：enabled、retention_days、record_images、skip_concealed、
 //! ignore_apps、auto_paste（环境变量 `HELMP_CLIPBOARD_AUTOPASTE` 可覆盖）。
 //!
-//! `query*()` 只读内存索引（每条最多 `PREVIEW_CHARS` 个字符的小写预览），不碰 SQLite。
+//! `query*()` 不碰 SQLite。匹配用内存索引，图片文件的存在性在后台查询时检查。
 
 pub mod macos;
 mod present;
 mod store;
 mod watcher;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 
+use super::files::is_preview_image;
 use crate::config::ClipboardConfig;
 use crate::engine::{MAX_RESULTS, commands_section};
 use crate::i18n::{Lang, tr, trf};
@@ -45,7 +46,7 @@ const FILTERS: [(&str, &str, Option<Kind>); 4] = [
     ("图片", "Images", Some(Kind::Image)),
     ("文件", "Files", Some(Kind::Files)),
 ];
-/// 内存索引里每条保留的字符数。超出部分不参与搜索（避免巨型文本拖慢每次按键）。
+/// 内存索引里每条可搜索的字符数上限（避免巨型文本拖慢每次按键）。
 const PREVIEW_CHARS: usize = 4096;
 const TITLE_CHARS: usize = 80;
 /// 范围内的分数基线：引擎按分数排序（同分按标题），用「基线 − 名次」把我们自己的顺序编码进分数。
@@ -315,16 +316,21 @@ impl Provider for Clipboard {
             .map(|score| entry(badge(), score))
             .into_iter()
             .collect();
-        let index = self.inner.index.read().expect("clipboard index poisoned");
-        let hits = ambient(&index, query);
+        let hits: Vec<_> = {
+            let index = self.inner.index.read().expect("clipboard index poisoned");
+            ambient(&index, query)
+                .into_iter()
+                .map(|(position, score)| (index[position].clone(), score))
+                .collect()
+        };
         if hits.is_empty() {
             return items;
         }
         let view = View::now();
-        items
-            .extend(hits.into_iter().map(|(position, score)| {
-                self.item(&index[position], score, badge().into(), &view)
-            }));
+        items.extend(
+            hits.iter()
+                .map(|(indexed, score)| self.item(indexed, *score, badge().into(), &view)),
+        );
         items
     }
 
@@ -357,13 +363,18 @@ impl Provider for Clipboard {
     }
 
     fn query_scoped(&self, query: &str, filter: &str) -> Vec<Item> {
-        let index = self.inner.index.read().expect("clipboard index poisoned");
         let view = View::now();
         let query = query.trim();
-        browse(&index, query, kind_filter(filter))
-            .into_iter()
-            .map(|(position, score)| {
-                let indexed = &index[position];
+        let hits: Vec<_> = {
+            // 图片可能在外接盘上，释放索引锁后再检查，避免卡住剪贴板采集。
+            let index = self.inner.index.read().expect("clipboard index poisoned");
+            browse(&index, query, kind_filter(filter))
+                .into_iter()
+                .map(|(position, score)| (index[position].clone(), score))
+                .collect()
+        };
+        hits.iter()
+            .map(|(indexed, score)| {
                 // 空查询按时间浏览，按天分组（设计稿的「今天」）；搜索时按匹配度排序，不再分天。
                 let pinned_to_top = query.is_empty() && indexed.pinned;
                 let badge = if pinned_to_top {
@@ -376,7 +387,7 @@ impl Provider for Clipboard {
                 Item {
                     // 置顶组排在最前，但进入剪贴板时默认选中最近一条，而不是置顶的那条。
                     pinned_to_top,
-                    ..self.item(indexed, score, badge, &view)
+                    ..self.item(indexed, *score, badge, &view)
                 }
             })
             .collect()
@@ -539,9 +550,10 @@ impl Inner {
     }
 
     fn move_to_front(&self, entry: &Entry, image_path: Option<PathBuf>) {
+        let entry = Indexed::new(entry, image_path);
         let mut index = self.index.write().expect("clipboard index poisoned");
         index.retain(|indexed| indexed.id != entry.id);
-        index.insert(0, Indexed::new(&truncated(entry), image_path));
+        index.insert(0, entry);
     }
 
     /// 按保留天数和内容预算清理历史，返回删除条数。
@@ -937,6 +949,8 @@ struct Indexed {
     /// 文本字数 / 文件个数。
     count: usize,
     image_path: Option<PathBuf>,
+    /// 复制顺序中的图片候选。详情文本会截断，不能从它还原路径。
+    file_images: Arc<[PathBuf]>,
     image_format: &'static str,
     width: u32,
     height: u32,
@@ -947,18 +961,29 @@ struct Indexed {
 
 impl Indexed {
     fn new(entry: &Entry, image_path: Option<PathBuf>) -> Self {
-        let title = title_of(entry);
+        let searchable = prefix_chars(&entry.content, PREVIEW_CHARS);
+        let title = title_of(entry.kind, searchable);
         let (haystack, count) = match entry.kind {
-            Kind::Text => (entry.content.to_lowercase(), entry.chars),
-            Kind::Files => (entry.content.to_lowercase(), entry.content.lines().count()),
+            Kind::Text => (searchable.to_lowercase(), entry.chars),
+            Kind::Files => (searchable.to_lowercase(), entry.content.lines().count()),
             Kind::Image => (String::new(), 0),
         };
         let preview = match entry.kind {
-            Kind::Text | Kind::Files => prefix_chars(&entry.content, present::DETAIL_CHARS),
+            Kind::Text | Kind::Files => prefix_chars(&entry.content, present::DETAIL_CHARS).into(),
             Kind::Image => String::new(),
         };
+        let file_images = match entry.kind {
+            Kind::Files => entry
+                .content
+                .split_terminator('\n')
+                .map(Path::new)
+                .filter(|path| is_preview_image(path))
+                .map(Path::to_path_buf)
+                .collect(),
+            Kind::Text | Kind::Image => Arc::default(),
+        };
         let text_kind = match entry.kind {
-            Kind::Text => present::classify(&entry.content),
+            Kind::Text => present::classify(searchable),
             Kind::Files | Kind::Image => TextKind::Plain,
         };
         let mut indexed = Self {
@@ -975,6 +1000,7 @@ impl Indexed {
                 Kind::Text | Kind::Files => "",
             },
             image_path,
+            file_images,
             width: entry.width,
             height: entry.height,
             source: entry.source.as_ref().map(|source| source.name.clone()),
@@ -1017,34 +1043,24 @@ impl Indexed {
     }
 }
 
-fn prefix_chars(text: &str, max_chars: usize) -> String {
+fn prefix_chars(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {
-        Some((cut, _)) => text[..cut].to_string(),
-        None => text.to_string(),
+        Some((cut, _)) => &text[..cut],
+        None => text,
     }
-}
-
-/// 只保留预览长度，避免巨型文本常驻内存。
-fn truncated(entry: &Entry) -> Entry {
-    let mut entry = entry.clone();
-    if let Some((cut, _)) = entry.content.char_indices().nth(PREVIEW_CHARS) {
-        entry.content.truncate(cut);
-    }
-    entry
 }
 
 /// 标题里不随语言变的部分（见 `Indexed::title`）。
-fn title_of(entry: &Entry) -> String {
-    match entry.kind {
-        Kind::Text => entry
-            .content
+fn title_of(kind: Kind, content: &str) -> String {
+    match kind {
+        Kind::Text => content
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
             .map(|line| ellipsize(line, TITLE_CHARS))
             .unwrap_or_default(),
         Kind::Files => {
-            let first = entry.content.lines().next().unwrap_or_default();
+            let first = content.lines().next().unwrap_or_default();
             std::path::Path::new(first)
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -1476,6 +1492,93 @@ mod tests {
         );
         // 图片没有纯文本形式，不提供「粘贴为纯文本」。
         assert!(item.actions.iter().all(|a| a.title != "粘贴为纯文本"));
+    }
+
+    fn file_detail(provider: &Clipboard) -> Vec<Block> {
+        provider
+            .query_scoped("", "Files")
+            .remove(0)
+            .detail
+            .unwrap()
+            .blocks
+    }
+
+    #[test]
+    fn copied_image_file_shows_preview_and_path() {
+        let dir = TempDir::new("clipboard-png");
+        let provider = provider_with(&dir, &[]);
+        let path = dir.0.join("copied.PNG");
+        std::fs::File::create(&path).unwrap();
+        let path_text = path.to_str().unwrap();
+        files(&provider, &[path_text]);
+
+        assert_eq!(
+            file_detail(&provider),
+            [Block::Image(path.clone()), Block::Code(path_text.into())]
+        );
+    }
+
+    #[test]
+    fn copied_non_image_file_shows_path_only() {
+        let dir = TempDir::new("clipboard-doc");
+        let provider = provider_with(&dir, &[]);
+        let path = dir.0.join("copied.txt");
+        std::fs::File::create(&path).unwrap();
+        let path_text = path.to_str().unwrap();
+        files(&provider, &[path_text]);
+
+        assert_eq!(file_detail(&provider), [Block::Code(path_text.into())]);
+    }
+
+    #[test]
+    fn deleted_image_file_falls_back_to_path() {
+        let dir = TempDir::new("clipboard-deleted-png");
+        let provider = provider_with(&dir, &[]);
+        let path = dir.0.join("deleted.png");
+        std::fs::File::create(&path).unwrap();
+        let path_text = path.to_str().unwrap();
+        files(&provider, &[path_text]);
+        assert!(matches!(file_detail(&provider)[0], Block::Image(_)));
+
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(file_detail(&provider), [Block::Code(path_text.into())]);
+    }
+
+    #[test]
+    fn copied_files_show_first_available_image_and_all_paths() {
+        let dir = TempDir::new("clipboard-multiple-files");
+        let provider = provider_with(&dir, &[]);
+        let text = dir.0.join("copied.txt");
+        let missing = dir.0.join("missing.gif");
+        let directory = dir.0.join("folder.png");
+        let first = dir.0.join("first.jpg");
+        let second = dir.0.join("second.webp");
+        std::fs::File::create(&text).unwrap();
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::File::create(&first).unwrap();
+        std::fs::File::create(&second).unwrap();
+        let paths = [&text, &missing, &directory, &first, &second].map(|p| p.to_str().unwrap());
+        files(&provider, &paths);
+
+        assert_eq!(
+            file_detail(&provider),
+            [Block::Image(first.clone()), Block::Code(paths.join("\n"))]
+        );
+    }
+
+    #[test]
+    fn clipboard_reload_finds_images_beyond_the_path_list_preview() {
+        let dir = TempDir::new("clipboard-long-file-list");
+        let provider = provider_with(&dir, &[]);
+        let path = dir.0.join("last.tiff");
+        std::fs::File::create(&path).unwrap();
+        let mut paths = vec!["/a/long/path/to/a/document.txt"; PREVIEW_CHARS / 4];
+        paths.push(path.to_str().unwrap());
+        files(&provider, &paths);
+        drop(provider);
+        let reloaded = provider_with(&dir, &[]);
+
+        assert_eq!(file_detail(&reloaded).first(), Some(&Block::Image(path)));
     }
 
     #[test]

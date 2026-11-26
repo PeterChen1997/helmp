@@ -433,6 +433,49 @@ fn clipboard_gui(keys: &str) -> String {
     h.cli(&[])
 }
 
+#[cfg(feature = "readme-shots")]
+#[test]
+#[ignore = "需要 macOS 图形会话。手动运行：cargo test --release --features readme-shots --test e2e_window_process_snippets gui_clipboard_previews_copied_image_file -- --ignored"]
+fn gui_clipboard_previews_copied_image_file() {
+    // 用高饱和色块确认详情真的渲染了本地文件，而不是只显示路径或空白图片框。
+    let h = Helmp::new().config(|c| c["general"]["hotkey"] = json!("ctrl-alt-shift-f8"));
+    let path = h.root.join("copied.png");
+    let color = image::Rgb([221, 49, 161]);
+    image::RgbImage::from_pixel(100, 64, color)
+        .save(&path)
+        .unwrap();
+    let paths: Vec<_> = std::iter::once(path)
+        .chain((0..24).map(|number| h.root.join(format!("file-{number}.txt"))))
+        .collect();
+    let paths = paths.iter().map(|path| path.to_str().unwrap()).collect::<Vec<_>>();
+    seed_clipboard(&h, &[(&paths.join("\n"), now_ms())]);
+    let conn = rusqlite::Connection::open(h.data_file("clipboard.sqlite")).unwrap();
+    conn.execute("UPDATE clips SET kind = 'files'", []).unwrap();
+    drop(conn);
+
+    let snapshots = h.root.clone();
+    let h = h
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_HOTKEY", "clipboard")
+        .env(
+            "HELMP_SELF_TEST_KEYS",
+            "snap:copied-image scroll:520,380,-1000 snap:copied-paths",
+        )
+        .env("HELMP_SNAPSHOT_DIR", snapshots.to_str().unwrap());
+    let out = h.cli(&[]);
+    let color_pixels = |name| {
+        image::open(snapshots.join(name))
+            .unwrap_or_else(|err| panic!("截图失败：{err}\n{out}"))
+            .to_rgb8()
+            .pixels()
+            .filter(|pixel| **pixel == color)
+            .count()
+    };
+    assert!(color_pixels("copied-image.png") > 1000, "详情应显示文件中的色块");
+    assert_eq!(color_pixels("copied-paths.png"), 0, "应能滚过图片查看靠后的路径");
+}
+
 #[test]
 #[ignore = "开真实的图形界面（屏幕外、不抢焦点，但菜单栏会短暂出现图标）。手动运行：cargo test --release --test e2e_window_process_snippets -- --ignored"]
 fn gui_clipboard_selects_latest_and_esc_closes_the_panel() {
