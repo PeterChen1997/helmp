@@ -490,6 +490,10 @@ impl ModelsPane {
             crate::telemetry::model_picked_from_list(kind_value(kind));
         }
         self.picker_open = false;
+        // 上次测试失败（常见是还没填模型名）时，状态行的错误已经过时：换上新模型名自动重测一次。
+        if matches!(self.status, Status::Err(_)) {
+            self.test(cx);
+        }
         cx.notify();
     }
 
