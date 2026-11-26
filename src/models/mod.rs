@@ -3,6 +3,7 @@
 //! 对外：
 //! - `complete(model, system, user)`：阻塞调用一次模型（30 秒超时），在后台线程用。
 //! - `test_connection`：设置页「测试连接」发的极小请求。
+//! - `list_models` / `filter_models`：列出服务商模型，再按设置页输入筛选。
 //! - `api_key` / `set_api_key` / `delete_api_key`：钥匙串里的 Key。
 //! - `capture_selection()`：取词，前台应用选中的文字（AX，必要时模拟 ⌘C 并还原剪贴板）。
 //! - `settings_pane`：设置窗口「模型」页。
@@ -49,11 +50,7 @@ pub fn complete(model: &ModelConfig, system: &str, user: &str) -> Result<String>
 /// 「测试连接」：只生成 1 个 token（OpenAI 兼容接口不限，但提示要求只回一个词）。
 /// `key` 为 None 时读钥匙串。
 pub fn test_connection(model: &ModelConfig, key: Option<&str>) -> Result<()> {
-    let stored = match key {
-        Some(_) => None,
-        None if needs_key(model.kind) => api_key(model)?,
-        None => None,
-    };
+    let stored = stored_key_if_needed(model, key)?;
     client::send(
         model,
         key.or(stored.as_deref()),
@@ -64,6 +61,35 @@ pub fn test_connection(model: &ModelConfig, key: Option<&str>) -> Result<()> {
         },
     )
     .map(|_| ())
+}
+
+fn stored_key_if_needed(model: &ModelConfig, key: Option<&str>) -> Result<Option<String>> {
+    if key.is_none() && needs_key(model.kind) {
+        api_key(model)
+    } else {
+        Ok(None)
+    }
+}
+
+/// 拉取服务商的模型列表。未传 Key 时按「测试连接」的规则读钥匙串。
+/// 这是阻塞请求，在后台线程调用。
+#[allow(dead_code)] // 设置页的调用方由 CARM-316 接入。
+pub fn list_models(model: &ModelConfig, key: Option<&str>) -> Result<Vec<String>> {
+    let stored = stored_key_if_needed(model, key)?;
+    client::list(model, key.or(stored.as_deref()))
+}
+
+/// 去掉查询的首尾空白，再做大小写不敏感的子串匹配，保留原顺序。
+#[allow(dead_code)] // 设置页的调用方由 CARM-316 接入。
+pub fn filter_models<'a>(all: &'a [String], query: &str) -> Vec<&'a str> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return all.iter().map(String::as_str).collect();
+    }
+    all.iter()
+        .map(String::as_str)
+        .filter(|name| name.to_lowercase().contains(&query))
+        .collect()
 }
 
 /// 翻译用的模型：`translate.model_id` 指定的，找不到就用第一个。
@@ -134,8 +160,38 @@ pub fn settings_pane(window: &mut Window, cx: &mut App) -> AnyView {
 #[cfg(test)]
 mod tests {
     // 不用 `super::*`：那会带进 gpui_kit 的 `test` 宏，盖掉标准的 `#[test]`。
-    use super::{ModelKind, kind_label, language_english, language_label};
+    use super::client::tests::{mock, model};
+    use super::{
+        ModelKind, filter_models, kind_label, language_english, language_label, list_models,
+    };
     use crate::i18n::{Lang, with_lang};
+
+    #[test]
+    fn list_models_accepts_a_key_from_the_form() {
+        // 用户还没保存配置或填写模型名时，直接用表单里的 Key 拉列表。
+        let (url, rx) = mock(200, r#"{"data":[{"id":"deepseek-chat"}]}"#);
+        let model = model(ModelKind::OpenAiCompatible, &format!("{url}/v1"), "");
+        assert_eq!(
+            list_models(&model, Some("sk-form")).unwrap(),
+            ["deepseek-chat"]
+        );
+        assert_eq!(
+            rx.recv().unwrap().header("authorization"),
+            Some("Bearer sk-form")
+        );
+    }
+
+    #[test]
+    fn model_filter_matches_substrings_in_original_order() {
+        // 输入中间一段就能找到模型，清空后恢复整个列表，筛选不改变列表顺序和模型原名。
+        let all = ["z-Qwen-32B", "DeepSeek", "a-qwen-8b", "Claude"].map(str::to_owned);
+        assert_eq!(filter_models(&all, "  qWeN  "), ["z-Qwen-32B", "a-qwen-8b"]);
+        assert_eq!(
+            filter_models(&all, "  \t"),
+            ["z-Qwen-32B", "DeepSeek", "a-qwen-8b", "Claude"]
+        );
+        assert!(filter_models(&all, "llama").is_empty());
+    }
 
     #[test]
     fn language_names_follow_interface_but_prompt_names_do_not() {
