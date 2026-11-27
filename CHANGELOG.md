@@ -6,6 +6,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [0.4.22] - 2026-11-27
+
 ### Fixed
 
 - Sticky notes: when notes can’t be written to disk, cards show a “Not saved” tag and the Notes scope lists a warning with a retry action; Helmp retries every 5 seconds and once more on quit. Creating, deleting, closing, moving and resizing notes are retried too, not only text edits. If the notes file couldn’t be read at launch, Helmp re-reads it and merges the notes on disk back instead of refusing to save for the rest of the session.
