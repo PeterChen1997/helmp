@@ -6,6 +6,18 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Sticky notes: when notes can’t be written to disk, cards show a “Not saved” tag and the Notes scope lists a warning with a retry action; Helmp retries every 5 seconds and once more on quit. Creating, deleting, closing, moving and resizing notes are retried too, not only text edits. If the notes file couldn’t be read at launch, Helmp re-reads it and merges the notes on disk back instead of refusing to save for the rest of the session.
+- Sticky notes: each unreadable notes file is backed up under its own timestamped name (the three most recent are kept), so a second corruption no longer overwrites the first backup. Typing in a note no longer rebuilds the menu bar.
+
+### 简体中文
+
+#### 修复
+
+- 便签：写不进磁盘时，卡片上显示「未保存」，便签范围顶部出现提示并可回车立即重试；Helmp 每 5 秒自动重试，退出时再试一次。新建、删除、关闭、拖动、缩放和正文一样会重试。启动时读不出便签文件的，会重新读取并把磁盘上的便签并回来，不再整场会话拒绝保存。
+- 便签：每次读不出的便签文件各自按时间戳备份（保留最近三份），第二次损坏不再覆盖第一次的备份；在便签里打字不再触发菜单栏重建。
+
 ## [0.4.21] - 2026-11-26
 
 ### Fixed

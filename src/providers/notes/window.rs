@@ -31,6 +31,8 @@ const HOVER_OPEN_DELAY: Duration = Duration::from_millis(150);
 const HOVER_CLOSE_DELAY: Duration = Duration::from_millis(90);
 /// 编辑停顿多久自动落盘。
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+/// 保存失败后的自动重试间隔。
+const SAVE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 /// 超过多少 pt 才算拖拽，避免轻点误拖。
 const DRAG_THRESHOLD: f64 = 4.0;
 const DRAG_TICK: Duration = Duration::from_millis(8);
@@ -51,6 +53,8 @@ static SNAPSHOT: OnceLock<RwLock<Vec<Note>>> = OnceLock::new();
 static ALL_HIDDEN: AtomicBool = AtomicBool::new(false);
 /// 菜单栏轮询用：便签隐藏状态或桌面数量变化时加一。
 static MENU_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// 便签当前没能写到磁盘（保存失败或启动时读不出文件）：卡片和便签 Scope 据此显示提示。
+static SAVE_FAILED: AtomicBool = AtomicBool::new(false);
 /// 快照是否已初始化（用于无头 CLI 懒加载）。
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// 防止异步布局应用任务乱序覆盖。
@@ -283,7 +287,11 @@ pub fn snapshot() -> Vec<Note> {
 fn set_snapshot(notes: &[Note]) {
     INITIALIZED.store(true, Ordering::Relaxed);
     *snapshot_lock().write().expect("notes snapshot poisoned") = notes.to_vec();
-    MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 便签是否还没写到磁盘（保存失败正在重试，或启动时读不出便签文件）。
+pub fn save_failed() -> bool {
+    SAVE_FAILED.load(Ordering::Relaxed)
 }
 
 pub fn all_hidden() -> bool {
@@ -307,6 +315,8 @@ pub enum NotesRequest {
     PinToDesktop(String),
     /// 永久删除一条便签。
     Delete(String),
+    /// 保存失败后由用户触发立即重试（平时每 [`SAVE_RETRY_INTERVAL`] 自动重试）。
+    RetrySave,
 }
 
 impl NotesRequest {
@@ -315,6 +325,7 @@ impl NotesRequest {
             NotesRequest::Create { docked, .. } => format!("create(docked={docked})"),
             NotesRequest::PinToDesktop(id) => format!("pin({id})"),
             NotesRequest::Delete(id) => format!("delete({id})"),
+            NotesRequest::RetrySave => "retry-save".into(),
         }
     }
 }
@@ -357,6 +368,7 @@ pub struct NotesManager {
     editing_id: Option<String>,
     editing_return_pid: i32,
     dirty_save: bool,
+    save_retry_running: bool,
     hover_poll_running: bool,
     /// 上次同步时展开的停靠便签，用来判断耳标是在让位 / 归位（要滑动）还是队列重排（直接到位）。
     last_open_docked: Option<String>,
@@ -382,6 +394,7 @@ impl NotesManager {
             editing_id: None,
             editing_return_pid: 0,
             dirty_save: false,
+            save_retry_running: false,
             hover_poll_running: false,
             last_open_docked: None,
             hover_candidate: None,
@@ -519,6 +532,8 @@ pub fn now_unix_secs() -> i64 {
 pub fn restore_on_launch(cx: &mut App) {
     let notes = store::load();
     cx.set_global(NotesManager::new(notes));
+    // 读不出便签文件时这里会亮起提示并开始定时重读。
+    flush_dirty_save(cx);
     ensure_screen_observer(cx);
     sync_all_windows(cx);
 }
@@ -527,6 +542,7 @@ fn ensure_manager(cx: &mut App) {
     if !cx.has_global::<NotesManager>() {
         let notes = store::load();
         cx.set_global(NotesManager::new(notes));
+        flush_dirty_save(cx);
     }
     ensure_screen_observer(cx);
 }
@@ -578,6 +594,7 @@ pub fn handle(request: NotesRequest, cx: &mut App) {
         } => create_note(text, docked, enter_edit, cx),
         NotesRequest::PinToDesktop(id) => pin_to_desktop(&id, cx),
         NotesRequest::Delete(id) => delete_note(&id, cx),
+        NotesRequest::RetrySave => retry_save(cx),
     }
 }
 
@@ -595,6 +612,7 @@ pub fn dock_all(cx: &mut App) {
         if mgr.hidden_all {
             mgr.hidden_all = false;
             ALL_HIDDEN.store(false, Ordering::Relaxed);
+            MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
         // 先记下自由浮窗要吸往的屏幕与目标，避免在迭代同时 mutable 借用两次。
         let updates: Vec<(usize, Edge, String)> = mgr
@@ -622,13 +640,12 @@ pub fn dock_all(cx: &mut App) {
             mgr.notes[idx].updated_at = now_unix_secs();
         }
         if count > 0 {
-            store::save(&mgr.notes);
+            mgr.dirty_save = true;
             set_snapshot(&mgr.notes);
-        } else {
-            MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
         count
     };
+    flush_dirty_save(cx);
     // 口径与逐张拖动吸边一致：每张由 Floating 变为 Docked 的便签记一次 `NoteEvent::Docked`（仅传枚举）。
     for _ in 0..docked_count {
         telemetry::note(NoteEvent::Docked);
@@ -671,6 +688,7 @@ fn create_note(text: String, docked: bool, enter_edit: bool, cx: &mut App) {
         if mgr.hidden_all {
             mgr.hidden_all = false;
             ALL_HIDDEN.store(false, Ordering::Relaxed);
+            MENU_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
         let placement = if docked {
             let order = store::next_order(&mgr.notes, Edge::Right, &primary.uuid);
@@ -687,11 +705,12 @@ fn create_note(text: String, docked: bool, enter_edit: bool, cx: &mut App) {
         let note = store::new_note(&text, now, placement);
         let cloned = note.clone();
         mgr.notes.push(note);
-        store::save(&mgr.notes);
+        mgr.dirty_save = true;
         set_snapshot(&mgr.notes);
         telemetry::note(NoteEvent::Created);
         cloned
     };
+    flush_dirty_save(cx);
     let id = note.id.clone();
     if enter_edit {
         cx.global_mut::<NotesManager>().hovered_dock_id =
@@ -731,10 +750,11 @@ fn pin_to_desktop(id: &str, cx: &mut App) {
             }
         }
         if was_archived {
-            store::save(&mgr.notes);
+            mgr.dirty_save = true;
             set_snapshot(&mgr.notes);
         }
     }
+    flush_dirty_save(cx);
     if !found {
         return;
     }
@@ -760,12 +780,13 @@ fn delete_note(id: &str, cx: &mut App) {
             mgr.hovered_dock_id = None;
         }
         if mgr.notes.len() < before {
-            store::save(&mgr.notes);
+            mgr.dirty_save = true;
             set_snapshot(&mgr.notes);
             telemetry::note(NoteEvent::Deleted);
         }
         mgr.windows.remove(id)
     };
+    flush_dirty_save(cx);
     if let Some(entry) = removed_entry {
         let _ = entry.handle.update(cx, |_, window, _| window.remove_window());
     }
@@ -786,7 +807,7 @@ fn archive_note(id: &str, cx: &mut App) {
         if let Some(note) = mgr.notes.iter_mut().find(|n| n.id == id) {
             note.placement = Placement::Archived;
             note.updated_at = now_unix_secs();
-            store::save(&mgr.notes);
+            mgr.dirty_save = true;
             set_snapshot(&mgr.notes);
         }
         if mgr.hovered_dock_id.as_deref() == Some(id) {
@@ -794,6 +815,7 @@ fn archive_note(id: &str, cx: &mut App) {
         }
         mgr.windows.remove(id)
     };
+    flush_dirty_save(cx);
     if let Some(entry) = removed_entry {
         let _ = entry.handle.update(cx, |_, window, _| window.remove_window());
     }
@@ -903,7 +925,8 @@ pub fn flush_on_quit(cx: &mut App) {
             crate::panel::hand_over_previous_app(0);
         }
     }
-    flush_dirty_save(cx);
+    // 退出前最后试一次：读不出文件的拒写状态也在这里再重读一遍。
+    retry_save(cx);
 }
 
 fn set_hovered_dock(id: Option<String>, cx: &mut App) {
@@ -927,9 +950,79 @@ fn update_note_text(id: &str, text: String, cx: &mut App) {
         .apply_text_edit(id, text, true);
 }
 
+/// 唯一的写盘入口：有未保存的改动就写一次。失败时保留 dirty、亮起「未保存」提示，
+/// 并每 [`SAVE_RETRY_INTERVAL`] 重试到成功为止（正文、新建、删除、归档、拖动、缩放都走这里）。
 fn flush_dirty_save(cx: &mut App) {
-    cx.global_mut::<NotesManager>()
-        .flush_dirty_with(store::save);
+    let (failed, start_retry) = {
+        let mgr = cx.global_mut::<NotesManager>();
+        mgr.flush_dirty_with(store::save);
+        let failed = mgr.dirty_save || store::write_blocked();
+        let start_retry = failed && !mgr.save_retry_running;
+        mgr.save_retry_running |= start_retry;
+        (failed, start_retry)
+    };
+    if SAVE_FAILED.swap(failed, Ordering::Relaxed) != failed {
+        // 让已打开的卡片重画，显示或收起「未保存」。
+        let views: Vec<Entity<NoteWindow>> = cx
+            .global::<NotesManager>()
+            .windows
+            .values()
+            .map(|entry| entry.view.clone())
+            .collect();
+        for view in views {
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }
+    if start_retry {
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(SAVE_RETRY_INTERVAL).await;
+                let settled = cx.update(|cx| {
+                    retry_save(cx);
+                    let settled = !save_failed();
+                    if settled {
+                        cx.global_mut::<NotesManager>().save_retry_running = false;
+                    }
+                    settled
+                });
+                if settled {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// 重试保存。启动时没读出便签文件（拒写状态）的话先重读：读出来就把磁盘上的便签并回本场会话，再写盘。
+fn retry_save(cx: &mut App) {
+    if let Some(disk) = store::reload_if_blocked() {
+        let recovered = {
+            let mgr = cx.global_mut::<NotesManager>();
+            let recovered = merge_recovered(&mut mgr.notes, disk);
+            if recovered {
+                mgr.dirty_save = true;
+                set_snapshot(&mgr.notes);
+            }
+            recovered
+        };
+        if recovered {
+            sync_all_windows(cx);
+        }
+    }
+    flush_dirty_save(cx);
+}
+
+/// 把重读出来的磁盘便签并进内存：内存里已有的（本场会话新建或改过的）保留，磁盘上多出来的追加在后。
+/// 返回是否并入了新便签。
+fn merge_recovered(notes: &mut Vec<Note>, disk: Vec<Note>) -> bool {
+    let before = notes.len();
+    for note in disk {
+        if !notes.iter().any(|n| n.id == note.id) {
+            notes.push(note);
+        }
+    }
+    notes.len() > before
 }
 
 /// 纯函数：算出所有非归档便签的目标展示形态。
@@ -2336,9 +2429,10 @@ fn commit_drop(id: &str, dropped_frame: Frame, cx: &mut App) {
         if mgr.hovered_dock_id.as_deref() == Some(id) {
             mgr.hovered_dock_id = None;
         }
-        store::save(&mgr.notes);
+        mgr.dirty_save = true;
         set_snapshot(&mgr.notes);
     }
+    flush_dirty_save(cx);
     if docked_now {
         telemetry::note(NoteEvent::Docked);
     }
@@ -2362,9 +2456,10 @@ fn commit_resize(id: &str, frame: Frame, cx: &mut App) {
     };
     {
         let mgr = cx.global_mut::<NotesManager>();
-        store::save(&mgr.notes);
+        mgr.dirty_save = true;
         set_snapshot(&mgr.notes);
     }
+    flush_dirty_save(cx);
     telemetry::note_resized(w);
     sync_all_windows(cx);
 }
@@ -2582,6 +2677,19 @@ impl NoteWindow {
                         .text_size(px(10.))
                         .text_color(pal.accent)
                         .child(tr("编辑中", "Editing")),
+                )
+            })
+            .when(save_failed(), |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .px(px(5.))
+                        .py(px(1.))
+                        .rounded(px(4.))
+                        .bg(pal.danger.opacity(0.15))
+                        .text_size(px(10.))
+                        .text_color(pal.danger)
+                        .child(tr("未保存", "Not saved")),
                 )
             })
             .child(
@@ -3285,6 +3393,35 @@ mod tests {
         let reloaded = store::load_from(&dir.file()).unwrap();
         assert_eq!(reloaded.len(), 1);
         assert_eq!(reloaded[0].text, "草稿 v2（debounce 中）");
+    }
+
+    #[test]
+    fn typing_does_not_rebuild_the_menu_bar() {
+        // 菜单栏只关心「全部隐藏」开关；正文每次变化都递增菜单代数的话，打字时菜单栏会按轮询周期整份重建。
+        let note = store::new_note("草稿", 100, Placement::Archived);
+        let id = note.id.clone();
+        let mut mgr = NotesManager::from_notes(vec![note]);
+        let before = menu_generation();
+        assert!(mgr.apply_text_edit(&id, "草稿 v2".into(), true));
+        assert_eq!(menu_generation(), before);
+    }
+
+    #[test]
+    fn recovered_disk_notes_join_the_session_without_overwriting_it() {
+        // 启动时读不出文件、本场会话从空开始：之后重读成功，磁盘上的旧便签必须并回来，
+        // 否则下一次写盘会用「只有新便签」的列表盖掉它们；同一张便签以会话里的版本为准。
+        let mut kept = store::new_note("会话里改过", 200, Placement::Archived);
+        kept.id = "same".into();
+        let fresh = store::new_note("会话里新建", 300, Placement::Archived);
+        let mut stale = store::new_note("磁盘旧版本", 100, Placement::Archived);
+        stale.id = "same".into();
+        let old = store::new_note("磁盘上的旧便签", 50, Placement::Archived);
+
+        let mut notes = vec![kept.clone(), fresh.clone()];
+        assert!(merge_recovered(&mut notes, vec![stale, old.clone()]));
+        assert_eq!(notes, vec![kept.clone(), fresh.clone(), old.clone()]);
+        assert!(!merge_recovered(&mut notes, vec![old]));
+        assert_eq!(notes.len(), 3);
     }
 
     #[test]

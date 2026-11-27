@@ -16,6 +16,10 @@ pub const TAB_GAP: f64 = 8.0;
 pub const TAB_MIN_H: f64 = 28.0;
 
 static WRITE_BLOCKED: AtomicBool = AtomicBool::new(true);
+/// 上一次 `save` 是否失败：连续失败只在第一次上报，重试期间不刷屏。
+static SAVE_FAILING: AtomicBool = AtomicBool::new(false);
+/// 坏文件备份保留的份数。
+const UNREADABLE_BACKUPS_KEPT: usize = 3;
 
 /// 全局屏幕坐标，单位 point，左上角原点，与 GPUI 窗口坐标一致。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -111,13 +115,54 @@ fn load_from_inner(path: &Path, recover_corruption: bool) -> Result<Vec<Note>> {
             eprintln!("helmp: 便签文件损坏，将备份后重建：{err:#}");
             crate::telemetry::report("notes.load", &err);
             // 用户新记的便签不能因为旧文件坏了而静默丢失；只有备份成功才能覆盖原文件。
-            // 固定文件名，避免每次启动都积累一份坏文件。
-            std::fs::copy(path, path.with_extension("json.unreadable"))
-                .context("Couldn’t back up unreadable notes file")?;
+            back_up_unreadable(path, unix_secs())?;
             Ok(Vec::new())
         }
         Err(err) => Err(err),
     }
+}
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// 把坏文件另存为 `notes.json.unreadable-<时间戳>`：每次损坏各留一份，不覆盖之前的备份；
+/// 只保留最近 [`UNREADABLE_BACKUPS_KEPT`] 份，避免无限积累。
+fn back_up_unreadable(path: &Path, stamp: u64) -> Result<PathBuf> {
+    let prefix = format!(
+        "{}.unreadable-",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or(FILE)
+    );
+    // 时间戳补零到定宽，文件名的字典序就是时间顺序。
+    let mut backup = path.with_file_name(format!("{prefix}{stamp:012}"));
+    let mut seq = 1;
+    while backup.exists() {
+        backup = path.with_file_name(format!("{prefix}{stamp:012}-{seq}"));
+        seq += 1;
+    }
+    std::fs::copy(path, &backup).context("Couldn’t back up unreadable notes file")?;
+
+    // 清理旧备份失败不影响恢复：新备份已经落盘。
+    if let Some(entries) = path.parent().and_then(|dir| std::fs::read_dir(dir).ok()) {
+        let mut backups: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
+            })
+            .collect();
+        backups.sort();
+        let excess = backups.len().saturating_sub(UNREADABLE_BACKUPS_KEPT);
+        for old in backups.into_iter().take(excess) {
+            if let Err(err) = std::fs::remove_file(&old) {
+                eprintln!("helmp: 清理旧的便签坏文件备份失败：{err}");
+            }
+        }
+    }
+    Ok(backup)
 }
 
 /// 同目录临时文件 + rename，读者只会看见完整的新文件或旧文件。
@@ -173,13 +218,37 @@ pub fn load() -> Vec<Note> {
     }
 }
 
+/// 启动时读取失败后处于拒写状态；`reload_if_blocked` 成功后解除。
+pub fn write_blocked() -> bool {
+    WRITE_BLOCKED.load(Ordering::Relaxed)
+}
+
+/// 拒写状态下重读一次便签文件，成功则解除拒写并返回磁盘上的便签；没被拒写或仍读不出时返回 `None`。
+/// 重试期间反复调用，失败不再上报（首次读取失败已由 `load` 上报）。
+pub fn reload_if_blocked() -> Option<Vec<Note>> {
+    if !write_blocked() {
+        return None;
+    }
+    match path().and_then(|path| load_recovering_from(&path, &WRITE_BLOCKED)) {
+        Ok(notes) => Some(notes),
+        Err(err) => {
+            eprintln!("helmp: 重读便签仍失败：{err:#}");
+            None
+        }
+    }
+}
+
 /// 返回是否写盘成功，调用方据此决定要不要保留未保存标记。
 pub fn save(notes: &[Note]) -> bool {
     if let Err(err) = path().and_then(|path| save_checked_to(&path, notes, &WRITE_BLOCKED)) {
         eprintln!("helmp: 保存便签失败：{err:#}");
-        crate::telemetry::report("notes.save", &err);
+        // 失败后会定时重试；同一轮连续失败只上报第一次。
+        if !SAVE_FAILING.swap(true, Ordering::Relaxed) {
+            crate::telemetry::report("notes.save", &err);
+        }
         return false;
     }
+    SAVE_FAILING.store(false, Ordering::Relaxed);
     true
 }
 
@@ -486,28 +555,73 @@ mod tests {
 
     #[test]
     fn backup_failure_blocks_writes_until_a_successful_load() {
-        // 固定备份路径被目录占用，稳定模拟 copy 失败（不依赖运行用户的文件权限）。
+        // 文件名已到 255 字节上限，备份名更长必然建不出来：稳定模拟 copy 失败（不依赖运行用户的文件权限）。
         let dir = TempDir::new();
-        let backup = dir.file().with_extension("json.unreadable");
-        std::fs::create_dir(&backup).unwrap();
-        std::fs::write(dir.file(), "{broken").unwrap();
+        let file = dir.0.join(format!("{}.json", "n".repeat(250)));
+        std::fs::write(&file, "{broken").unwrap();
         let write_blocked = AtomicBool::new(false);
-        assert!(load_recovering_from(&dir.file(), &write_blocked).is_err());
+        assert!(load_recovering_from(&file, &write_blocked).is_err());
         assert!(write_blocked.load(Ordering::Relaxed));
         let notes = vec![new_note("便签", 123, Placement::Archived)];
-        assert!(save_checked_to(&dir.file(), &notes, &write_blocked).is_err());
-        assert_eq!(std::fs::read_to_string(dir.file()).unwrap(), "{broken");
+        assert!(save_checked_to(&file, &notes, &write_blocked).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{broken");
 
         // 即使外部修复了文件，也要重新 load 才能解除保护，避免把旧的空快照写进去。
-        save_to(&dir.file(), &notes).unwrap();
-        assert!(save_checked_to(&dir.file(), &[], &write_blocked).is_err());
-        assert_eq!(load_from(&dir.file()).unwrap(), notes);
-        assert_eq!(
-            load_recovering_from(&dir.file(), &write_blocked).unwrap(),
-            notes
-        );
+        let repaired = serde_json::to_vec(&Document {
+            notes: notes.clone(),
+        })
+        .unwrap();
+        std::fs::write(&file, repaired).unwrap();
+        assert!(save_checked_to(&file, &[], &write_blocked).is_err());
+        assert_eq!(load_from(&file).unwrap(), notes);
+        assert_eq!(load_recovering_from(&file, &write_blocked).unwrap(), notes);
         assert!(!write_blocked.load(Ordering::Relaxed));
-        save_checked_to(&dir.file(), &notes, &write_blocked).unwrap();
+    }
+
+    fn unreadable_backups(dir: &TempDir) -> Vec<PathBuf> {
+        let mut backups: Vec<PathBuf> = std::fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("notes.json.unreadable-")
+            })
+            .collect();
+        backups.sort();
+        backups
+    }
+
+    #[test]
+    fn second_corruption_keeps_the_first_backup() {
+        // 备份名固定时，第二次损坏会覆盖第一次的备份，而第一次那份往往才是用户真正想找回的内容。
+        let dir = TempDir::new();
+        std::fs::write(dir.file(), "{first").unwrap();
+        back_up_unreadable(&dir.file(), 1_000).unwrap();
+        std::fs::write(dir.file(), "{second").unwrap();
+        // 同一秒内再坏一次也不能覆盖。
+        back_up_unreadable(&dir.file(), 1_000).unwrap();
+        let contents: Vec<String> = unreadable_backups(&dir)
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(contents, ["{first", "{second"]);
+    }
+
+    #[test]
+    fn old_unreadable_backups_are_pruned_to_the_most_recent() {
+        // 每次损坏留一份，但文件反复损坏时不能无限积累：只留最近几份。
+        let dir = TempDir::new();
+        for stamp in 1..=5_u64 {
+            std::fs::write(dir.file(), format!("{{broken {stamp}")).unwrap();
+            back_up_unreadable(&dir.file(), stamp).unwrap();
+        }
+        let contents: Vec<String> = unreadable_backups(&dir)
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        assert_eq!(contents, ["{broken 3", "{broken 4", "{broken 5"]);
     }
 
     #[test]
@@ -520,7 +634,7 @@ mod tests {
         assert!(load_recovering_from(&dir.file(), &write_blocked).is_err());
         assert!(write_blocked.load(Ordering::Relaxed));
         assert!(save_checked_to(&dir.file(), &[], &write_blocked).is_err());
-        assert!(!dir.file().with_extension("json.unreadable").exists());
+        assert!(unreadable_backups(&dir).is_empty());
         assert_eq!(std::fs::read_to_string(original).unwrap(), "keep");
     }
 
@@ -551,7 +665,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let backup = dir.file().with_extension("json.unreadable");
+        let backup = unreadable_backups(&dir).pop().unwrap();
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), broken);
         assert!(!write_blocked.load(Ordering::Relaxed));
         let notes = vec![new_note("新便签", 123, Placement::Archived)];

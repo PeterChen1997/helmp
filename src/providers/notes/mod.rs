@@ -13,7 +13,7 @@ mod window;
 
 pub use window::{
     NotesRequest, all_hidden, dock_all, flush_on_quit, handle, menu_generation,
-    restore_on_launch, self_test_begin_edit, self_test_clear, self_test_debug_state, self_test_demo, self_test_insert_text,
+    restore_on_launch, save_failed, self_test_begin_edit, self_test_clear, self_test_debug_state, self_test_demo, self_test_insert_text,
     self_test_select, self_test_target, toggle_visibility,
 };
 
@@ -112,6 +112,9 @@ impl Provider for Notes {
         let text = query.trim();
         let mut items = Vec::new();
 
+        if save_failed() {
+            items.push(save_failed_item());
+        }
         if !text.is_empty() {
             items.push(quick_create_item(text.to_string(), 20_000));
         }
@@ -201,6 +204,28 @@ fn quick_create_item(text: String, score: u32) -> Item {
                 enter_edit: false,
             }))
         }),
+        ..Item::blank()
+    }
+}
+
+/// 便签没写到磁盘时排在 Scope 最前：说明状态，回车立即重试。
+fn save_failed_item() -> Item {
+    Item {
+        id: "notes:save-failed".into(),
+        title: tr("便签还没保存到磁盘", "Notes aren’t saved to disk yet").into(),
+        subtitle: tr(
+            "Helmp 每 5 秒自动重试，回车立即重试；退出前请先复制重要内容",
+            "Helmp retries every 5 seconds; press Return to retry now. Copy anything important before quitting",
+        )
+        .into(),
+        badge: badge().into(),
+        score: 30_000,
+        icon: Icon::Symbol {
+            name: "triangle-alert",
+            tint: Tint::Red,
+        },
+        action_title: tr("立即重试", "Retry Now").into(),
+        action: Action::new(|| Ok(Outcome::Notes(NotesRequest::RetrySave))).keep_open(),
         ..Item::blank()
     }
 }

@@ -109,8 +109,10 @@ fn run_gui(engine: Engine) {
             cx.set_global(engine::EngineGlobal(launcher.read(cx).engine()));
 
             let notes_demo = std::env::var_os("HELMP_SELF_TEST_NOTES_DEMO").is_some();
-            let quiet_self_test =
-                std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT").is_some() || notes_demo;
+            let notes_recover = std::env::var_os("HELMP_SELF_TEST_NOTES_RECOVER").is_some();
+            let quiet_self_test = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT").is_some()
+                || notes_demo
+                || notes_recover;
             if !quiet_self_test {
                 if let Err(err) = hotkey::register_toggle(cx, window, launcher.clone()) {
                     // 大声失败：热键注册不上整个 App 就没有意义。
@@ -147,6 +149,8 @@ fn run_gui(engine: Engine) {
             if notes_demo {
                 // 便签录屏演示：便签真的显示在屏幕上（不设 HELMP_SELF_TEST），不注册热键和菜单栏。
                 providers::notes::self_test_demo(cx);
+            } else if notes_recover {
+                notes_recover_self_test(cx);
             } else if let Some(append) = std::env::var_os("HELMP_SELF_TEST_NOTES_QUIT") {
                 notes_quit_self_test(cx, append.to_string_lossy().into_owned());
             } else if let Some(query) = std::env::var_os("HELMP_SELF_TEST") {
@@ -184,6 +188,34 @@ fn notes_quit_self_test(cx: &mut App, append: String) {
             disk_before_quit.replace('\n', " ")
         );
         // 在 500ms 防抖保存尚未触发前立即退出，验证 main.rs on_app_quit → flush_on_quit 同步落盘。
+        cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
+/// 便签自检（`HELMP_SELF_TEST_NOTES_RECOVER`）：启动时 `notes.json` 读不出（测试把它建成了目录），
+/// 新建一张便签后把障碍移走再退出，验证读不出期间的改动没有被丢掉（见 tests/e2e_notes.rs）。
+fn notes_recover_self_test(cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(20))
+            .await;
+        cx.update(|cx| {
+            providers::notes::handle(
+                providers::notes::NotesRequest::Create {
+                    text: "读不出期间新建".into(),
+                    docked: true,
+                    enter_edit: false,
+                },
+                cx,
+            );
+        });
+        println!(
+            "self-test notes-recover save-failed: {}",
+            providers::notes::save_failed()
+        );
+        let path = providers::notes::store::path().expect("notes path");
+        std::fs::remove_dir(&path).expect("remove blocking directory");
         cx.update(|cx| cx.quit());
     })
     .detach();

@@ -59,3 +59,27 @@ fn quitting_within_500ms_debounce_flushes_editor_text_and_reloads_latest() {
     let saved = std::fs::read_to_string(&notes_path).unwrap();
     assert!(saved.contains("草稿 v1-urgent"), "{saved}");
 }
+
+#[test]
+fn note_created_while_the_file_is_unreadable_is_saved_once_it_recovers() {
+    // 为什么测这条链路：启动时 notes.json 读不出（权限、磁盘错误）会进入拒写保护，便签照常能新建和编辑；
+    // 这期间的改动必须标成未保存、对用户可见，并在文件恢复后重读、合并、写盘，
+    // 否则用户看着正常的便签会在重启后全部消失。这里用「notes.json 是个目录」稳定模拟读取 IO 错误。
+    let h = Helmp::new();
+    let notes_path = h.data_file("notes.json");
+    std::fs::create_dir_all(&notes_path).unwrap();
+
+    let h = h
+        .env("HELMP_NO_WELCOME", "1")
+        .env("HELMP_SELF_TEST", "1")
+        .env("HELMP_SELF_TEST_NOTES_RECOVER", "1");
+    let out = h.cli(&[]);
+
+    assert!(
+        out.contains("self-test notes-recover save-failed: true"),
+        "拒写期间新建便签后应处于「未保存」状态：\n{out}"
+    );
+    let saved = std::fs::read_to_string(&notes_path)
+        .unwrap_or_else(|err| panic!("退出时没有把便签写回磁盘：{err}\n{out}"));
+    assert!(saved.contains("读不出期间新建"), "{saved}");
+}
