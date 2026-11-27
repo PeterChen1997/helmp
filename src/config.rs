@@ -559,7 +559,7 @@ fn store() -> &'static Store {
                     Ok(backup) => eprintln!("helmp: 原配置已备份到 {}", backup.display()),
                     Err(err) => eprintln!("helmp: 备份读不出的配置失败：{err:#}"),
                 }
-                Config::default()
+                unreadable_fallback()
             }
         };
         Store {
@@ -571,6 +571,15 @@ fn store() -> &'static Store {
 
 fn path() -> Result<PathBuf> {
     Ok(crate::paths::data_dir()?.join("config.json"))
+}
+
+/// 配置读不出时用的配置：默认值，但匿名统计与崩溃报告按关闭处理。
+/// 读不出就不知道用户是不是关过它；按默认的「开」会让这次运行恢复上报，之后任何一次保存设置
+/// 还会把「开」写回磁盘。按关处理，用户想开可以在设置里重新打开。
+fn unreadable_fallback() -> Config {
+    let mut config = Config::default();
+    config.general.telemetry = false;
+    config
 }
 
 /// 读不出的配置先复制一份：之后任何一次 `update`（比如引导页点「继续」）都会用默认配置覆盖原文件，
@@ -661,6 +670,31 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), broken);
         assert_eq!(backup.parent(), Some(dir.as_path()));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_config_does_not_turn_telemetry_back_on() {
+        // 用户关掉了上报，之后手改配置少了个括号：读不出时不能当成「没关过」重新开始上报，
+        // 更不能在下一次保存设置时把「开」写回去。
+        let dir = std::env::temp_dir().join(format!("helmp-config-telemetry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"general":{"telemetry":false}"#).unwrap();
+        let loaded = std::fs::read_to_string(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|text| Ok(serde_json::from_str::<Config>(&text)?));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(loaded.is_err());
+        let fallback = unreadable_fallback();
+        assert!(!fallback.general.telemetry);
+        // 落盘后再读回来仍是关的。
+        let saved = serde_json::to_string(&fallback).unwrap();
+        assert!(!serde_json::from_str::<Config>(&saved).unwrap().general.telemetry);
+        // 其余设置仍是默认值；全新安装（没有配置文件）不受影响，默认仍然开。
+        let mut defaults = Config::default();
+        assert!(defaults.general.telemetry);
+        defaults.general.telemetry = false;
+        assert_eq!(fallback, defaults);
     }
 
     #[test]

@@ -12,6 +12,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - Plugins: a bundled MCP server is now confirmed by its whole command line, which the permission list shows in full. A new version that changes the arguments, environment or working directory is paused until you confirm it, instead of only when the program name changed. Plugins with an MCP server that you already turned on ask for confirmation once after this update.
 - Plugins: when an update, or `helmp_plugin_install`, replaces the files of a plugin that runs code (scripts, schedules, MCP servers), the plugin is paused until you confirm it again, even if its permissions are the same. Editing your own plugin’s files in place still reloads without asking.
 - Sticky notes: each unreadable notes file is backed up under its own timestamped name (the three most recent are kept), so a second corruption no longer overwrites the first backup. Typing in a note no longer rebuilds the menu bar.
+- Privacy: when the settings file can’t be read, anonymous usage statistics and crash reports now stay off instead of being switched back on, and saving settings afterwards no longer writes them back as on. You can turn them on again in Settings › General.
+- Privacy: crash reports now also replace your home folder with `~` in stack frame file names and in the list of loaded binaries, so an app installed under `~/Applications` no longer sends a path containing your user name.
 
 ### 简体中文
 
@@ -21,6 +23,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 - 插件：自带 MCP 服务器的插件现在按完整命令行确认，权限列表里显示整条命令。新版本改了参数、环境变量或工作目录就暂停等你确认，不再只看程序名。已经启用的这类插件在本次更新后需要重新确认一次。
 - 插件：会运行代码的插件（脚本、定时任务、MCP 服务器）经更新或 `helmp_plugin_install` 换了文件时，即使权限没变也暂停等你重新确认。直接在插件目录里改自己的插件仍然不用确认、照常重载。
 - 便签：每次读不出的便签文件各自按时间戳备份（保留最近三份），第二次损坏不再覆盖第一次的备份；在便签里打字不再触发菜单栏重建。
+- 隐私：设置文件读不出时，匿名使用统计与崩溃报告保持关闭，不再被重新打开；之后保存设置也不会把它写回「开」。需要时可在「设置 › 通用」里重新打开。
+- 隐私：崩溃报告里堆栈帧的文件名和已加载程序列表中的家目录也换成 `~`，App 装在 `~/Applications` 下时不再带出含用户名的路径。
 
 ## [0.4.21] - 2026-11-26
 

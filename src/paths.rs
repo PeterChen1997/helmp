@@ -8,6 +8,8 @@ use anyhow::{Context as _, Result};
 pub fn data_dir() -> Result<PathBuf> {
     let dir = match std::env::var_os("HELMP_DATA_DIR") {
         Some(dir) => PathBuf::from(dir),
+        // 单测不读写真实数据目录：没指定时落到本进程专用的临时目录。
+        None if cfg!(test) => std::env::temp_dir().join(format!("helmp-test-data-{}", std::process::id())),
         None => {
             let support = home_dir()?.join("Library/Application Support");
             let dir = support.join("Helmp");
@@ -34,4 +36,20 @@ pub fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME 未设置")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_tests_stay_out_of_the_real_data_dir() {
+        // `cargo test --release` 在开发者自己的机器上跑：单测碰到真实的
+        // `~/Library/Application Support/Helmp`，就可能改掉正在用的配置、定时任务记录和统计状态。
+        let dir = data_dir().unwrap();
+        if std::env::var_os("HELMP_DATA_DIR").is_none() {
+            assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+        }
+        assert!(!dir.ends_with("Library/Application Support/Helmp"), "{}", dir.display());
+    }
 }

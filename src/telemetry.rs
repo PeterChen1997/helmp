@@ -4,7 +4,7 @@
 //! - 只发枚举、版本号、布尔：功能名是内置 provider 的 id（插件统一记作 `plugins`），
 //!   不发查询词、文件名、剪贴板或译文内容；错误里的家目录换成 `~`。
 //! - 开发构建默认不发；`HELMP_TELEMETRY=1` 强制打开（environment = development），`=0` 强制关闭。
-//!   图形自检（`HELMP_SELF_TEST`）与演练模式（`HELMP_DRY_RUN`，e2e 用）不发。
+//!   图形自检（`HELMP_SELF_TEST`）与演练模式（`HELMP_DRY_RUN`，e2e 用）不发；单测（`cfg(test)`）一律不发。
 //! - Sentry DSN 构建期从环境变量 `SENTRY_DSN_HELMP` 注入，没有就不初始化 Sentry（Umami 照常）。
 
 use std::sync::Arc;
@@ -55,6 +55,10 @@ pub fn release() -> String {
 
 /// 这次运行允许上报时的 environment；构建类型或环境变量不允许时为 None。
 fn environment() -> Option<&'static str> {
+    // 单测一律不发：交付命令是 `cargo test --release`，不算开发构建，也没人给单测设 HELMP_DRY_RUN。
+    if cfg!(test) {
+        return None;
+    }
     let dev = cfg!(debug_assertions);
     let env = |name| std::env::var(name).ok();
     match env("HELMP_TELEMETRY").as_deref() {
@@ -401,17 +405,48 @@ fn scrub(mut event: sentry::protocol::Event<'static>, home: &str) -> sentry::pro
     if let Some(message) = &mut event.message {
         clean(message);
     }
+    let mut stacktraces = vec![&mut event.stacktrace];
     for exception in &mut event.exception.values {
         if let Some(value) = &mut exception.value {
             clean(value);
         }
-        for frame in exception
-            .stacktrace
-            .iter_mut()
-            .flat_map(|stacktrace| stacktrace.frames.iter_mut())
+        stacktraces.extend([&mut exception.stacktrace, &mut exception.raw_stacktrace]);
+    }
+    for thread in &mut event.threads.values {
+        stacktraces.extend([&mut thread.stacktrace, &mut thread.raw_stacktrace]);
+    }
+    // 帧里三个字段都可能是带用户名的路径：源文件（filename / abs_path）和所在镜像（package）。
+    for frame in stacktraces
+        .into_iter()
+        .flatten()
+        .flat_map(|stacktrace| stacktrace.frames.iter_mut())
+    {
+        for path in [&mut frame.filename, &mut frame.abs_path, &mut frame.package]
+            .into_iter()
+            .flatten()
         {
-            if let Some(path) = &mut frame.abs_path {
-                clean(path);
+            clean(path);
+        }
+    }
+    // `debug-images` 附上的已加载镜像列表：App 装在 ~/Applications 下时，可执行文件路径带用户名。
+    if !event.debug_meta.images.is_empty() {
+        use sentry::protocol::DebugImage;
+        for image in &mut event.debug_meta.to_mut().images {
+            match image {
+                DebugImage::Apple(image) => clean(&mut image.name),
+                DebugImage::Symbolic(image) => {
+                    clean(&mut image.name);
+                    if let Some(file) = &mut image.debug_file {
+                        clean(file);
+                    }
+                }
+                DebugImage::Wasm(image) => {
+                    clean(&mut image.code_file);
+                    if let Some(file) = &mut image.debug_file {
+                        clean(file);
+                    }
+                }
+                DebugImage::Proguard(_) => {}
             }
         }
     }
@@ -536,6 +571,64 @@ mod tests {
         assert_eq!(note_size_bucket(280.0), "s");
         assert_eq!(note_size_bucket(400.0), "m");
         assert_eq!(note_size_bucket(640.0), "l");
+    }
+
+    #[test]
+    fn unit_tests_never_report() {
+        // 交付命令是 `cargo test --release`：release 构建不算开发构建，单测又不设 HELMP_DRY_RUN，
+        // 不单独挡住的话，跑一次测试就会往生产 Umami / Sentry 发事件，把假数据混进真实统计。
+        assert_eq!(environment(), None);
+        assert!(!enabled());
+    }
+
+    #[test]
+    fn scrub_hides_home_directory_in_frame_and_image_paths() {
+        // App 装在 ~/Applications 下时，堆栈帧的 filename / package 和 debug_meta 里的镜像路径
+        // 都是带用户名的可执行文件路径；只换 abs_path 的话用户名照样离开这台机器。
+        use sentry::protocol::{DebugImage, DebugMeta, Frame, Stacktrace, SymbolicDebugImage, Thread};
+        let exe = "/Users/alice/Applications/Helmp.app/Contents/MacOS/helmp";
+        let stacktrace = || {
+            Some(Stacktrace {
+                frames: vec![Frame {
+                    filename: Some("/Users/alice/code/helmp/src/main.rs".into()),
+                    abs_path: Some("/Users/alice/code/helmp/src/main.rs".into()),
+                    package: Some(exe.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        };
+        let mut event = sentry::protocol::Event {
+            stacktrace: stacktrace(),
+            debug_meta: std::borrow::Cow::Owned(DebugMeta {
+                images: vec![DebugImage::Symbolic(SymbolicDebugImage {
+                    name: exe.into(),
+                    arch: None,
+                    image_addr: 0u64.into(),
+                    image_size: 1,
+                    image_vmaddr: 0u64.into(),
+                    id: Default::default(),
+                    code_id: None,
+                    debug_file: Some(exe.into()),
+                })],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        event.exception.values.push(sentry::protocol::Exception {
+            stacktrace: stacktrace(),
+            ..Default::default()
+        });
+        event.threads.values.push(Thread {
+            stacktrace: stacktrace(),
+            ..Default::default()
+        });
+        let event = scrub(event, "/Users/alice");
+        let sent = serde_json::to_string(&event).unwrap();
+        assert!(!sent.contains("alice"), "用户名还在事件里：{sent}");
+        // 路径本身要留着（换成 ~），否则 Sentry 上看不出是哪个文件、哪个镜像。
+        assert!(sent.contains("~/Applications/Helmp.app/Contents/MacOS/helmp"));
+        assert!(sent.contains("~/code/helmp/src/main.rs"));
     }
 
     #[test]
