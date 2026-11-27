@@ -22,8 +22,8 @@ Some ids are already bundled with Helmp, such as `dev.helmp.flomo`, `dev.helmp.q
 
 Plugins installed from the Plugin Center or a plugin source update themselves. With **Settings › Plugins › Automatically update plugins** on (the default), Helmp checks once a day, 20 seconds after launch and then every 24 hours, on the same schedule as Helmp's own update check. Each source's index is fetched once, and each plugin is compared only with the source it was installed from. The same section shows when the last check ran and what happened, and has a **Check Now** button.
 
-- If the new version needs the same permissions you already allowed, it's installed quietly and stays on.
-- If its permissions changed (a new host, or it now runs scripts), it's installed but paused and marked **needs permission review** until you approve it again.
+- If the new version needs the same permissions you already allowed and no file of a plugin that runs code changed, it's installed quietly and stays on.
+- If its permissions changed (a new host, a different MCP server command line, or it now runs scripts), it's installed but paused and marked **needs permission review** until you approve it again. The same happens when an update changes any file of a plugin that runs code (scripts, schedules, MCP servers): the scripts you approved are the ones that were installed then, so new files wait for you. A version bump alone doesn't count.
 - If anything fails (offline, HTTP 401, a file that doesn't match its SHA-256), nothing changes: the old version stays as it was, you aren't interrupted, and Helmp tries again in an hour.
 - A plugin whose script or MCP server is running at that moment is skipped and updated on the next try.
 

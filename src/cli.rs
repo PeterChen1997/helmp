@@ -313,8 +313,8 @@ fn plugins_install(id: &str, source: Option<&str>) -> Result<()> {
         Some(registry::State::NeedsConsent) => println!(
             "{}",
             tr(
-                "权限有变化：在「设置 › 插件」里重新确认后才会生效。",
-                "Its permissions changed: review them in Settings › Plugins to turn it back on."
+                "权限或内容有变化：在「设置 › 插件」里重新确认后才会生效。",
+                "Its permissions or files changed: review it in Settings › Plugins to turn it back on."
             )
         ),
         _ => println!(
@@ -378,8 +378,8 @@ fn plugins_update(args: &[String]) -> Result<()> {
             println!(
                 "  {}",
                 tr(
-                    "权限有变化，已停用：在「设置 › 插件」里重新确认后才会生效。",
-                    "Its permissions changed, so it's off until you review them in Settings › Plugins."
+                    "权限或内容有变化，已停用：在「设置 › 插件」里重新确认后才会生效。",
+                    "Its permissions or files changed, so it's off until you review it in Settings › Plugins."
                 )
             );
         }

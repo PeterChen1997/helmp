@@ -3,7 +3,8 @@
 //! - 定时挂在 App 自动更新的同一个轮询任务上（`updates::start`）：启动 20 秒后一次，之后每 24 小时；
 //!   有插件失败或正忙时 1 小时后再试。开关是「设置 › 插件」的「自动更新插件」（`general.auto_update_plugins`）。
 //! - 每个源只取一次索引，按安装记录里的源比较版本（带那个源的令牌）。下载、校验、原子替换都走
-//!   `center::install_from`：权限没变的保持启用，变了就成「权限有变化，待确认」，等用户在设置里确认。
+//!   `center::install_from`：权限没变、也不运行代码的保持启用；权限变了，或会运行代码的插件（脚本、定时任务、
+//!   MCP 服务器）换了文件，就成「权限或内容有变化，待确认」，等用户在设置里确认。
 //! - 失败不弹提示，旧版本原样保留，下次再试；插件正在运行脚本、或它带的 MCP 服务器在跑时跳过，下次再试。
 //! - 每次的结果记在 `<data_dir>/plugin-updates.json`，设置页显示上次检查时间与结果。
 
@@ -101,7 +102,7 @@ impl Report {
             let consent = self.updated.iter().filter(|u| u.needs_consent).count();
             if consent > 0 {
                 parts.push(trf!(
-                    "{consent} 个权限有变化，待确认",
+                    "{consent} 个权限或内容有变化，待确认",
                     "{consent} need a permission review"
                 ));
             }

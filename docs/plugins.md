@@ -26,7 +26,7 @@ Manage them in **Settings › Plugins** (or type "Manage Plugins" in Helmp). The
 
 Helmp checks the plugins folder every 3 seconds and reloads when a file changes. A plugin that fails validation stays in the list, marked as an error with the reason; it is never silently skipped.
 
-Turning on one of your plugins first shows what it can do (its [permissions](#permissions)). If you later change the manifest so that it needs more (another host, running scripts…), the plugin turns itself off ("needs permission review") until you confirm again.
+Turning on one of your plugins first shows what it can do (its [permissions](#permissions)). If you later change the manifest so that it needs more (another host, running scripts…), the plugin turns itself off ("needs permission review") until you confirm again. Editing a script in place keeps the plugin on; a new copy of a plugin that runs code, installed by an update or by `helmp_plugin_install`, waits for you to confirm again.
 
 ### Plugin data
 
@@ -213,7 +213,7 @@ Permissions are derived from the manifest, shown in Settings, and confirmed when
 | Write to the clipboard | `copy` / `paste` actions, `script` output `copy` / `paste` |
 | Send ⌘V to the front app | `paste` |
 | Run scripts from the plugin folder | `script` actions and `list` commands. Scripts run as you, not sandboxed: only enable plugins you trust |
-| Run a local program: `npx` | Each `command` in `mcpServers` (also as you, not sandboxed) |
+| Run a local program: `npx -y pkg` | Each `command` in `mcpServers`, shown as the whole command line with its `args` and `env` (also as you, not sandboxed). Changing any of them, or `cwd`, needs confirming again |
 | Network access: `host` | Also each `url` in `mcpServers` |
 | Show messages in the search box | `greetings` |
 | Run scripts from the plugin folder in the background on a schedule | `schedules` |

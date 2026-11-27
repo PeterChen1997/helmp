@@ -106,6 +106,15 @@ fn helmp_with(server: &MockServer) -> Helmp {
     Helmp::new().env("HELMP_REGISTRY_URL", format!("{}/", server.url))
 }
 
+/// 用户在设置里点「允许并启用」时记下的确认键：装好的那一份的权限键（脚本插件带安装时的内容指纹）。
+fn consent(h: &Helmp) -> Value {
+    let dir = h.data.join("plugins").join(ID).display().to_string();
+    let checked: Value = serde_json::from_str(&h.cli(&["plugins", "validate", &dir, "--json"])).unwrap();
+    let keys = checked["permissions"].clone();
+    assert!(keys.as_array().unwrap().iter().any(|key| key == "exec"), "{keys}");
+    keys
+}
+
 fn read_config(h: &Helmp) -> Value {
     serde_json::from_str(&std::fs::read_to_string(h.data_file("config.json")).unwrap()).unwrap()
 }
@@ -199,7 +208,7 @@ fn update_with_new_permissions_needs_consent_again() {
     // 用户启用了 1.0.0（确认过它的权限）。
     let mut config = read_config(&h);
     config["plugins"][ID]["enabled"] = json!(true);
-    config["plugins"][ID]["consent"] = json!(["exec", "network:memo.example.com"]);
+    config["plugins"][ID]["consent"] = consent(&h);
     let h = h.config(move |c| *c = config);
     assert!(
         h.cli(&["plugins"])
@@ -220,7 +229,7 @@ fn update_with_new_permissions_needs_consent_again() {
         out.contains(&format!("Updated {ID}: 1.0.0 → 1.1.0")),
         "{out}"
     );
-    assert!(out.contains("permissions changed"), "{out}");
+    assert!(out.contains("permissions or files changed"), "{out}");
     let list = h.cli(&["plugins"]);
     assert!(
         list.contains(&format!("needs-consent\t{ID}\t1.1.0")),
@@ -581,7 +590,7 @@ fn scheduled_check_updates_plugins_and_keeps_their_data() {
     h.keep_config();
     let mut config = read_config(&h);
     config["plugins"][ID]["enabled"] = json!(true);
-    config["plugins"][ID]["consent"] = json!(["exec", "network:memo.example.com"]);
+    config["plugins"][ID]["consent"] = consent(&h);
     let mut h = h.config(move |c| *c = config);
     assert!(run_counter(&h).contains("run 1"), "脚本拿到数据目录");
     let data = h.data.join("plugin-data").join(ID);
@@ -597,16 +606,31 @@ fn scheduled_check_updates_plugins_and_keeps_their_data() {
     publish(&published, "1.1.0", counter_files("1.1.0", "memo.example.com"));
     let out = h.cli(&["plugins", "update", "--scheduled"]);
     assert!(out.contains(&format!("Updated {ID}: 1.0.0 → 1.1.0")), "{out}");
-    assert!(!out.contains("permissions changed"), "{out}");
+    assert!(!out.contains("files changed"), "{out}");
     h.keep_config();
     assert!(h.cli(&["plugins"]).contains(&format!("enabled\t{ID}\t1.1.0")));
     assert!(run_counter(&h).contains("run 2"), "数据目录跨更新保留，计数接着涨");
 
+    // 1.1.1：权限一样，脚本换了 → 也停用待确认。脚本不受沙盒限制，用户确认的是当时装的那一份，
+    // 源里换一段脚本不能借自动更新直接跑起来（CARM-713）。用户确认后恢复。
+    let mut changed = counter_files("1.1.1", "memo.example.com");
+    changed[1].1 = format!("{COUNTER}# changed\n");
+    publish(&published, "1.1.1", changed);
+    let out = h.cli(&["plugins", "update", "--scheduled"]);
+    assert!(out.contains(&format!("Updated {ID}: 1.1.0 → 1.1.1")), "{out}");
+    assert!(out.contains("Its permissions or files changed"), "{out}");
+    h.keep_config();
+    assert!(h.cli(&["plugins"]).contains(&format!("needs-consent\t{ID}\t1.1.1")));
+    let mut config = read_config(&h);
+    config["plugins"][ID]["consent"] = consent(&h);
+    let mut h = h.config(move |c| *c = config);
+    assert!(h.cli(&["plugins"]).contains(&format!("enabled\t{ID}\t1.1.1")));
+
     // 1.2.0：多访问一个主机 → 更新后停用，等用户确认；设置页和命令行都看得到。
     publish(&published, "1.2.0", counter_files("1.2.0", "other.example.com"));
     let out = h.cli(&["plugins", "update", "--all", "--scheduled"]);
-    assert!(out.contains(&format!("Updated {ID}: 1.1.0 → 1.2.0")), "{out}");
-    assert!(out.contains("Its permissions changed"), "{out}");
+    assert!(out.contains(&format!("Updated {ID}: 1.1.1 → 1.2.0")), "{out}");
+    assert!(out.contains("Its permissions or files changed"), "{out}");
     h.keep_config();
     assert!(h.cli(&["plugins"]).contains(&format!("needs-consent\t{ID}\t1.2.0")));
     let state: Value =
@@ -662,7 +686,7 @@ fn uninstall_keeps_or_deletes_the_plugins_data() {
     h.keep_config();
     let mut config = read_config(&h);
     config["plugins"][ID]["enabled"] = json!(true);
-    config["plugins"][ID]["consent"] = json!(["exec", "network:memo.example.com"]);
+    config["plugins"][ID]["consent"] = consent(&h);
     config["plugins"][ID]["prefs"] = json!({"k": "v"});
     let mut h = h.config(move |c| *c = config);
     run_counter(&h);

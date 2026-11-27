@@ -946,7 +946,7 @@ pub fn install_from(
     .inspect_err(|_| report_failure(&client.registry, "install_rejected"))?;
     crate::config::update(|config| {
         // 只记来源和版本：enabled / consent 原样保留，新装的插件就是停用状态，
-        // 更新后权限变了由 `Entry::state` 判定为待确认。
+        // 更新后权限变了（或会运行代码的插件换了文件）由 `Entry::state` 判定为待确认。
         config.plugins.entry(id.to_string()).or_default().installed = Some(record);
     })?;
     registry::reload();
@@ -1167,6 +1167,7 @@ pub fn install_into(
                 plugin.id()
             ));
         }
+        registry::write_code_stamp(&staging)?;
         std::fs::write(staging.join(MARKER), serde_json::to_string_pretty(record)?)?;
         if plugin.manifest.version != listing.version {
             bail!(trf!(
@@ -1592,6 +1593,29 @@ mod tests {
             MANIFEST
         );
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_update_that_changes_a_script_changes_what_the_user_confirmed() {
+        // 自动更新默认开着：源里的新版本只换脚本内容时权限键原本不变，新脚本不经确认就运行。
+        // 安装时写下的内容指纹进了确认键，换了文件就要用户再确认一次（CARM-713）。
+        let root = tmp("stamp");
+        let manifest = MANIFEST.replace(
+            r#""commands""#,
+            r#""schedules":[{"id":"s","everyMinutes":60,"script":{"path":"run.sh"}}],"commands""#,
+        );
+        let keys = |script: &[u8]| {
+            let files: &[(&str, &[u8])] = &[("plugin.json", manifest.as_bytes()), ("run.sh", script)];
+            let dir = install_into(&listing(files), &root, &record(), &CUSTOM_LIMITS, server(files))
+                .unwrap_or_else(|err| panic!("{err:#}"));
+            let entry = registry::load_dir(&dir, Source::User);
+            entry.plugin().unwrap_or_else(|| panic!("{:?}", entry.loaded)).permissions.keys()
+        };
+        let first = keys(b"#!/bin/sh\necho one\n");
+        assert!(first.iter().any(|key| key.starts_with("code:")), "{first:?}");
+        assert_eq!(keys(b"#!/bin/sh\necho one\n"), first, "同一份内容不用再确认");
+        assert_ne!(keys(b"#!/bin/sh\necho two\n"), first);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

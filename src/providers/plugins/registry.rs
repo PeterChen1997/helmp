@@ -2,6 +2,8 @@
 //! - 自带插件：`resources/plugins/<id>/plugin.json` 编译进二进制，只读，可以停用，默认启用。
 //! - 用户插件：`<data_dir>/plugins/<文件夹>/plugin.json`，默认停用；用户在设置里看过权限并启用后才生效，
 //!   之后清单的权限变了（比如多了一个主机名）要重新确认。
+//!   会运行代码的插件，经安装器（插件中心、MCP 安装工具）换了文件也要重新确认：安装器在插件目录里写下内容指纹
+//!   [`CODE_STAMP`]，它是确认键的一部分。直接在插件目录里改文件不动指纹，照常热重载（开发自己的插件时用）。
 //! - 校验失败的插件不跳过：以「出错」状态留在列表里，设置页和 `helmp plugins` 都能看到原因。
 //! - 每 3 秒检查用户插件目录的文件指纹，变了就整体重载（与脚本插件一致的热重载）。
 
@@ -11,6 +13,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
+use sha2::{Digest as _, Sha256};
 
 use super::manifest::{self, Manifest};
 use super::permissions::Permissions;
@@ -37,6 +40,64 @@ pub const BUNDLED: &[(&str, &str)] = &[
         include_str!("../../../resources/plugins/dev.helmp.obsidian/plugin.json"),
     ),
 ];
+
+/// 安装器写在插件目录里的内容指纹（全部非隐藏文件的 sha256，清单不算 `version`）。安装器把新目录整体改名换上，
+/// 指纹和文件一起到位：同一个 id 下换了任何文件，确认键就变，插件回到待确认，中间没有新代码已生效的空档。
+pub const CODE_STAMP: &str = ".helmp-code";
+
+/// 给 `dir`（还没换上的临时目录）写内容指纹。
+pub fn write_code_stamp(dir: &Path) -> Result<()> {
+    fn walk(dir: &Path, rel: &str, hasher: &mut Sha256) -> Result<()> {
+        let mut entries = std::fs::read_dir(dir)
+            .and_then(|entries| entries.collect::<std::io::Result<Vec<_>>>())
+            .with_context(|| trf!("读取 {}", "Couldn't read {}", dir.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // 隐藏文件是安装器自己的记录（来源标记、这个指纹），不是插件内容。
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = format!("{rel}/{name}");
+            if entry.file_type()?.is_dir() {
+                walk(&entry.path(), &path, hasher)?;
+            } else {
+                let mut bytes = std::fs::read(entry.path())
+                    .with_context(|| trf!("读取 {}", "Couldn't read {}", entry.path().display()))?;
+                // 只升了版本号、其余一字不差的新版本还是用户确认过的那份，不用再确认。
+                if path == "/plugin.json"
+                    && let Ok(serde_json::Value::Object(mut manifest)) = serde_json::from_slice(&bytes)
+                {
+                    manifest.remove("version");
+                    bytes = serde_json::Value::Object(manifest).to_string().into_bytes();
+                }
+                hasher.update((path.len() as u64).to_le_bytes());
+                hasher.update(path.as_bytes());
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(&bytes);
+            }
+        }
+        Ok(())
+    }
+    let mut hasher = Sha256::new();
+    walk(dir, "", &mut hasher)?;
+    let stamp: String = hasher
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let path = dir.join(CODE_STAMP);
+    std::fs::write(&path, stamp)
+        .with_context(|| trf!("写入 {}", "Couldn't write {}", path.display()))
+}
+
+fn read_code_stamp(dir: &Path) -> Option<String> {
+    let stamp = std::fs::read_to_string(dir.join(CODE_STAMP)).ok()?;
+    let stamp = stamp.trim();
+    (!stamp.is_empty() && stamp.len() <= 64 && stamp.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| stamp.to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -82,7 +143,7 @@ pub struct Entry {
 pub enum State {
     Enabled,
     Disabled,
-    /// 用户启用过，但清单的权限变了，要重新确认才生效。
+    /// 用户启用过，但清单的权限变了（或安装器换了会运行代码的插件的文件），要重新确认才生效。
     NeedsConsent,
     Broken,
 }
@@ -92,7 +153,7 @@ impl State {
         match self {
             State::Enabled => tr("已启用", "enabled"),
             State::Disabled => tr("已停用", "disabled"),
-            State::NeedsConsent => tr("权限有变化，待确认", "needs permission review"),
+            State::NeedsConsent => tr("权限或内容有变化，待确认", "needs permission review"),
             State::Broken => tr("出错", "error"),
         }
     }
@@ -212,8 +273,12 @@ pub fn load_dir(dir: &Path, source: Source) -> Entry {
         source,
         dir: Some(dir.to_path_buf()),
         loaded: loaded.map(|manifest| {
+            let mut permissions = Permissions::derive(&manifest);
+            if permissions.runs_code() {
+                permissions.code = read_code_stamp(dir);
+            }
             Arc::new(Plugin {
-                permissions: Permissions::derive(&manifest),
+                permissions,
                 manifest,
                 dir: Some(dir.to_path_buf()),
             })
@@ -403,6 +468,55 @@ mod tests {
         set_enabled(&mut config, &updated, false);
         assert_eq!(updated.state(&config), State::Disabled);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn replacing_the_files_of_a_plugin_that_runs_code_needs_consent_again() {
+        // 更新可以在同一个权限类别下换掉脚本：安装器写的内容指纹是确认键的一部分，文件变了就回到待确认。
+        // 不运行代码的插件不看指纹：换个图标不该把用户叫回设置页。
+        let root = std::env::temp_dir().join(format!("helmp-registry-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let install = |name: &str, action: &str, script: &str| {
+            let dir = root.join(name);
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("plugin.json"),
+                format!(
+                    r#"{{"schemaVersion":1,"id":"com.example.p","name":"P","version":"1.0.0","author":"A",
+                    "commands":[{{"id":"a","title":"A","action":{action}}}]}}"#
+                ),
+            )
+            .unwrap();
+            std::fs::write(dir.join("run.sh"), script).unwrap();
+            write_code_stamp(&dir).unwrap();
+            user_entry(&dir)
+        };
+        let script = r#"{"type":"script","path":"run.sh"}"#;
+        let mut config = Config::default();
+        let entry = install("script", script, "echo one\n");
+        set_enabled(&mut config, &entry, true);
+        assert_eq!(entry.state(&config), State::Enabled);
+        assert_eq!(install("script", script, "echo one\n").state(&config), State::Enabled);
+        assert_eq!(
+            install("script", script, "echo two\n").state(&config),
+            State::NeedsConsent
+        );
+
+        // 直接在插件目录里改脚本（开发自己的插件）不动指纹：热重载照旧。
+        let entry = install("script", script, "echo one\n");
+        std::fs::write(root.join("script/run.sh"), "echo edited in place\n").unwrap();
+        assert_eq!(user_entry(&entry.dir.clone().unwrap()).state(&config), State::Enabled);
+        // 指纹被删掉或改坏，确认键对不上，同样回到待确认。
+        std::fs::remove_file(root.join("script").join(CODE_STAMP)).unwrap();
+        assert_eq!(user_entry(&root.join("script")).state(&config), State::NeedsConsent);
+
+        let open = r#"{"type":"open","url":"https://example.com"}"#;
+        let mut config = Config::default();
+        let entry = install("open", open, "one");
+        set_enabled(&mut config, &entry, true);
+        assert_eq!(install("open", open, "two").state(&config), State::Enabled);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

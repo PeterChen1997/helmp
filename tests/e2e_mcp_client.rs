@@ -352,8 +352,18 @@ fn plugin_bundled_servers_only_appear_after_enabling() {
     let validated = off.cli(&["plugins", "validate", &off.data.join("plugins/com.example.mcp").display().to_string()]);
     assert!(validated.contains("Run a local program: ./mock_mcp_server"), "{validated}");
 
-    let on = Helmp::new().config(|c| {
+    let checked = off.cli(&["plugins", "validate", &off.data.join("plugins/com.example.mcp").display().to_string(), "--json"]);
+    let consent = serde_json::from_str::<serde_json::Value>(&checked).unwrap()["permissions"].clone();
+
+    // 确认的是整条命令行：只按程序名记下的确认（旧版本的写法）不算数，服务器不启动。
+    let stale = Helmp::new().config(|c| {
         c["plugins"]["com.example.mcp"] = json!({"enabled": true, "consent": ["process:./mock_mcp_server"]});
+    });
+    setup(&stale);
+    assert!(stale.query("echo").iter().all(|r| !r.id.starts_with("mcp:")));
+
+    let on = Helmp::new().config(move |c| {
+        c["plugins"]["com.example.mcp"] = json!({"enabled": true, "consent": consent});
     });
     setup(&on);
     let row = on.find("echo", |r| r.id == "mcp:com.example.mcp/notes/echo");

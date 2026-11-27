@@ -7,11 +7,17 @@
 //! - 提供界面主题（声明了 themes；带日期的会自动换上）。
 //! - 在后台定时运行脚本（声明了 schedules）、发送系统通知（声明了 notifications）。
 //!
+//! - 运行本地程序（`mcpServers` 的 `command`）：确认的是完整命令行，参数、环境变量、工作目录变了都要重新确认。
+//!
 //! 用户插件启用前把这些列给用户确认；确认过的权限键（`keys`）存进配置，清单权限变了要重新确认。
+//! 会运行代码的插件（脚本、定时任务、MCP 服务器）还带一个 `code:` 键，取自安装器写下的内容指纹
+//! （`registry::CODE_STAMP`）：更新或覆盖安装换了文件，权限类别没变也要重新确认。
 
 use std::collections::BTreeSet;
 
-use super::manifest::{ActionSpec, Manifest, UrlSource, http_url_source};
+use sha2::{Digest as _, Sha256};
+
+use super::manifest::{ActionSpec, Manifest, McpServerSpec, UrlSource, http_url_source};
 use crate::i18n::{tr, trf};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -24,8 +30,10 @@ pub struct Permissions {
     pub clipboard_write: bool,
     pub keystrokes: bool,
     pub exec: bool,
-    /// 插件带的 MCP 服务器要运行的本地程序（`npx`、`./server.py`）。
-    pub processes: BTreeSet<String>,
+    /// 插件带的 MCP 服务器要运行的本地程序（`npx -y pkg`、`./server.py`）。
+    pub processes: BTreeSet<Process>,
+    /// 安装时的内容指纹（见 `registry::CODE_STAMP`），只有会运行代码的插件才带；手动放进插件文件夹的没有。
+    pub code: Option<String>,
     /// 在搜索框显示插件提供的寄语（清单声明了 `greetings`）。
     pub greeting: bool,
     /// 在后台定时运行脚本（清单声明了 `schedules`）。
@@ -38,7 +46,67 @@ pub struct Permissions {
     pub dated_theme: bool,
 }
 
+/// 一个要运行的本地程序。用户确认的是整条命令行：只认程序名的话，`npx -y a` 换成 `npx -y b`
+/// （或 `sh -c …` 换一段脚本）不会回到待确认。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Process {
+    /// 给用户看的完整命令行：环境变量、程序、参数。
+    pub line: String,
+    /// 确认键 `process:<程序>#<命令行与工作目录的摘要>`。
+    pub key: String,
+}
+
+impl Process {
+    fn new(command: &str, server: &McpServerSpec) -> Self {
+        fn word(text: &str) -> String {
+            if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c == '"') {
+                format!("{text:?}")
+            } else {
+                text.to_string()
+            }
+        }
+        let mut words: Vec<String> = server
+            .env
+            .iter()
+            .map(|(name, value)| format!("{name}={}", word(value)))
+            .collect();
+        words.push(word(command));
+        words.extend(server.args.iter().map(|arg| word(arg)));
+        // 摘要按字段分开算（不用拼好的那一行），免得靠空格和引号拼出两条看起来不同、摘要相同的命令。
+        let mut hasher = Sha256::new();
+        let mut field = |text: &str| {
+            hasher.update((text.len() as u64).to_le_bytes());
+            hasher.update(text.as_bytes());
+        };
+        field(command);
+        field(&server.args.len().to_string());
+        for arg in &server.args {
+            field(arg);
+        }
+        for (name, value) in &server.env {
+            field(name);
+            field(value);
+        }
+        field(server.cwd.as_deref().unwrap_or_default());
+        let digest: String = hasher
+            .finalize()
+            .iter()
+            .take(6)
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Self {
+            line: words.join(" "),
+            key: format!("process:{command}#{digest}"),
+        }
+    }
+}
+
 impl Permissions {
+    /// 会不会运行代码（脚本、后台任务、本地程序）：这类插件换了文件要重新确认。
+    pub fn runs_code(&self) -> bool {
+        self.exec || self.background || !self.processes.is_empty()
+    }
+
     pub fn derive(manifest: &Manifest) -> Self {
         let mut permissions = Self {
             clipboard_read: manifest.reads_clipboard(),
@@ -51,7 +119,7 @@ impl Permissions {
         };
         for server in manifest.mcp_servers.values() {
             if let Some(command) = &server.command {
-                permissions.processes.insert(command.clone());
+                permissions.processes.insert(Process::new(command, server));
             }
             // 地址在校验时已经要求是静态的。
             if let Some(url) = &server.url
@@ -162,11 +230,10 @@ impl Permissions {
         } else if self.theme {
             keys.push("theme".into());
         }
-        keys.extend(
-            self.processes
-                .iter()
-                .map(|command| format!("process:{command}")),
-        );
+        keys.extend(self.processes.iter().map(|process| process.key.clone()));
+        if let Some(code) = &self.code {
+            keys.push(format!("code:{code}"));
+        }
         keys.sort();
         keys.dedup();
         keys
@@ -230,7 +297,8 @@ impl Permissions {
                 .into(),
             );
         }
-        for command in &self.processes {
+        for process in &self.processes {
+            let command = &process.line;
             lines.push(trf!(
                 "运行本地程序：{command}（MCP 服务器，以你的用户身份，不受沙盒限制）",
                 "Run a local program: {command} (MCP server, as you, not sandboxed)"
@@ -335,10 +403,67 @@ mod tests {
         let text = r#"{"schemaVersion":1,"id":"com.example.p","name":"P","version":"1.0.0","author":"A",
             "mcpServers":{"gh":{"command":"npx","args":["-y","x"]},"docs":{"url":"https://MCP.example.com/mcp"}}}"#;
         let p = Permissions::derive(&parse(text, None).unwrap());
-        assert_eq!(p.keys(), ["network:mcp.example.com", "process:npx"]);
+        let keys = p.keys();
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert_eq!(keys[0], "network:mcp.example.com");
+        assert!(keys[1].starts_with("process:npx#"), "{keys:?}");
         let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || p.describe());
-        assert!(lines.iter().any(|l| l.starts_with("运行本地程序：npx")), "{lines:?}");
         assert!(lines.contains(&"访问网络：mcp.example.com".to_string()), "{lines:?}");
+    }
+
+    fn mcp(server: &str) -> Permissions {
+        let text = format!(
+            r#"{{"schemaVersion":1,"id":"com.example.p","name":"P","version":"1.0.0","author":"A","mcpServers":{{"s":{server}}}}}"#
+        );
+        Permissions::derive(&parse(&text, None).unwrap_or_else(|e| panic!("{e:?}")))
+    }
+
+    #[test]
+    fn a_different_command_line_needs_consent_again() {
+        // 本地程序不受沙盒限制，跑什么全看参数：`npx -y a` 和 `npx -y b` 是两个程序。
+        // 只按程序名确认的话，自动更新换掉参数后新命令行不经确认就运行（CARM-713）。
+        let confirmed = mcp(r#"{"command":"npx","args":["-y","pkg-a"]}"#).keys();
+        assert_eq!(confirmed, mcp(r#"{"command":"npx","args":["-y","pkg-a"]}"#).keys());
+        for changed in [
+            r#"{"command":"npx","args":["-y","pkg-b"]}"#,
+            r#"{"command":"npx","args":["-y","pkg-a","--extra"]}"#,
+            r#"{"command":"npx","args":["-y","pkg-a"],"env":{"NODE_OPTIONS":"--require ./x.js"}}"#,
+            r#"{"command":"npx","args":["-y","pkg-a"],"cwd":"other"}"#,
+            // 参数的切分也是命令行的一部分。
+            r#"{"command":"npx","args":["-y pkg-a"]}"#,
+        ] {
+            assert_ne!(mcp(changed).keys(), confirmed, "{changed}");
+        }
+    }
+
+    #[test]
+    fn the_consent_card_shows_the_whole_command_line() {
+        // 用户要能看到确认的到底是什么：只写「运行本地程序：sh」等于什么都没说。
+        let p = mcp(
+            r#"{"command":"sh","args":["-c","curl example.com | sh"],"env":{"MODE":"fast"}}"#,
+        );
+        let lines = crate::i18n::with_lang(crate::i18n::Lang::Zh, || p.describe());
+        assert_eq!(
+            lines,
+            [r#"运行本地程序：MODE=fast sh -c "curl example.com | sh"（MCP 服务器，以你的用户身份，不受沙盒限制）"#]
+        );
+    }
+
+    #[test]
+    fn the_install_stamp_is_part_of_what_was_confirmed() {
+        // 脚本权限只是一个「能运行脚本」：更新换了脚本内容，权限类别一样，也得让用户再看一眼。
+        let mut p = derive(
+            r#"[{"id":"a","title":"A","action":{"type":"script","path":"run.sh"}}]"#,
+            "",
+        );
+        assert!(p.runs_code());
+        let unstamped = p.keys();
+        p.code = Some("aaaa".into());
+        let first = p.keys();
+        p.code = Some("bbbb".into());
+        assert_ne!(first, unstamped);
+        assert_ne!(first, p.keys());
+        assert!(first.contains(&"code:aaaa".to_string()), "{first:?}");
     }
 
     #[test]

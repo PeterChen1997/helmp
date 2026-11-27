@@ -9,6 +9,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 ### Fixed
 
 - Sticky notes: when notes can’t be written to disk, cards show a “Not saved” tag and the Notes scope lists a warning with a retry action; Helmp retries every 5 seconds and once more on quit. Creating, deleting, closing, moving and resizing notes are retried too, not only text edits. If the notes file couldn’t be read at launch, Helmp re-reads it and merges the notes on disk back instead of refusing to save for the rest of the session.
+- Plugins: a bundled MCP server is now confirmed by its whole command line, which the permission list shows in full. A new version that changes the arguments, environment or working directory is paused until you confirm it, instead of only when the program name changed. Plugins with an MCP server that you already turned on ask for confirmation once after this update.
+- Plugins: when an update, or `helmp_plugin_install`, replaces the files of a plugin that runs code (scripts, schedules, MCP servers), the plugin is paused until you confirm it again, even if its permissions are the same. Editing your own plugin’s files in place still reloads without asking.
 - Sticky notes: each unreadable notes file is backed up under its own timestamped name (the three most recent are kept), so a second corruption no longer overwrites the first backup. Typing in a note no longer rebuilds the menu bar.
 
 ### 简体中文
@@ -16,6 +18,8 @@ All notable changes to Helmp are documented here. The format follows [Keep a Cha
 #### 修复
 
 - 便签：写不进磁盘时，卡片上显示「未保存」，便签范围顶部出现提示并可回车立即重试；Helmp 每 5 秒自动重试，退出时再试一次。新建、删除、关闭、拖动、缩放和正文一样会重试。启动时读不出便签文件的，会重新读取并把磁盘上的便签并回来，不再整场会话拒绝保存。
+- 插件：自带 MCP 服务器的插件现在按完整命令行确认，权限列表里显示整条命令。新版本改了参数、环境变量或工作目录就暂停等你确认，不再只看程序名。已经启用的这类插件在本次更新后需要重新确认一次。
+- 插件：会运行代码的插件（脚本、定时任务、MCP 服务器）经更新或 `helmp_plugin_install` 换了文件时，即使权限没变也暂停等你重新确认。直接在插件目录里改自己的插件仍然不用确认、照常重载。
 - 便签：每次读不出的便签文件各自按时间戳备份（保留最近三份），第二次损坏不再覆盖第一次的备份；在便签里打字不再触发菜单栏重建。
 
 ## [0.4.21] - 2026-11-26

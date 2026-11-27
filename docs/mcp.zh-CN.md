@@ -40,7 +40,7 @@ helmp mcp status            # 各 agent 是否已连接
 | `helmp_plugin_guide` | 插件开发指南：agent 的工作流、[插件文档](plugins.zh-CN.md)、测试方法，以及作为完整示例的自带插件 |
 | `helmp_plugin_scaffold` | 用模板（`quicklink`、`http`、`script`、`list`、`starter`）生成一个能通过校验的插件目录，默认在 `~/Library/Application Support/Helmp/plugins-dev/<id>`，也可以指定 |
 | `helmp_plugin_validate` | 与 Helmp 加载时完全相同的校验：列出每个问题及其字段路径，或者列出命令和你将要确认的权限 |
-| `helmp_plugin_install` | 把目录复制进 Helmp 的插件文件夹。**插件保持停用**，直到你在「设置 › 插件」里看过权限并打开它；Helmp 在运行时会直接翻到这个插件 |
+| `helmp_plugin_install` | 把目录复制进 Helmp 的插件文件夹。**插件保持停用**，直到你在「设置 › 插件」里看过权限并打开它；Helmp 在运行时会直接翻到这个插件。覆盖一个你已经启用的插件时，权限变了、或者它会运行代码而文件有任何不同，都会重新暂停等你确认 |
 | `helmp_plugin_test` | 无界面运行一个命令。演练（默认）：在隔离的沙箱里运行，打开、复制、粘贴和发往真实主机的请求只以 `[dry-run] …` 回报；发往 `127.0.0.1` / `localhost` 的请求真的发，agent 可以对着本地假服务测；密钥只在这一次运行里使用。`dry_run: false` 真的运行已安装且启用的插件，要你在面板里确认 |
 | `helmp_plugin_list` | 自带与用户插件的状态（已启用、已停用、待确认权限、出错）、错误、权限和命令 |
 | `helmp_plugin_submit` | 把插件上传到公开的 Helmp 插件中心（`helmp plugins submit <目录> --yes`），返回 PR 链接。agent 必须先问你，你明确同意后才能带 `user_confirmed: true` 调用 |

@@ -259,6 +259,46 @@ fn scaffold_validate_install_keeps_the_plugin_disabled() {
 }
 
 #[test]
+fn overwriting_an_enabled_script_plugin_pauses_it_until_the_user_confirms() {
+    // 「能运行脚本」是一个不受沙盒限制的权限：用户确认的是当时装的那份脚本。agent 用同一个 id 覆盖安装，
+    // 脚本换了、权限类别没变，也必须回到待确认，不能让没人看过的脚本直接生效（CARM-713）。
+    let h = Helmp::new();
+    let mut mcp = Mcp::start(&h);
+    let dir = h.root.join("dev/runner");
+    let manifest = r#"{"schemaVersion":1,"id":"com.example.runner","name":"Runner","version":"1.0.0","author":"A",
+        "commands":[{"id":"go","title":"Go","action":{"type":"script","path":"run.sh"}}]}"#;
+    h.write("dev/runner/plugin.json", manifest);
+    h.write("dev/runner/run.sh", "#!/bin/sh\necho one\n");
+    let state = |mcp: &mut Mcp| {
+        let installed = mcp.call("helmp_plugin_install", json!({"dir": dir}));
+        assert_eq!(installed["isError"], false, "{installed}");
+        installed["structuredContent"].clone()
+    };
+    let first = state(&mut mcp);
+    assert_eq!(first["state"], "disabled", "{first}");
+
+    // 用户在设置里看过权限并启用：记下的就是这时的确认键。
+    let mut config: Value =
+        serde_json::from_str(&std::fs::read_to_string(h.data.join("config.json")).unwrap()).unwrap();
+    config["plugins"] = json!({"com.example.runner": {"enabled": true, "consent": first["permission_keys"]}});
+    std::fs::write(h.data.join("config.json"), config.to_string()).unwrap();
+
+    // 原样再装一次：还是用户确认过的那份，保持启用。
+    let same = state(&mut mcp);
+    assert_eq!(same["state"], "enabled", "{same}");
+
+    // 换了脚本：停下来等用户确认，并且不能告诉 agent「已经生效」。
+    h.write("dev/runner/run.sh", "#!/bin/sh\necho two\n");
+    let installed = mcp.call("helmp_plugin_install", json!({"dir": dir}));
+    assert_eq!(installed["structuredContent"]["state"], "needs-consent", "{installed}");
+    assert!(text(&installed).contains("paused"), "{installed}");
+    assert_eq!(
+        std::fs::read_to_string(h.data.join("plugins/com.example.runner/run.sh")).unwrap(),
+        "#!/bin/sh\necho two\n"
+    );
+}
+
+#[test]
 fn plugin_test_reports_dry_run_lines_and_hits_local_mocks() {
     let h = Helmp::new();
     let mut mcp = Mcp::start(&h);

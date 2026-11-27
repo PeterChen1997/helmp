@@ -443,6 +443,8 @@ pub fn install(_server: &Server, args: &Value) -> Result<ToolOutput> {
         let _ = std::fs::remove_dir_all(&staging);
         let _ = std::fs::remove_dir_all(&old);
         copy_dir(&src, &staging)?;
+        // 内容指纹是确认键的一部分：覆盖一个已启用、会运行代码的插件，文件不同就回到待确认。
+        registry::write_code_stamp(&staging)?;
         if dest.exists() {
             std::fs::rename(&dest, &old)
                 .with_context(|| format!("move {} aside", dest.display()))?;
@@ -454,6 +456,8 @@ pub fn install(_server: &Server, args: &Value) -> Result<ToolOutput> {
 
     let installed = registry::load_dir(&dest, Source::User);
     let state = installed.state(&super::fresh_config());
+    // 报告装好的那一份：它的确认键带内容指纹，源目录的没有。
+    let plugin = installed.plugin().cloned().unwrap_or(plugin);
     // Helmp 在运行就把设置 › 插件翻到这个插件，让用户看权限、打开它。测试（演练模式）不碰界面。
     let settings = if std::env::var("HELMP_DRY_RUN").as_deref() == Ok("1") {
         "skipped (dry-run)"
@@ -468,8 +472,8 @@ pub fn install(_server: &Server, args: &Value) -> Result<ToolOutput> {
         }
     };
     let next = match state {
-        State::Enabled => "The user had already enabled this plugin with the same permissions, so the new version is active now.".to_string(),
-        State::NeedsConsent => "Its permissions changed since the user enabled it, so it is paused until the user reviews and confirms them in Helmp › Settings › Plugins. Ask the user to do that.".to_string(),
+        State::Enabled => "The user had already enabled exactly this version (same permissions; same files if it runs code), so it is active now.".to_string(),
+        State::NeedsConsent => "Its permissions, or the files of a plugin that runs code, changed since the user enabled it, so it is paused until the user reviews and confirms it in Helmp › Settings › Plugins. Ask the user to do that, and don't claim it is active.".to_string(),
         _ => format!(
             "It is DISABLED until the user reviews its permissions and turns it on in Helmp › Settings › Plugins{}. Ask the user to do that now, and don't claim it is enabled.",
             match settings {
